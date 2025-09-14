@@ -11,10 +11,10 @@ async function listWorkspaces(req, res) {
 async function createWorkspace(req, res) {
   try {
     const userId = req.user.id;
-    const { name, description } = req.body;
+    const { name } = req.body;
     if (!name) return error(res, 400, 'Tên workspace là bắt buộc');
 
-    const workspace = await svc.createWorkspace(userId, { name, description });
+    const workspace = await svc.createWorkspace(userId, { name });
     return success(res, workspace, 'Tạo workspace thành công');
   } catch (err) {
     return error(res, 400, err.message);
@@ -25,9 +25,10 @@ async function updateWorkspace(req, res) {
   try {
     const userId = req.user.id;
     const workspaceId = req.params.id;
-    const { name, description } = req.body;
+    const { name } = req.body;
+    if (!name) return error(res, 400, 'Tên workspace là bắt buộc');
 
-    const updated = await svc.updateWorkspace(userId, workspaceId, { name, description });
+    const updated = await svc.updateWorkspace(userId, workspaceId, { name });
     return success(res, updated, 'Cập nhật workspace thành công');
   } catch (err) {
     return error(res, 400, err.message);

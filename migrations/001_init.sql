@@ -10,14 +10,14 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS workspaces (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
-  description TEXT,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- unique constraint: mỗi user không thể tạo 2 workspace trùng tên
 ALTER TABLE workspaces
-  ADD CONSTRAINT IF NOT EXISTS uniq_user_workspace_name UNIQUE (created_by, name);
+  ADD CONSTRAINT uniq_user_workspace_name UNIQUE (created_by, name);
 
 -- workspace_members table
 CREATE TABLE IF NOT EXISTS workspace_members (
