@@ -15,18 +15,24 @@ async function getWorkspace(req, res) {
 async function createWorkspace(req, res) {
   if (!req.body.name) return error(res, 400, 'Tên workspace là bắt buộc');
   const data = await svc.createWorkspace(req.body);
-  return success(res, data, 'Tạo workspace thành công');
+  return success(res, data);
 }
 
 async function updateWorkspace(req, res) {
   const data = await svc.updateWorkspace(req.params.id, req.body);
   if (!data) return error(res, 404, 'Workspace không tồn tại');
-  return success(res, data, 'Cập nhật workspace thành công');
+  return success(res, data);
 }
 
 async function deleteWorkspace(req, res) {
   await svc.deleteWorkspace(req.params.id);
-  return success(res, null, 'Xóa workspace thành công');
+  return success(res, {});
 }
 
-module.exports = { listWorkspaces, getWorkspace, createWorkspace, updateWorkspace, deleteWorkspace };
+module.exports = { 
+  listWorkspaces, 
+  getWorkspace, 
+  createWorkspace, 
+  updateWorkspace, 
+  deleteWorkspace 
+};

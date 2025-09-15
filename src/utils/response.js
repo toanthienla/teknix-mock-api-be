@@ -1,9 +1,9 @@
-function success(res, data, message = '') {
-  return res.json({ success: true, message, data });
+function success(res, data) {
+  return res.json(data);
 }
 
 function error(res, status = 400, message = 'Có lỗi xảy ra') {
-  return res.status(status).json({ success: false, error: { message } });
+  return res.status(status).json({ error: { message } });
 }
 
 module.exports = { success, error };
