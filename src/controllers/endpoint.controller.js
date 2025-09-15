@@ -1,6 +1,26 @@
 const svc = require('../services/endpoint.service');
 const { success, error } = require('../utils/response');
 
+async function listEndpointsByQuery(req, res) {
+  try {
+    const { project_id } = req.query;
+
+    if (!project_id) {
+      return error(res, 400, 'Cần query project_id');
+    }
+
+    const id = parseInt(project_id, 10);
+    if (Number.isNaN(id)) {
+      return error(res, 400, 'project_id phải là số nguyên');
+    }
+
+    const endpoints = await svc.getEndpointsByProject(id);
+    return success(res, endpoints);
+  } catch (err) {
+    return error(res, 400, err.message);
+  }
+}
+
 async function listEndpoints(req, res) {
   try {
     const { projectId } = req.params;
@@ -63,6 +83,7 @@ async function deleteEndpoint(req, res) {
 }
 
 module.exports = {
+  listEndpointsByQuery,
   listEndpoints,
   getEndpointById,
   createEndpoint,
