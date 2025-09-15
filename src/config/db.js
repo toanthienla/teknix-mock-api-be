@@ -7,7 +7,7 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || 'admin',
   database: process.env.DB_NAME || 'teknix_mock_api'
 });
-``;
+
 module.exports = {
   query: (text, params) => pool.query(text, params)
 };
