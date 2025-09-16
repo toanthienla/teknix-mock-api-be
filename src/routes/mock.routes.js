@@ -48,7 +48,12 @@ router.use(async (req, res, next) => {
 
     // 1) Lấy danh sách endpoint theo method hiện tại
     const { rows: endpoints } = await db.query(
-      'SELECT id, method, path FROM endpoints WHERE UPPER(method) = $1 ORDER BY id DESC',
+      `SELECT e.id, e.method, e.path,
+              EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id) AS has_response,
+              EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id AND r.is_default = true) AS has_default
+       FROM endpoints e
+       WHERE UPPER(e.method) = $1
+       ORDER BY has_default DESC, has_response DESC, e.id DESC`,
       [method]
     );
 
@@ -65,33 +70,76 @@ router.use(async (req, res, next) => {
     });
     if (!ep) return next();
 
-    // 3) Ưu tiên response mặc định (is_default = true), nếu không có thì lấy bản mới nhất
-    // TODO (tùy chọn): Để đồng bộ với schema mới có priority, có thể đổi ORDER BY như sau:
-    // ORDER BY priority DESC NULLS LAST, is_default DESC, updated_at DESC, created_at DESC
-    // và thêm cột delay_ms để mô phỏng độ trễ:
-    // if (r.delay_ms) await new Promise(r => setTimeout(r, r.delay_ms));
+    // 3) Lấy toàn bộ responses của endpoint để có thể áp dụng điều kiện theo params/query
+    const matchFn = getMatcher(ep.path);
+    const matchRes = matchFn(req.path);
+    const params = (matchRes && matchRes.params) || {};
+    const hasParams = Object.keys(params).length > 0;
+
     const { rows: responses } = await db.query(
-      `SELECT id, endpoint_id, name, status_code, response_body, is_default, created_at, updated_at
+      `SELECT id, endpoint_id, name, status_code, response_body, is_default, priority, condition, created_at, updated_at
        FROM endpoint_responses
        WHERE endpoint_id = $1
-       ORDER BY is_default DESC, updated_at DESC NULLS LAST, created_at DESC
-       LIMIT 1`,
+       ORDER BY is_default DESC, priority DESC NULLS LAST, updated_at DESC, created_at DESC`,
       [ep.id]
     );
 
+    // Nếu không có response nào cấu hình:
+    // - GET item (có params): trả {} (rỗng)
+    // - GET collection: trả [] (rỗng)
     if (responses.length === 0) {
+      if (req.method.toUpperCase() === 'GET') {
+        return res.status(200).json(hasParams ? {} : []);
+      }
       return res
         .status(501)
         .json({ error: { message: 'No response configured for this endpoint' } });
     }
 
+    // 3.1) Áp dụng điều kiện: ưu tiên các response có condition khớp params/query
+    const isPlainObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
+    const matchesCondition = (cond) => {
+      if (!isPlainObject(cond) || Object.keys(cond).length === 0) return true; // coi như mặc định
+      // Hỗ trợ đơn giản: cond.params hoặc key top-level 'id'
+      // - cond.params: { id: '20' } sẽ khớp khi params.id == '20'
+      // - cond.id: '20' tương đương đơn giản cho params.id
+      if ('id' in cond) {
+        if (String(params.id ?? '') !== String(cond.id)) return false;
+      }
+      if (isPlainObject(cond.params)) {
+        for (const [k, v] of Object.entries(cond.params)) {
+          if (String(params[k] ?? '') !== String(v)) return false;
+        }
+      }
+      // Có thể mở rộng cho cond.query/cond.headers/cond.body nếu cần
+      return true;
+    };
+
+    // Tìm response đầu tiên có điều kiện khớp (ưu tiên theo ORDER BY ở trên)
+    const withAnyCondition = responses.some((r) => isPlainObject(r.condition) && Object.keys(r.condition || {}).length > 0);
+    const matched = responses.find((r) => matchesCondition(r.condition));
+
+    // Với item route (có params): nếu có cấu hình điều kiện nhưng không khớp, trả rỗng thay vì fallback
+    if (hasParams && withAnyCondition && !matched) {
+      return res.status(200).json({});
+    }
+
     // 4) Trả về nội dung response:
     // - Nếu response_body là object => trả JSON
     // - Nếu là string/empty => send text/empty string
-    const r = responses[0];
+    const r = matched || responses[0];
     const status = r.status_code || 200;
-    const body = r.response_body ?? null;
+    let body = r.response_body ?? null;
 
+    // Chuẩn hoá cho GET collection (không có params): nếu body rỗng => trả []
+    if (req.method.toUpperCase() === 'GET' && !hasParams) {
+      const isEmptyObject = (v) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0;
+      if (body == null || (typeof body === 'string' && body.trim() === '') || isEmptyObject(body)) {
+        body = [];
+      }
+    }
+
+    // Trả đúng response_body đã cấu hình: nếu là object => JSON, còn lại => text
     if (body && typeof body === 'object') return res.status(status).json(body);
     return res.status(status).send(body ?? '');
   } catch (err) {
