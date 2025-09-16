@@ -39,6 +39,42 @@ function getMatcher(pattern) {
   return fn;
 }
 
+// ------------------------------------------------------------
+// Templating đơn giản cho response_body: hỗ trợ {{params.id}}, {{query.id}}
+// Có thể mở rộng thêm: {{headers.x_token}}, {{body.foo}} nếu cần sau này
+function getByPath(obj, path) {
+  if (!obj || typeof path !== 'string') return undefined;
+  const parts = path.split('.');
+  let cur = obj;
+  for (const p of parts) {
+    if (cur && Object.prototype.hasOwnProperty.call(cur, p)) {
+      cur = cur[p];
+    } else {
+      return undefined;
+    }
+  }
+  return cur;
+}
+
+function renderTemplate(value, ctx) {
+  const replaceInString = (str) =>
+    str.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, vpath) => {
+      const v = getByPath(ctx, vpath);
+      return v == null ? '' : String(v);
+    });
+
+  if (typeof value === 'string') return replaceInString(value);
+  if (Array.isArray(value)) return value.map((v) => renderTemplate(v, ctx));
+  if (value && typeof value === 'object') {
+    const out = Array.isArray(value) ? [] : {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = renderTemplate(v, ctx);
+    }
+    return out;
+  }
+  return value;
+}
+
 // Catch-all sau các route admin; tìm endpoint tương ứng và trả mock response từ DB
 // Đặt router.use ở cuối app để không “nuốt” các route quản trị phía trên.
 
@@ -116,13 +152,7 @@ router.use(async (req, res, next) => {
     };
 
     // Tìm response đầu tiên có điều kiện khớp (ưu tiên theo ORDER BY ở trên)
-    const withAnyCondition = responses.some((r) => isPlainObject(r.condition) && Object.keys(r.condition || {}).length > 0);
     const matched = responses.find((r) => matchesCondition(r.condition));
-
-    // Với item route (có params): nếu có cấu hình điều kiện nhưng không khớp, trả rỗng thay vì fallback
-    if (hasParams && withAnyCondition && !matched) {
-      return res.status(200).json({});
-    }
 
     // 4) Trả về nội dung response:
     // - Nếu response_body là object => trả JSON
@@ -130,6 +160,12 @@ router.use(async (req, res, next) => {
     const r = matched || responses[0];
     const status = r.status_code || 200;
     let body = r.response_body ?? null;
+
+    // Templating: thay thế {{params.*}} và {{query.*}} trong body (string hoặc object)
+    const ctx = { params, query: req.query };
+    if (body && (typeof body === 'object' || typeof body === 'string')) {
+      body = renderTemplate(body, ctx);
+    }
 
     // Chuẩn hoá cho GET collection (không có params): nếu body rỗng => trả []
     if (req.method.toUpperCase() === 'GET' && !hasParams) {
