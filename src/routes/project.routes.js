@@ -2,20 +2,26 @@ const express = require('express');
 const router = express.Router();
 const ctrl = require('../controllers/project.controller');
 const asyncHandler = require('../middlewares/asyncHandler');
+const validateProject = require('../middlewares/validateProject');
 
-// Get all projects by workspace
-router.get('/workspaces/:workspaceId/projects', asyncHandler(ctrl.listProjects));
+// Get all projects (filter by workspace_id nếu có query param)
+// GET /projects
+router.get('/', asyncHandler(ctrl.listProjects));
 
-// Get project by id
-router.get('/workspaces/:workspaceId/projects/:id', asyncHandler(ctrl.getProjectById));
+// Get project by id (nếu vẫn cần, mặc dù contract không yêu cầu)
+// GET /projects/:id
+router.get('/:id', asyncHandler(ctrl.getProjectById));
 
-// Create project
-router.post('/workspaces/:workspaceId/projects', asyncHandler(ctrl.createProject));
+// Create project (body chứa workspace_id + name, validate trước)
+// POST /projects
+router.post('/', validateProject, asyncHandler(ctrl.createProject));
 
-// Update project
-router.put('/workspaces/:workspaceId/projects/:id', asyncHandler(ctrl.updateProject));
+// Update project (validate name trước)
+// PUT /projects/:id
+router.put('/:id', validateProject, asyncHandler(ctrl.updateProject));
 
 // Delete project
-router.delete('/workspaces/:workspaceId/projects/:id', asyncHandler(ctrl.deleteProject));
+// DELETE /projects/:id
+router.delete('/:id', asyncHandler(ctrl.deleteProject));
 
 module.exports = router;

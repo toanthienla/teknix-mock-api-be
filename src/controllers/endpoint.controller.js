@@ -1,64 +1,113 @@
 const svc = require('../services/endpoint.service');
-const { success, error } = require('../utils/response');
+const { success } = require('../utils/response');
 
+// Get all endpoints (optional filter by project_id)
 async function listEndpoints(req, res) {
   try {
-    const { projectId } = req.params;
-    const endpoints = await svc.getEndpointsByProject(projectId);
+    const { project_id } = req.query;
+    const endpoints = await svc.getEndpoints(project_id);
     return success(res, endpoints);
   } catch (err) {
-    return error(res, 400, err.message);
+    return res.status(500).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
   }
 }
 
+// Get endpoint by id (optional)
 async function getEndpointById(req, res) {
   try {
-    const { projectId, id } = req.params;
-    const endpoint = await svc.getEndpointById(projectId, id);
-    if (!endpoint) return error(res, 404, 'Endpoint không tồn tại');
+    const { id } = req.params;
+    const endpoint = await svc.getEndpointById(id);
+    if (!endpoint) {
+      return res.status(404).json({
+        success: false,
+        errors: [{ field: 'id', message: 'Endpoint not found' }]
+      });
+    }
     return success(res, endpoint);
   } catch (err) {
-    return error(res, 400, err.message);
+    return res.status(500).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
   }
 }
 
+// Create endpoint
 async function createEndpoint(req, res) {
   try {
-    const { projectId } = req.params;
-    const { name, method, path } = req.body;
-    if (!name || !method || !path)
-      return error(res, 400, 'Cần có name, method và path');
+    const { project_id, name, method, path } = req.body;
 
-    const endpoint = await svc.createEndpoint(projectId, { name, method, path });
-    return success(res, endpoint);
+    // Check required fields
+    if (!project_id) {
+      return res.status(400).json({
+        success: false,
+        errors: [{ field: 'project_id', message: 'Project ID is required' }]
+      });
+    }
+    if (!name || !method || !path) {
+      return res.status(400).json({
+        success: false,
+        errors: [{ field: 'general', message: 'name, method and path are required' }]
+      });
+    }
+
+    const result = await svc.createEndpoint({ project_id, name, method, path });
+
+    if (result.success === false) {
+      return res.status(400).json(result); // errors array
+    }
+
+    return success(res, result.data); // object trần
   } catch (err) {
-    return error(res, 400, err.message);
+    return res.status(400).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
   }
 }
 
+// Update endpoint
 async function updateEndpoint(req, res) {
   try {
-    const { projectId, id } = req.params;
+    const { id } = req.params;
     const { name, method, path } = req.body;
 
-    const updated = await svc.updateEndpoint(projectId, id, {
-      name,
-      method,
-      path
-    });
-    return success(res, updated);
+    const result = await svc.updateEndpoint(id, { name, method, path });
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        errors: [{ field: 'id', message: 'Endpoint not found' }]
+      });
+    }
+
+    if (result.success === false) {
+      return res.status(400).json(result); // errors array
+    }
+
+    return success(res, result.data); // object trần
   } catch (err) {
-    return error(res, 400, err.message);
+    return res.status(400).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
   }
 }
 
+// Delete endpoint
 async function deleteEndpoint(req, res) {
   try {
-    const { projectId, id } = req.params;
-    await svc.deleteEndpoint(projectId, id);
-    return success(res, {});
+    const { id } = req.params;
+    await svc.deleteEndpoint(id);
+    return res.json({ message: 'Endpoint has been deleted' });
   } catch (err) {
-    return error(res, 400, err.message);
+    return res.status(400).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
   }
 }
 

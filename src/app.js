@@ -10,7 +10,7 @@ const endpointRoutes = require('./routes/endpoint.routes');
 
 // Mount routes
 app.use('/workspaces', workspaceRoutes);
-app.use('/', projectRoutes);
-app.use('/', endpointRoutes);
+app.use('/projects', projectRoutes);
+app.use('/endpoints', endpointRoutes);
 
 module.exports = app;
