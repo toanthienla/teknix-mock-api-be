@@ -15,6 +15,26 @@ async function listEndpoints(req, res) {
   }
 }
 
+async function listEndpointsByQuery(req, res) {
+  try {
+    const { project_id } = req.query;
+
+    if (!project_id) {
+      return error(res, 400, 'Cần query project_id');
+    }
+
+    const id = parseInt(project_id, 10);
+    if (Number.isNaN(id)) {
+      return error(res, 400, 'project_id phải là số nguyên');
+    }
+
+    const endpoints = await svc.getEndpointsByProject(id);
+    return success(res, endpoints);
+  } catch (err) {
+    return error(res, 400, err.message);
+  }
+}
+
 // Get endpoint by id
 async function getEndpointById(req, res) {
   try {
