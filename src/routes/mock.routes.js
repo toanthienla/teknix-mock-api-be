@@ -10,14 +10,13 @@
 //    - Hỗ trợ dynamic params: ví dụ '/users/:id'
 //    - strict: true, end: true => khớp chính xác (nhạy cảm dấu '/')
 // 4) Nếu tìm thấy endpoint phù hợp, lấy endpoint_responses tương ứng
-//    và chọn 1 response để trả về (ưu tiên is_default; fallback: mới nhất)
+//    và chọn 1 response để trả về (ưu tiên condition match > is_default > mới nhất)
 // 5) Trả về body (JSON nếu là object, còn lại send text)
 //
 
-
-const express = require('express');
-const db = require('../config/db');
-const { match } = require('path-to-regexp');
+const express = require("express");
+const db = require("../config/db");
+const { match } = require("path-to-regexp");
 const router = express.Router();
 
 // Bộ so khớp path-to-regexp có cache đơn giản để tránh tạo lại matcher nhiều lần
@@ -33,7 +32,11 @@ const matcherCache = new Map();
 function getMatcher(pattern) {
   let fn = matcherCache.get(pattern);
   if (!fn) {
-    fn = match(pattern, { decode: decodeURIComponent, strict: true, end: true });
+    fn = match(pattern, {
+      decode: decodeURIComponent,
+      strict: true,
+      end: true,
+    });
     matcherCache.set(pattern, fn);
   }
   return fn;
@@ -43,8 +46,8 @@ function getMatcher(pattern) {
 // Templating đơn giản cho response_body: hỗ trợ {{params.id}}, {{query.id}}
 // Có thể mở rộng thêm: {{headers.x_token}}, {{body.foo}} nếu cần sau này
 function getByPath(obj, path) {
-  if (!obj || typeof path !== 'string') return undefined;
-  const parts = path.split('.');
+  if (!obj || typeof path !== "string") return undefined;
+  const parts = path.split(".");
   let cur = obj;
   for (const p of parts) {
     if (cur && Object.prototype.hasOwnProperty.call(cur, p)) {
@@ -60,12 +63,12 @@ function renderTemplate(value, ctx) {
   const replaceInString = (str) =>
     str.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, vpath) => {
       const v = getByPath(ctx, vpath);
-      return v == null ? '' : String(v);
+      return v == null ? "" : String(v);
     });
 
-  if (typeof value === 'string') return replaceInString(value);
+  if (typeof value === "string") return replaceInString(value);
   if (Array.isArray(value)) return value.map((v) => renderTemplate(v, ctx));
-  if (value && typeof value === 'object') {
+  if (value && typeof value === "object") {
     const out = Array.isArray(value) ? [] : {};
     for (const [k, v] of Object.entries(value)) {
       out[k] = renderTemplate(v, ctx);
@@ -113,10 +116,13 @@ router.use(async (req, res, next) => {
     const hasParams = Object.keys(params).length > 0;
 
     const { rows: responses } = await db.query(
-      `SELECT id, endpoint_id, name, status_code, response_body, is_default, priority, condition, created_at, updated_at
-       FROM endpoint_responses
-       WHERE endpoint_id = $1
-       ORDER BY is_default DESC, priority DESC NULLS LAST, updated_at DESC, created_at DESC`,
+      `SELECT id, endpoint_id, name, status_code, response_body,
+       is_default, priority, condition, delay_ms,
+       created_at, updated_at
+FROM endpoint_responses
+WHERE endpoint_id = $1
+ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at DESC
+`,
       [ep.id]
     );
 
@@ -124,60 +130,122 @@ router.use(async (req, res, next) => {
     // - GET item (có params): trả {} (rỗng)
     // - GET collection: trả [] (rỗng)
     if (responses.length === 0) {
-      if (req.method.toUpperCase() === 'GET') {
+      if (req.method.toUpperCase() === "GET") {
         return res.status(200).json(hasParams ? {} : []);
       }
-      return res
-        .status(501)
-        .json({ error: { message: 'No response configured for this endpoint' } });
+      return res.status(501).json({
+        error: { message: "No response configured for this endpoint" },
+      });
     }
 
     // 3.1) Áp dụng điều kiện: ưu tiên các response có condition khớp params/query
-    const isPlainObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
+    const isPlainObject = (v) =>
+      v && typeof v === "object" && !Array.isArray(v);
     const matchesCondition = (cond) => {
-      if (!isPlainObject(cond) || Object.keys(cond).length === 0) return true; // coi như mặc định
-      // Hỗ trợ đơn giản: cond.params hoặc key top-level 'id'
-      // - cond.params: { id: '20' } sẽ khớp khi params.id == '20'
-      // - cond.id: '20' tương đương đơn giản cho params.id
-      if ('id' in cond) {
-        if (String(params.id ?? '') !== String(cond.id)) return false;
+      if (!isPlainObject(cond) || Object.keys(cond).length === 0) {
+        return false; // condition rỗng thì KHÔNG match
       }
+
+      // Check params.id đơn giản
+      if ("id" in cond) {
+        if (String(params.id ?? "") !== String(cond.id)) return false;
+      }
+      // Check params object
       if (isPlainObject(cond.params)) {
         for (const [k, v] of Object.entries(cond.params)) {
-          if (String(params[k] ?? '') !== String(v)) return false;
+          if (String(params[k] ?? "") !== String(v)) return false;
         }
       }
-      // Có thể mở rộng cho cond.query/cond.headers/cond.body nếu cần
+
+      // Check query object
+      if (isPlainObject(cond.query)) {
+        for (const [k, v] of Object.entries(cond.query)) {
+          if (String(req.query[k] ?? "") !== String(v)) return false;
+        }
+      }
+
+      // Check headers object
+      if (isPlainObject(cond.headers)) {
+        for (const [k, v] of Object.entries(cond.headers)) {
+          const reqVal = req.headers[k.toLowerCase()]; // headers luôn lowercase
+          if (String(reqVal ?? "") !== String(v)) return false;
+        }
+      }
+
+      // Check body object
+      if (isPlainObject(cond.body)) {
+        for (const [k, v] of Object.entries(cond.body)) {
+          if (String(req.body?.[k] ?? "") !== String(v)) return false;
+        }
+      }
+
+      // Có thể mở rộng cho cond.headers/cond.body nếu cần
       return true;
     };
 
-    // Tìm response đầu tiên có điều kiện khớp (ưu tiên theo ORDER BY ở trên)
-    const matched = responses.find((r) => matchesCondition(r.condition));
+    // 3.2) Lọc toàn bộ response có condition khớp
+    const matchedResponses = responses.filter((r) =>
+      matchesCondition(r.condition)
+    );
+
+    let r;
+    if (matchedResponses.length > 0) {
+      // Sắp xếp theo priority ASC (1 là cao nhất), rồi updated_at DESC
+      matchedResponses.sort((a, b) => {
+        const pa = a.priority ?? Number.MAX_SAFE_INTEGER;
+        const pb = b.priority ?? Number.MAX_SAFE_INTEGER;
+        if (pa !== pb) return pa - pb; // số nhỏ hơn ưu tiên hơn
+        return new Date(b.updated_at) - new Date(a.updated_at);
+      });
+      r = matchedResponses[0];
+    } else {
+      // Nếu không có match và cũng không có default → trả 404
+  r = responses.find((rr) => rr.is_default);
+  if (!r) {
+    return res.status(404).json({ error: "No matching response found" });
+  }
+    }
 
     // 4) Trả về nội dung response:
     // - Nếu response_body là object => trả JSON
     // - Nếu là string/empty => send text/empty string
-    const r = matched || responses[0];
     const status = r.status_code || 200;
     let body = r.response_body ?? null;
 
     // Templating: thay thế {{params.*}} và {{query.*}} trong body (string hoặc object)
     const ctx = { params, query: req.query };
-    if (body && (typeof body === 'object' || typeof body === 'string')) {
+    if (body && (typeof body === "object" || typeof body === "string")) {
       body = renderTemplate(body, ctx);
     }
 
     // Chuẩn hoá cho GET collection (không có params): nếu body rỗng => trả []
-    if (req.method.toUpperCase() === 'GET' && !hasParams) {
-      const isEmptyObject = (v) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0;
-      if (body == null || (typeof body === 'string' && body.trim() === '') || isEmptyObject(body)) {
+    if (req.method.toUpperCase() === "GET" && !hasParams) {
+      const isEmptyObject = (v) =>
+        v &&
+        typeof v === "object" &&
+        !Array.isArray(v) &&
+        Object.keys(v).length === 0;
+      if (
+        body == null ||
+        (typeof body === "string" && body.trim() === "") ||
+        isEmptyObject(body)
+      ) {
         body = [];
       }
     }
 
-    // Trả đúng response_body đã cấu hình: nếu là object => JSON, còn lại => text
-    if (body && typeof body === 'object') return res.status(status).json(body);
-    return res.status(status).send(body ?? '');
+    //  Áp dụng delay_ms
+    const delay = r.delay_ms ?? 0;
+    setTimeout(() => {
+      if (body && typeof body === "object") {
+        return res.status(status).json(body);
+      }
+      return res.status(status).send(body ?? "");
+    }, delay);
+
+    // // Trả đúng response_body đã cấu hình: nếu là object => JSON, còn lại => text
+    // if (body && typeof body === "object") return res.status(status).json(body);
+    // return res.status(status).send(body ?? "");
   } catch (err) {
     // Cho middleware xử lý lỗi chung xử lý tiếp
     return next(err);
