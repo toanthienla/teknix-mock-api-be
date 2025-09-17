@@ -1,11 +1,10 @@
 const svc = require('../services/workspace.service');
-const { success } = require('../utils/response');
 
 // List all workspaces
 async function listWorkspaces(req, res) {
   try {
     const data = await svc.getAllWorkspaces();
-    return success(res, data); // trả về array object trần
+    return res.status(200).json(data); // array object trần
   } catch (err) {
     return res.status(500).json({
       success: false,
@@ -24,7 +23,7 @@ async function getWorkspace(req, res) {
         errors: [{ field: 'id', message: 'Workspace not found' }]
       });
     }
-    return success(res, data); // object trần
+    return res.status(200).json(data); // object trần
   } catch (err) {
     return res.status(500).json({
       success: false,
@@ -33,14 +32,17 @@ async function getWorkspace(req, res) {
   }
 }
 
-// Create workspace (validate-format đã handled ở middleware)
+// Create workspace
 async function createWorkspace(req, res) {
   try {
     const result = await svc.createWorkspace(req.body);
-    if (result.success === false) {
-      return res.status(400).json(result); // errors array
+    if (!result || result.success === false) {
+      return res.status(400).json(result || {
+        success: false,
+        errors: [{ field: 'general', message: 'Create failed' }]
+      });
     }
-    return success(res, result.data); // object trần
+    return res.status(200).json(result); // object trần
   } catch (err) {
     return res.status(400).json({
       success: false,
@@ -49,7 +51,7 @@ async function createWorkspace(req, res) {
   }
 }
 
-// Update workspace (validate-format đã handled ở middleware)
+// Update workspace
 async function updateWorkspace(req, res) {
   try {
     const result = await svc.updateWorkspace(req.params.id, req.body);
@@ -62,7 +64,7 @@ async function updateWorkspace(req, res) {
     if (result.success === false) {
       return res.status(400).json(result); // errors array
     }
-    return success(res, result.data); // object trần
+    return res.status(200).json(result); // object trần
   } catch (err) {
     return res.status(400).json({
       success: false,
@@ -81,7 +83,7 @@ async function deleteWorkspace(req, res) {
         errors: [{ field: 'id', message: 'Workspace not found' }]
       });
     }
-    return success(res, result.data); // trả object trần trước khi xóa
+    return res.status(200).json(result); // object trần { id: ... }
   } catch (err) {
     return res.status(400).json({
       success: false,
