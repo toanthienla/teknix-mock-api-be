@@ -50,9 +50,14 @@ async function getById(req, res) {
 async function create(req, res) {
   try {
     const { endpoint_id, name, status_code, response_body, condition, is_default, delay_ms } = req.body;
+if (!endpoint_id || typeof status_code === 'undefined') {
+      return error(res, 400, 'Cần có endpoint_id, status_code');
+    }
 
-    if (!endpoint_id || !name || typeof status_code === 'undefined') {
-      return error(res, 400, 'Cần có endpoint_id, name, status_code');
+    // Validate name: required and not empty/whitespace-only
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      return error(res, 400, 'name không được rỗng');
+    
     }
 
     const eid = parseInt(endpoint_id, 10);
@@ -60,7 +65,7 @@ async function create(req, res) {
 
     const row = await svc.create({
       endpoint_id: eid,
-      name,
+      name: name.trim(),
       status_code,
       response_body: response_body ?? {},
       condition: condition ?? {},
@@ -85,8 +90,14 @@ async function update(req, res) {
     if (Number.isNaN(rid)) return error(res, 400, 'id phải là số nguyên');
 
     const { name, status_code, response_body, condition, is_default, delay_ms } = req.body;
+     // Validate name if provided: not empty/whitespace-only
+    if (typeof name !== 'undefined') {
+      if (typeof name !== 'string' || name.trim().length === 0) {
+        return error(res, 400, 'name không được rỗng');
+      }
+    }
     const row = await svc.update(rid, {
-      name,
+      name: typeof name === 'undefined' ? undefined : name.trim(),
       status_code,
       response_body,
       condition,
