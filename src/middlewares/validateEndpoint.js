@@ -24,6 +24,32 @@ module.exports = function validateEndpoint(req, res, next) {
   // validate path
   if (!path) {
     errors.push({ field: "path", message: "Path is required" });
+  } else {
+    // 1. Must start with /
+    if (!path.startsWith('/')) {
+      errors.push({ field: "path", message: "Path must start with /" });
+    }
+
+    // 2. Must not end with / (except for root '/')
+    if (path.length > 1 && path.endsWith('/')) {
+      errors.push({ field: "path", message: "Path must not end with /" });
+    }
+
+    // 3. Check route parameters like /users/:id
+    const routePart = path.split('?')[0];
+    const routeParamRegex = /^\/(?:[a-zA-Z0-9_-]+(?:\/:[a-zA-Z][\w]*)*)?$/;
+    if (!routeParamRegex.test(routePart)) {
+      errors.push({ field: "path", message: "Invalid route parameter format" });
+    }
+
+    // 4. Check query parameters if exist
+    const queryPart = path.split('?')[1];
+    if (queryPart) {
+      const queryParamRegex = /^[a-zA-Z0-9_]+=[^&]*(&[a-zA-Z0-9_]+=[^&]*)*$/;
+      if (!queryParamRegex.test(queryPart)) {
+        errors.push({ field: "path", message: "Invalid query parameter format" });
+      }
+    }
   }
 
   // return errors if any
