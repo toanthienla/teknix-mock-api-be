@@ -1,46 +1,105 @@
 const svc = require('../services/project.service');
-const { success, error } = require('../utils/response');
+const { success } = require('../utils/response');
 
+// List all projects (optionally filter by workspace_id)
 async function listProjects(req, res) {
-  const data = await svc.getProjectsByWorkspace(req.params.workspaceId);
-  return success(res, data);
+  try {
+    const { workspace_id } = req.query;
+    const data = await svc.getProjects(workspace_id);
+    return success(res, data); // trả array object trần
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
+  }
 }
 
+// Get project by id
 async function getProjectById(req, res) {
-  const data = await svc.getProjectById(req.params.workspaceId, req.params.id);
-  if (!data) return error(res, 404, 'Project không tồn tại');
-  return success(res, data);
+  try {
+    const data = await svc.getProjectById(req.params.id);
+    if (!data) {
+      return res.status(404).json({
+        success: false,
+        errors: [{ field: 'id', message: 'Project not found' }]
+      });
+    }
+    return success(res, data); // object trần
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
+  }
 }
 
+// Create project (validate handled by middleware)
 async function createProject(req, res) {
   try {
-    const { workspaceId } = req.params;
-    const { name, description } = req.body;
-    if (!name) return error(res, 400, 'Tên project là bắt buộc');
-
-    const project = await svc.createProject(workspaceId, { name, description });
-    return success(res, project, 'Tạo project thành công');
+    const result = await svc.createProject(req.body);
+    if (result.success === false) {
+      return res.status(400).json(result); // errors array
+    }
+    return success(res, result.data); // object trần
   } catch (err) {
-    return error(res, 400, err.message);
+    return res.status(400).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
   }
 }
 
+// Update project (validate handled by middleware)
 async function updateProject(req, res) {
   try {
-    const { workspaceId, id } = req.params;
-    const { name, description } = req.body;
+    const result = await svc.updateProject(req.params.id, req.body);
 
-    const updated = await svc.updateProject(workspaceId, id, { name, description });
-    return success(res, updated, 'Cập nhật project thành công');
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        errors: [{ field: 'id', message: 'Project not found' }]
+      });
+    }
+
+    if (result.success === false) {
+      return res.status(400).json(result); // errors array
+    }
+
+    return success(res, result.data); // object trần
   } catch (err) {
-    return error(res, 400, err.message);
+    return res.status(400).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
   }
 }
 
-
+// Delete project
 async function deleteProject(req, res) {
-  await svc.deleteProject(req.params.workspaceId, req.params.id);
-  return success(res, null, 'Xóa project thành công');
+  try {
+    const result = await svc.deleteProject(req.params.id);
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        errors: [{ field: 'id', message: 'Project not found' }]
+      });
+    }
+
+    return success(res, result.data); // trả object trần trước khi xóa
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      errors: [{ field: 'general', message: err.message }]
+    });
+  }
 }
 
-module.exports = { listProjects, getProjectById, createProject, updateProject, deleteProject };
+module.exports = {
+  listProjects,
+  getProjectById,
+  createProject,
+  updateProject,
+  deleteProject
+};

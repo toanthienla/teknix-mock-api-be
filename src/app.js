@@ -12,10 +12,7 @@ const mockRoutes = require('./routes/mock.routes');
 
 // Mount routes
 app.use('/workspaces', workspaceRoutes);
-app.use('/', projectRoutes);
-app.use('/', endpointRoutes);
-app.use('/', endpointResponseRoutes);
-// Catch-all mock router MUST be last to avoid shadowing admin routes
-app.use('/', mockRoutes);
+app.use('/projects', projectRoutes);
+app.use('/endpoints', endpointRoutes);
 
 module.exports = app;
