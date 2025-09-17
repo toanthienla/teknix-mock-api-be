@@ -12,8 +12,8 @@ module.exports = function validateEndpoint(req, res, next) {
   // validate name
   if (!name || name.trim() === "") {
     errors.push({ field: "name", message: "Endpoint name cannot be empty" });
-  } else if (name.length > 50) {
-    errors.push({ field: "name", message: "Endpoint name must not exceed 50 characters" });
+  } else if (name.length > 20) {
+    errors.push({ field: "name", message: "Endpoint name must not exceed 20 characters" });
   }
 
   // validate method

@@ -12,7 +12,7 @@ async function getEndpoints(project_id) {
 
   query += ' ORDER BY created_at DESC';
   const { rows } = await db.query(query, params);
-  return rows; // trả về array object trần
+  return rows; // array object trần
 }
 
 // Get endpoint by id
@@ -28,36 +28,39 @@ async function getEndpointById(endpointId) {
 async function createEndpoint({ project_id, name, method, path }) {
   const errors = [];
 
-  // Check duplicate name
+  // Check duplicate name (ignore case)
   const { rows: nameRows } = await db.query(
-    `SELECT id FROM endpoints WHERE project_id=$1 AND LOWER(name)=LOWER($2)`,
+    'SELECT id FROM endpoints WHERE project_id=$1 AND LOWER(name)=LOWER($2)',
     [project_id, name]
   );
   if (nameRows.length > 0) {
     errors.push({ field: "name", message: "Name already exists in this project" });
   }
 
-  // Check duplicate method + path
-  const { rows: methodPathRows } = await db.query(
-    `SELECT id FROM endpoints 
-     WHERE project_id=$1 AND LOWER(method)=LOWER($2) AND LOWER(path)=LOWER($3)`,
-    [project_id, method, path]
+  // Check path + method constraints (case-sensitive path)
+  const { rows: samePathRows } = await db.query(
+    'SELECT method FROM endpoints WHERE project_id=$1 AND path=$2',
+    [project_id, path]
   );
-  if (methodPathRows.length > 0) {
+
+  const usedMethods = samePathRows.map(r => r.method.toUpperCase());
+  const methodUpper = method.toUpperCase();
+
+  if (usedMethods.includes(methodUpper)) {
     errors.push({ field: "method", message: "Method already exists for this path" });
-    errors.push({ field: "path", message: "Path already exists for this method" });
+  }
+  if (!usedMethods.includes(methodUpper) && usedMethods.length >= 4) {
+    errors.push({ field: "path", message: "Path already has all 4 methods" });
   }
 
-  if (errors.length > 0) {
-    return { success: false, errors };
-  }
+  if (errors.length > 0) return { success: false, errors };
 
   const { rows } = await db.query(
     'INSERT INTO endpoints(project_id, name, method, path) VALUES($1,$2,$3,$4) RETURNING *',
     [project_id, name, method, path]
   );
 
-  return { success: true, data: rows[0] }; // trả về object trần trong data
+  return { success: true, data: rows[0] };
 }
 
 // Update endpoint
@@ -76,45 +79,48 @@ async function updateEndpoint(endpointId, { name, method, path }) {
   const newMethod = method ?? current.method;
   const newPath = path ?? current.path;
 
-  // Nếu dữ liệu y hệt => trả về object hiện tại
+  // Nếu dữ liệu không thay đổi => trả về object hiện tại
   if (newName === current.name && newMethod === current.method && newPath === current.path) {
     return { success: true, data: current };
   }
 
-  // Check duplicate name
-  const { rows: nameRows } = await db.query(
-    `SELECT id FROM endpoints 
-     WHERE id<>$1 AND project_id=$2 AND LOWER(name)=LOWER($3)`,
-    [endpointId, current.project_id, newName]
-  );
-  if (nameRows.length > 0) {
-    errors.push({ field: "name", message: "Name already exists in this project" });
+  // Check duplicate name (ignore case)
+  if (newName.toLowerCase() !== current.name.toLowerCase()) {
+    const { rows: nameRows } = await db.query(
+      'SELECT id FROM endpoints WHERE id<>$1 AND project_id=$2 AND LOWER(name)=LOWER($3)',
+      [endpointId, current.project_id, newName]
+    );
+    if (nameRows.length > 0) {
+      errors.push({ field: "name", message: "Name already exists in this project" });
+    }
   }
 
-  // Check duplicate method + path
-  const { rows: methodPathRows } = await db.query(
-    `SELECT id FROM endpoints 
-     WHERE id<>$1 AND project_id=$2 AND LOWER(method)=LOWER($3) AND LOWER(path)=LOWER($4)`,
-    [endpointId, current.project_id, newMethod, newPath]
-  );
-  if (methodPathRows.length > 0) {
-    errors.push({ field: "method", message: "Method already exists for this path" });
-    errors.push({ field: "path", message: "Path already exists for this method" });
+  // Check path + method constraints (case-sensitive path)
+  if (newPath !== current.path || newMethod.toUpperCase() !== current.method.toUpperCase()) {
+    const { rows: samePathRows } = await db.query(
+      'SELECT method FROM endpoints WHERE id<>$1 AND project_id=$2 AND path=$3',
+      [endpointId, current.project_id, newPath]
+    );
+
+    const usedMethods = samePathRows.map(r => r.method.toUpperCase());
+    const newMethodUpper = newMethod.toUpperCase();
+
+    if (usedMethods.includes(newMethodUpper)) {
+      errors.push({ field: "method", message: "Method already exists for this path" });
+    }
+    if (!usedMethods.includes(newMethodUpper) && usedMethods.length >= 4) {
+      errors.push({ field: "path", message: "Path already has all 4 methods" });
+    }
   }
 
-  if (errors.length > 0) {
-    return { success: false, errors };
-  }
+  if (errors.length > 0) return { success: false, errors };
 
   const { rows } = await db.query(
-    `UPDATE endpoints 
-     SET name=$1, method=$2, path=$3, updated_at=NOW() 
-     WHERE id=$4 
-     RETURNING *`,
+    'UPDATE endpoints SET name=$1, method=$2, path=$3, updated_at=NOW() WHERE id=$4 RETURNING *',
     [newName, newMethod, newPath, endpointId]
   );
 
-  return { success: true, data: rows[0] }; // object trần
+  return { success: true, data: rows[0] };
 }
 
 // Delete endpoint
@@ -127,7 +133,7 @@ async function deleteEndpoint(endpointId) {
   if (!current) return null;
 
   await db.query('DELETE FROM endpoints WHERE id=$1', [endpointId]);
-  return { success: true, data: current }; // trả về object trần trước khi xóa
+  return { success: true, data: current };
 }
 
 module.exports = {
