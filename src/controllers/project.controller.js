@@ -1,12 +1,11 @@
 const svc = require('../services/project.service');
-const { success } = require('../utils/response');
 
 // List all projects (optionally filter by workspace_id)
 async function listProjects(req, res) {
   try {
     const { workspace_id } = req.query;
     const data = await svc.getProjects(workspace_id);
-    return success(res, data); // trả array object trần
+    return res.status(200).json(data); // array object trần
   } catch (err) {
     return res.status(500).json({
       success: false,
@@ -25,7 +24,7 @@ async function getProjectById(req, res) {
         errors: [{ field: 'id', message: 'Project not found' }]
       });
     }
-    return success(res, data); // object trần
+    return res.status(200).json(data); // object trần
   } catch (err) {
     return res.status(500).json({
       success: false,
@@ -34,14 +33,17 @@ async function getProjectById(req, res) {
   }
 }
 
-// Create project (validate handled by middleware)
+// Create project
 async function createProject(req, res) {
   try {
     const result = await svc.createProject(req.body);
-    if (result.success === false) {
-      return res.status(400).json(result); // errors array
+    if (!result || result.success === false) {
+      return res.status(400).json(result || {
+        success: false,
+        errors: [{ field: 'general', message: 'Create failed' }]
+      });
     }
-    return success(res, result.data); // object trần
+    return res.status(200).json(result); // object trần
   } catch (err) {
     return res.status(400).json({
       success: false,
@@ -50,23 +52,20 @@ async function createProject(req, res) {
   }
 }
 
-// Update project (validate handled by middleware)
+// Update project
 async function updateProject(req, res) {
   try {
     const result = await svc.updateProject(req.params.id, req.body);
-
     if (!result) {
       return res.status(404).json({
         success: false,
         errors: [{ field: 'id', message: 'Project not found' }]
       });
     }
-
     if (result.success === false) {
-      return res.status(400).json(result); // errors array
+      return res.status(400).json(result);
     }
-
-    return success(res, result.data); // object trần
+    return res.status(200).json(result); // object trần
   } catch (err) {
     return res.status(400).json({
       success: false,
@@ -79,15 +78,13 @@ async function updateProject(req, res) {
 async function deleteProject(req, res) {
   try {
     const result = await svc.deleteProject(req.params.id);
-
     if (!result) {
       return res.status(404).json({
         success: false,
         errors: [{ field: 'id', message: 'Project not found' }]
       });
     }
-
-    return success(res, result.data); // trả object trần trước khi xóa
+    return res.status(200).json(result); // object trần { id: ... }
   } catch (err) {
     return res.status(400).json({
       success: false,

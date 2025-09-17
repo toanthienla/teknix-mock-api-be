@@ -13,7 +13,7 @@ async function getProjects(workspace_id) {
   query += ' ORDER BY created_at DESC';
 
   const { rows } = await db.query(query, params);
-  return rows;
+  return rows; // array object trần
 }
 
 // Get project by id
@@ -22,7 +22,7 @@ async function getProjectById(projectId) {
     'SELECT * FROM projects WHERE id=$1',
     [projectId]
   );
-  return rows[0];
+  return rows[0] || null; // object trần hoặc null
 }
 
 // Create project (check duplicate in same workspace)
@@ -43,7 +43,7 @@ async function createProject({ workspace_id, name, description }) {
     'INSERT INTO projects(workspace_id, name, description) VALUES($1,$2,$3) RETURNING *',
     [workspace_id, name, description]
   );
-  return rows[0];
+  return rows[0]; // object trần
 }
 
 // Update project (check duplicate in same workspace, ignore itself)
@@ -70,13 +70,16 @@ async function updateProject(projectId, { name, description }) {
      RETURNING *`,
     [name, description, projectId]
   );
-  return rows[0];
+  return rows[0] || null; // object trần hoặc null
 }
 
 // Delete project
 async function deleteProject(projectId) {
-  await db.query('DELETE FROM projects WHERE id=$1', [projectId]);
-  return true;
+  const { rows } = await db.query(
+    'DELETE FROM projects WHERE id=$1 RETURNING id',
+    [projectId]
+  );
+  return rows[0] || null; // { id: ... } hoặc null nếu project không tồn tại
 }
 
 module.exports = { 
