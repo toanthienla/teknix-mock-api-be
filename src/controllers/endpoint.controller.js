@@ -116,6 +116,7 @@ async function deleteEndpoint(req, res) {
 }
 
 module.exports = {
+  listEndpointsByQuery,
   listEndpoints,
   getEndpointById,
   createEndpoint,
