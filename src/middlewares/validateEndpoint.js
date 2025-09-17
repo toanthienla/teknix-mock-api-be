@@ -12,8 +12,15 @@ module.exports = function validateEndpoint(req, res, next) {
   // validate name
   if (!name || name.trim() === "") {
     errors.push({ field: "name", message: "Endpoint name cannot be empty" });
-  } else if (name.length > 20) {
-    errors.push({ field: "name", message: "Endpoint name must not exceed 20 characters" });
+  } else {
+    if (name.length > 20) {
+      errors.push({ field: "name", message: "Endpoint name must not exceed 20 characters" });
+    }
+
+    // Must start with a letter (a-zA-Z)
+    if (!/^[a-zA-Z]/.test(name)) {
+      errors.push({ field: "name", message: "Endpoint name must start with a letter and cannot start with a number or special character" });
+    }
   }
 
   // validate method
