@@ -17,6 +17,8 @@
 const express = require("express");
 const db = require("../config/db");
 const { match } = require("path-to-regexp");
+// Service ghi log request/response vào bảng project_request_logs
+const logSvc = require("../services/project_request_log.service");
 const router = express.Router();
 
 // Bộ so khớp path-to-regexp có cache đơn giản để tránh tạo lại matcher nhiều lần
@@ -30,6 +32,7 @@ const matcherCache = new Map();
  * - end: true => phải khớp toàn bộ path (không cho phép phần dư)
  */
 function getMatcher(pattern) {
+// Tạo matcher path-to-regexp cho từng endpoint.path, có cache
   let fn = matcherCache.get(pattern);
   if (!fn) {
     fn = match(pattern, {
@@ -40,6 +43,12 @@ function getMatcher(pattern) {
     matcherCache.set(pattern, fn);
   }
   return fn;
+}
+
+function getClientIp(req) {
+  const raw = (req.headers["x-forwarded-for"] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || "").toString();
+  const first = raw.split(',')[0].trim();
+  return first.substring(0, 45);
 }
 
 // ------------------------------------------------------------
@@ -83,11 +92,12 @@ function renderTemplate(value, ctx) {
 
 router.use(async (req, res, next) => {
   try {
+    const started = Date.now();
     const method = req.method.toUpperCase();
 
     // 1) Lấy danh sách endpoint theo method hiện tại
     const { rows: endpoints } = await db.query(
-      `SELECT e.id, e.method, e.path,
+      `SELECT e.id, e.method, e.path, e.project_id,
               EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id) AS has_response,
               EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id AND r.is_default = true) AS has_default
        FROM endpoints e
@@ -107,7 +117,7 @@ router.use(async (req, res, next) => {
         return false;
       }
     });
-    if (!ep) return next();
+  if (!ep) return next();
 
     // 3) Lấy toàn bộ responses của endpoint để có thể áp dụng điều kiện theo params/query
     const matchFn = getMatcher(ep.path);
@@ -130,12 +140,38 @@ ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at D
     // - GET item (có params): trả {} (rỗng)
     // - GET collection: trả [] (rỗng)
     if (responses.length === 0) {
+      // No configured responses for this endpoint
+      // For GET: return empty object/array (legacy behavior)
+      const status = req.method.toUpperCase() === "GET" ? 200 : 501;
+      const body = req.method.toUpperCase() === "GET" ? (hasParams ? {} : []) : { error: { message: "No response configured for this endpoint" } };
+      const finished = Date.now();
+       // Ghi log cho trường hợp endpoint KHÔNG có response cấu hình
+      try {
+        const ip = getClientIp(req);
+        await logSvc.insertLog({
+          project_id: ep.project_id || null,
+          endpoint_id: ep.id,
+          endpoint_response_id: null,
+          request_method: method,
+          request_path: req.path,
+          request_headers: req.headers || {},
+          request_body: req.body || {},
+          response_status_code: status,
+          response_body: body,
+          ip_address: ip,
+          latency_ms: finished - started,
+        });
+       } catch (e) {
+         if (process.env.NODE_ENV !== 'production') {
+           console.warn('[mock.routes] Ghi log (no responses) thất bại:', e?.message || e);
+         }
+       }
+
       if (req.method.toUpperCase() === "GET") {
-        return res.status(200).json(hasParams ? {} : []);
+        return res.status(status).json(body);
+      } else {
+        return res.status(status).json(body);
       }
-      return res.status(501).json({
-        error: { message: "No response configured for this endpoint" },
-      });
     }
 
     // 3.1) Áp dụng điều kiện: ưu tiên các response có condition khớp params/query
@@ -202,7 +238,30 @@ ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at D
       // Nếu không có match và cũng không có default → trả 404
   r = responses.find((rr) => rr.is_default);
   if (!r) {
-    return res.status(404).json({ error: "No matching response found" });
+    const status = 404;
+    const body = { error: "No matching response found" };
+    const finished = Date.now();
+         try {
+      const ip = getClientIp(req);
+      await logSvc.insertLog({
+        project_id: ep.project_id || null,
+        endpoint_id: ep.id,
+        endpoint_response_id: null,
+        request_method: method,
+        request_path: req.path,
+        request_headers: req.headers || {},
+        request_body: req.body || {},
+        response_status_code: status,
+        response_body: body,
+        ip_address: ip,
+        latency_ms: finished - started,
+      });
+         } catch (e) {
+           if (process.env.NODE_ENV !== 'production') {
+             console.warn('[mock.routes] Ghi log (404 no match) thất bại:', e?.message || e);
+           }
+         }
+    return res.status(status).json(body);
   }
     }
 
@@ -236,17 +295,71 @@ ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at D
 
     //  Áp dụng delay_ms
     const delay = r.delay_ms ?? 0;
-    setTimeout(() => {
+
+    const sendResponse = async () => {
+      const finished = Date.now();
+       // Ghi log request/response (có endpoint_response_id)
+       try {
+        const ip = getClientIp(req);
+        await logSvc.insertLog({
+          project_id: ep.project_id || null,
+          endpoint_id: ep.id,
+          endpoint_response_id: r.id || null,
+          request_method: method,
+          request_path: req.path,
+          request_headers: req.headers || {},
+          request_body: req.body || {},
+          response_status_code: status,
+          response_body: body ?? {},
+          ip_address: ip,
+          latency_ms: finished - started,
+        });
+       } catch (e) {
+         if (process.env.NODE_ENV !== 'production') {
+           console.warn('[mock.routes] Ghi log (matched response) thất bại:', e?.message || e);
+         }
+       }
+
       if (body && typeof body === "object") {
         return res.status(status).json(body);
       }
       return res.status(status).send(body ?? "");
-    }, delay);
+    };
+
+    if (delay > 0) {
+      setTimeout(() => {
+        sendResponse();
+      }, delay);
+    } else {
+      await sendResponse();
+    }
 
     // // Trả đúng response_body đã cấu hình: nếu là object => JSON, còn lại => text
     // if (body && typeof body === "object") return res.status(status).json(body);
     // return res.status(status).send(body ?? "");
-  } catch (err) {
+   } catch (err) {
+     // Lỗi bất ngờ: cố gắng ghi log 500
+     try {
+      const started = Date.now();
+      const ip = getClientIp(req);
+      await logSvc.insertLog({
+        project_id: null,
+        endpoint_id: null,
+        endpoint_response_id: null,
+        request_method: req.method?.toUpperCase?.() || '',
+        request_path: req.path || req.originalUrl || '',
+        request_headers: req.headers || {},
+        request_body: req.body || {},
+        response_status_code: 500,
+        response_body: { error: 'Internal Server Error' },
+        ip_address: ip,
+        latency_ms: 0,
+      });
+     } catch (e) {
+       if (process.env.NODE_ENV !== 'production') {
+         console.warn('[mock.routes] Ghi log (unexpected error) thất bại:', e?.message || e);
+       }
+     }
     // Cho middleware xử lý lỗi chung xử lý tiếp
     return next(err);
   }

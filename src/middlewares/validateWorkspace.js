@@ -1,27 +1,25 @@
 // middlewares/validateWorkspace.js
 
-const isValidName = (name) => /^[a-zA-Z][\w\s-]*$/.test(name);
+// Regex: bắt đầu bằng ký tự chữ (Unicode), sau đó cho phép chữ, số, khoảng trắng, gạch ngang (-), gạch dưới (_)
+const isValidName = (name) => /^\p{L}[\p{L}\d _-]*$/u.test(name);
 
 module.exports = function validateWorkspace(req, res, next) {
   const { name } = req.body;
   const errors = [];
 
-  // Check empty
   if (!name || name.trim() === "") {
     errors.push({ field: "name", message: "Workspace name cannot be empty" });
-  }
+  } else {
+    if (name.length > 50) {
+      errors.push({ field: "name", message: "Workspace name cannot exceed 50 characters" });
+    }
 
-  // Check length
-  if (name && name.length > 20) {
-    errors.push({ field: "name", message: "Workspace name cannot exceed 20 characters" });
-  }
-
-  // Check format: phải bắt đầu bằng chữ cái
-  if (name && !isValidName(name)) {
-    errors.push({
-      field: "name",
-      message: "Workspace name must start with a letter and cannot start with a number or special character"
-    });
+    if (!isValidName(name)) {
+      errors.push({
+        field: "name",
+        message: "Workspace name must start with a letter and can only contain letters, numbers, spaces, - or _"
+      });
+    }
   }
 
   if (errors.length > 0) {

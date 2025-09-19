@@ -74,16 +74,27 @@ async function updateProject(req, res) {
   }
 }
 
-// Delete project
+// Delete project (KHÔNG ghi log xoá; chỉ NULL hoá các tham chiếu trong bảng log để tránh lỗi FK)
+const logSvc = require('../services/project_request_log.service');
 async function deleteProject(req, res) {
   try {
-    const result = await svc.deleteProject(req.params.id);
-    if (!result) {
+    const { id } = req.params;
+    const pid = parseInt(id, 10);
+
+    // Kiểm tra tồn tại trước khi xoá
+    const exist = await svc.getProjectById(pid);
+    if (!exist) {
       return res.status(404).json({
         success: false,
         errors: [{ field: 'id', message: 'Project not found' }]
       });
     }
+
+    // NULL hoá toàn bộ tham chiếu liên quan project trong bảng log
+    try { await logSvc.nullifyProjectTree(pid); } catch (_) {}
+
+    // Xoá project
+    const result = await svc.deleteProject(pid);
     return res.status(200).json(result); // object trần { id: ... }
   } catch (err) {
     return res.status(400).json({
