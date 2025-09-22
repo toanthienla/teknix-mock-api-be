@@ -200,21 +200,6 @@ Sai định dạng (ví dụ) sẽ trả 400 và vẫn ghi log:
 	- Middleware đã bỏ qua `/endpoint_responses/priority`; controller ghi 1 dòng/item.
 - Restart nhanh server: trong terminal nodemon gõ `rs`.
 
-## 9) Cấu hình DB kết nối
-File `src/config/db.js` đọc .env qua dotenv. Mặc định:
-
-```js
-const pool = new Pool({
-	host: process.env.DB_HOST || 'localhost',
-	port: process.env.DB_PORT || 5432,
-	user: process.env.DB_USER || 'postgres',
-	password: process.env.DB_PASSWORD || '190804',
-	database: process.env.DB_NAME || 'teknix_mock_api',
-});
-```
-
-Thay đổi trong `.env` để trỏ tới DB của bạn.
 
 ---
 
-Gợi ý: Nếu bạn triển khai trên môi trường khác (Linux/Mac), chỉ cần điều chỉnh lệnh thiết lập biến môi trường tương ứng shell. Các phần còn lại giữ nguyên.
