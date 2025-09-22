@@ -25,6 +25,20 @@ function adminResponseLogger(scope = 'endpoint_responses') {
       if (urlPath.includes('/endpoint_responses/priority')) {
         return next();
       }
+
+      // BỎ QUA LOG cho các request LIST (GET) như:
+      //   /endpoint_responses?endpoint_id=...
+      // vì thường trả về mảng lớn → gây nhiễu log với N dòng.
+      try {
+        const method = (req.method || '').toUpperCase();
+        const pathOnly = req.path || (urlPath.split('?')[0] || ''); // path không gồm query
+        const isListPath = /\/endpoint_responses\/?$/.test(pathOnly);
+        const hasIdInPath = /\/endpoint_responses\/\d+(?:\/|$)/.test(pathOnly);
+        const hasEndpointIdQuery = req.query && typeof req.query.endpoint_id !== 'undefined' && `${req.query.endpoint_id}` !== '';
+        if (method === 'GET' && isListPath && !hasIdInPath && hasEndpointIdQuery) {
+          return next(); // không gắn hook json/send → không ghi log
+        }
+      } catch (_) { /* noop */ }
     }
 
     const started = Date.now();
