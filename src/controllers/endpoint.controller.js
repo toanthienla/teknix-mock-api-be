@@ -114,19 +114,52 @@ async function updateEndpoint(req, res) {
   }
 }
 
-// Delete endpoint
+// Delete endpoint (giữ log: NULL hoá FK trước, rồi ghi log DELETE)
+// Bước 1: NULL hoá endpoint_id và endpoint_response_id thuộc endpoint trong bảng log
+// Bước 2: Xoá endpoint
+// Bước 3: Ghi 1 dòng log DELETE để truy vết hành động
+const logSvc = require('../services/project_request_log.service');
 async function deleteEndpoint(req, res) {
+  const started = Date.now();
   try {
-    const result = await svc.deleteEndpoint(req.params.id);
+    const { id } = req.params;
+    const eid = parseInt(id, 10);
+    const urlPath = req.originalUrl || req.path || '';
+    const headersReq = req.headers || {};
+    const bodyReq = req.body || {};
+    const ip = (req.headers['x-forwarded-for'] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || '').toString().split(',')[0].trim().substring(0,45);
 
-    if (!result) {
+    // Lấy endpoint để suy ra project_id trước khi xoá
+    const current = await svc.getEndpointById(eid);
+    if (!current) {
+      // Ghi log 404 cho action DELETE
+      try {
+        await logSvc.insertLog({
+          project_id: null,
+          endpoint_id: eid || null,
+          endpoint_response_id: null,
+          request_method: 'DELETE',
+          request_path: urlPath,
+          request_headers: headersReq,
+          request_body: bodyReq,
+          response_status_code: 404,
+          response_body: { error: { message: 'Endpoint not found' } },
+          ip_address: ip,
+          latency_ms: 0,
+        });
+      } catch (_) {}
       return res.status(404).json({
         success: false,
         errors: [{ field: 'id', message: 'Endpoint not found' }]
       });
     }
 
-    return success(res, result.data); // object trần
+    // NULL hoá tham chiếu trong project_request_logs: endpoint_id & endpoint_response_id thuộc endpoint
+    try { await logSvc.nullifyEndpointAndResponses(eid); } catch (_) {}
+
+    // Xoá endpoint (KHÔNG ghi log xoá theo yêu cầu)
+    const result = await svc.deleteEndpoint(eid);
+    return success(res, result.data);
   } catch (err) {
     return res.status(400).json({
       success: false,

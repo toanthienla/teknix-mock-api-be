@@ -1,6 +1,7 @@
 // middlewares/validateProject.js
 
-const isValidName = (name) => /^[a-zA-Z][\w\s-]*$/.test(name);
+// Regex: Bắt đầu bằng ký tự chữ Unicode, sau đó có thể chứa chữ, số, khoảng trắng, gạch dưới, gạch ngang
+const isValidName = (name) => /^\p{L}[\p{L}\d _-]*$/u.test(name);
 
 module.exports = function validateProject(req, res, next) {
   const { name, workspace_id } = req.body;
@@ -21,11 +22,11 @@ module.exports = function validateProject(req, res, next) {
     errors.push({ field: "name", message: "Project name cannot exceed 50 characters" });
   }
 
-  // Check format: phải bắt đầu bằng chữ cái
+  // Check format: phải bắt đầu bằng chữ cái Unicode
   if (name && !isValidName(name)) {
     errors.push({
       field: "name",
-      message: "Project name must start with a letter and cannot start with a number or special character"
+      message: "Project name must start with a letter (Unicode supported) and can only contain letters, numbers, spaces, - or _"
     });
   }
 

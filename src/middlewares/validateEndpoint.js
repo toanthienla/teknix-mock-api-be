@@ -44,7 +44,7 @@ module.exports = function validateEndpoint(req, res, next) {
 
     // 3. Check route parameters like /users/:id
     const routePart = path.split('?')[0];
-    const routeParamRegex = /^\/(?:[a-zA-Z0-9_-]+(?:\/:[a-zA-Z][\w]*)*)?$/;
+    const routeParamRegex = /^\/(?:[a-zA-Z0-9_-]+|:[a-zA-Z][\w]*)(?:\/(?:[a-zA-Z0-9_-]+|:[a-zA-Z][\w]*))*$/;
     if (!routeParamRegex.test(routePart)) {
       errors.push({ field: "path", message: "Invalid route parameter format" });
     }
