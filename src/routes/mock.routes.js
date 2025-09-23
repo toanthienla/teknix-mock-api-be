@@ -21,7 +21,7 @@ const { match } = require("path-to-regexp");
 const logSvc = require("../services/project_request_log.service");
 const router = express.Router();
 const axios = require("axios");
-
+const https = require("https");
 // Bộ so khớp path-to-regexp có cache đơn giản để tránh tạo lại matcher nhiều lần
 // key: pattern string, value: match function
 const matcherCache = new Map();
@@ -293,21 +293,27 @@ router.use(async (req, res, next) => {
     }
 
     // 3.3) Nếu có proxy_url → gọi API ngoài (proxy) thay vì trả response_body
-     if (isProxyRequest && r.proxy_url) {
+    if (r.proxy_url) {
       try {
-        // Thay template {{params.xxx}}, {{query.xxx}} trong proxy_url
         const ctx = { params, query: req.query };
         const resolvedUrl = renderTemplate(r.proxy_url, ctx);
+        console.log("[Proxy] resolvedUrl =", resolvedUrl);
 
-        // Gọi API ngoài
+        // Gọi API ngoài với httpsAgent để bỏ qua verify SSL
         const proxyResp = await axios({
           method: r.proxy_method || req.method,
           url: resolvedUrl,
           data: req.body,
-          headers: req.headers,
-          validateStatus: () => true, // cho phép forward mọi status code
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            Accept: "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            Referer: "https://jsonplaceholder.typicode.com/",
+          },
+          validateStatus: () => true,
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
         });
-
         // Ghi log response từ proxy
         const finished = Date.now();
         try {
