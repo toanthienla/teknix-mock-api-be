@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const endpointResponseService = require('./endpoint_response.service'); // import service response
 
 // Get all endpoints (optionally filter by project_id)
 async function getEndpoints(project_id) {
@@ -60,7 +61,20 @@ async function createEndpoint({ project_id, name, method, path }) {
     [project_id, name, method, path]
   );
 
-  return { success: true, data: rows[0] };
+  const endpoint = rows[0];
+
+  // --- Auto-create default endpoint_response ---
+  await endpointResponseService.create({
+    endpoint_id: endpoint.id,
+    name: "Success",
+    status_code: 200,
+    response_body: { success: true },
+    condition: {},
+    is_default: true,
+    delay_ms: 0
+  });
+
+  return { success: true, data: endpoint };
 }
 
 // Update endpoint
@@ -83,8 +97,7 @@ async function updateEndpoint(endpointId, { name, method, path }) {
   if (newName === current.name && newMethod === current.method && newPath === current.path) {
     return { success: true, data: current };
   }
-
-  // Check duplicate name (ignore case)
+// Check duplicate name (ignore case)
   if (newName.toLowerCase() !== current.name.toLowerCase()) {
     const { rows: nameRows } = await db.query(
       'SELECT id FROM endpoints WHERE id<>$1 AND project_id=$2 AND LOWER(name)=LOWER($3)',
@@ -115,12 +128,12 @@ async function updateEndpoint(endpointId, { name, method, path }) {
 
   if (errors.length > 0) return { success: false, errors };
 
-  const { rows } = await db.query(
+  const { rows: updatedRows } = await db.query(
     'UPDATE endpoints SET name=$1, method=$2, path=$3, updated_at=NOW() WHERE id=$4 RETURNING *',
     [newName, newMethod, newPath, endpointId]
   );
 
-  return { success: true, data: rows[0] };
+  return { success: true, data: updatedRows[0] };
 }
 
 // Delete endpoint

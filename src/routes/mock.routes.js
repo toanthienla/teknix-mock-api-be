@@ -20,6 +20,7 @@ const { match } = require("path-to-regexp");
 // Service ghi log request/response vào bảng project_request_logs
 const logSvc = require("../services/project_request_log.service");
 const router = express.Router();
+const axios = require("axios");
 
 // Bộ so khớp path-to-regexp có cache đơn giản để tránh tạo lại matcher nhiều lần
 // key: pattern string, value: match function
@@ -32,7 +33,7 @@ const matcherCache = new Map();
  * - end: true => phải khớp toàn bộ path (không cho phép phần dư)
  */
 function getMatcher(pattern) {
-// Tạo matcher path-to-regexp cho từng endpoint.path, có cache
+  // Tạo matcher path-to-regexp cho từng endpoint.path, có cache
   let fn = matcherCache.get(pattern);
   if (!fn) {
     fn = match(pattern, {
@@ -46,8 +47,14 @@ function getMatcher(pattern) {
 }
 
 function getClientIp(req) {
-  const raw = (req.headers["x-forwarded-for"] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || "").toString();
-  const first = raw.split(',')[0].trim();
+  const raw = (
+    req.headers["x-forwarded-for"] ||
+    req.connection?.remoteAddress ||
+    req.socket?.remoteAddress ||
+    req.ip ||
+    ""
+  ).toString();
+  const first = raw.split(",")[0].trim();
   return first.substring(0, 45);
 }
 
@@ -95,6 +102,14 @@ router.use(async (req, res, next) => {
     const started = Date.now();
     const method = req.method.toUpperCase();
 
+    // Kiểm tra xem request có /proxy prefix hay không
+    let originalPath = req.path;
+    let isProxyRequest = false;
+    if (originalPath.startsWith("/proxy/")) {
+      isProxyRequest = true;
+      req.path = originalPath.replace(/^\/proxy/, ""); // bỏ prefix để match endpoint
+    }
+
     // 1) Lấy danh sách endpoint theo method hiện tại
     const { rows: endpoints } = await db.query(
       `SELECT e.id, e.method, e.path, e.project_id,
@@ -117,7 +132,7 @@ router.use(async (req, res, next) => {
         return false;
       }
     });
-  if (!ep) return next();
+    if (!ep) return next();
 
     // 3) Lấy toàn bộ responses của endpoint để có thể áp dụng điều kiện theo params/query
     const matchFn = getMatcher(ep.path);
@@ -128,11 +143,12 @@ router.use(async (req, res, next) => {
     const { rows: responses } = await db.query(
       `SELECT id, endpoint_id, name, status_code, response_body,
        is_default, priority, condition, delay_ms,
+       proxy_url, proxy_method, 
        created_at, updated_at
-FROM endpoint_responses
-WHERE endpoint_id = $1
-ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at DESC
-`,
+  FROM endpoint_responses
+  WHERE endpoint_id = $1
+  ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at DESC
+  `,
       [ep.id]
     );
 
@@ -143,9 +159,14 @@ ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at D
       // No configured responses for this endpoint
       // For GET: return empty object/array (legacy behavior)
       const status = req.method.toUpperCase() === "GET" ? 200 : 501;
-      const body = req.method.toUpperCase() === "GET" ? (hasParams ? {} : []) : { error: { message: "No response configured for this endpoint" } };
+      const body =
+        req.method.toUpperCase() === "GET"
+          ? hasParams
+            ? {}
+            : []
+          : { error: { message: "No response configured for this endpoint" } };
       const finished = Date.now();
-       // Ghi log cho trường hợp endpoint KHÔNG có response cấu hình
+      // Ghi log cho trường hợp endpoint KHÔNG có response cấu hình
       try {
         const ip = getClientIp(req);
         await logSvc.insertLog({
@@ -161,11 +182,14 @@ ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at D
           ip_address: ip,
           latency_ms: finished - started,
         });
-       } catch (e) {
-         if (process.env.NODE_ENV !== 'production') {
-           console.warn('[mock.routes] Ghi log (no responses) thất bại:', e?.message || e);
-         }
-       }
+      } catch (e) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(
+            "[mock.routes] Ghi log (no responses) thất bại:",
+            e?.message || e
+          );
+        }
+      }
 
       if (req.method.toUpperCase() === "GET") {
         return res.status(status).json(body);
@@ -236,35 +260,83 @@ ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at D
       r = matchedResponses[0];
     } else {
       // Nếu không có match và cũng không có default → trả 404
-  r = responses.find((rr) => rr.is_default);
-  if (!r) {
-    const status = 404;
-    const body = { error: "No matching response found" };
-    const finished = Date.now();
-         try {
-      const ip = getClientIp(req);
-      await logSvc.insertLog({
-        project_id: ep.project_id || null,
-        endpoint_id: ep.id,
-        endpoint_response_id: null,
-        request_method: method,
-        request_path: req.path,
-        request_headers: req.headers || {},
-        request_body: req.body || {},
-        response_status_code: status,
-        response_body: body,
-        ip_address: ip,
-        latency_ms: finished - started,
-      });
-         } catch (e) {
-           if (process.env.NODE_ENV !== 'production') {
-             console.warn('[mock.routes] Ghi log (404 no match) thất bại:', e?.message || e);
-           }
-         }
-    return res.status(status).json(body);
-  }
+      r = responses.find((rr) => rr.is_default);
+      if (!r) {
+        const status = 404;
+        const body = { error: "No matching response found" };
+        const finished = Date.now();
+        try {
+          const ip = getClientIp(req);
+          await logSvc.insertLog({
+            project_id: ep.project_id || null,
+            endpoint_id: ep.id,
+            endpoint_response_id: null,
+            request_method: method,
+            request_path: req.path,
+            request_headers: req.headers || {},
+            request_body: req.body || {},
+            response_status_code: status,
+            response_body: body,
+            ip_address: ip,
+            latency_ms: finished - started,
+          });
+        } catch (e) {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn(
+              "[mock.routes] Ghi log (404 no match) thất bại:",
+              e?.message || e
+            );
+          }
+        }
+        return res.status(status).json(body);
+      }
     }
 
+    // 3.3) Nếu có proxy_url → gọi API ngoài (proxy) thay vì trả response_body
+     if (isProxyRequest && r.proxy_url) {
+      try {
+        // Thay template {{params.xxx}}, {{query.xxx}} trong proxy_url
+        const ctx = { params, query: req.query };
+        const resolvedUrl = renderTemplate(r.proxy_url, ctx);
+
+        // Gọi API ngoài
+        const proxyResp = await axios({
+          method: r.proxy_method || req.method,
+          url: resolvedUrl,
+          data: req.body,
+          headers: req.headers,
+          validateStatus: () => true, // cho phép forward mọi status code
+        });
+
+        // Ghi log response từ proxy
+        const finished = Date.now();
+        try {
+          const ip = getClientIp(req);
+          await logSvc.insertLog({
+            project_id: ep.project_id || null,
+            endpoint_id: ep.id,
+            endpoint_response_id: r.id || null,
+            request_method: method,
+            request_path: req.path,
+            request_headers: req.headers || {},
+            request_body: req.body || {},
+            response_status_code: proxyResp.status,
+            response_body: proxyResp.data,
+            ip_address: ip,
+            latency_ms: finished - started,
+          });
+        } catch (_) {}
+
+        return res
+          .status(proxyResp.status)
+          .set(proxyResp.headers)
+          .send(proxyResp.data);
+      } catch (err) {
+        console.error("[mock.routes] Proxy request failed:", err.message);
+        return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
+      }
+    }
+    // Nếu không proxy thì tiếp tục trả response_body bên dưới
     // 4) Trả về nội dung response:
     // - Nếu response_body là object => trả JSON
     // - Nếu là string/empty => send text/empty string
@@ -298,8 +370,8 @@ ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at D
 
     const sendResponse = async () => {
       const finished = Date.now();
-       // Ghi log request/response (có endpoint_response_id)
-       try {
+      // Ghi log request/response (có endpoint_response_id)
+      try {
         const ip = getClientIp(req);
         await logSvc.insertLog({
           project_id: ep.project_id || null,
@@ -314,11 +386,14 @@ ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at D
           ip_address: ip,
           latency_ms: finished - started,
         });
-       } catch (e) {
-         if (process.env.NODE_ENV !== 'production') {
-           console.warn('[mock.routes] Ghi log (matched response) thất bại:', e?.message || e);
-         }
-       }
+      } catch (e) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(
+            "[mock.routes] Ghi log (matched response) thất bại:",
+            e?.message || e
+          );
+        }
+      }
 
       if (body && typeof body === "object") {
         return res.status(status).json(body);
@@ -337,29 +412,32 @@ ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at D
     // // Trả đúng response_body đã cấu hình: nếu là object => JSON, còn lại => text
     // if (body && typeof body === "object") return res.status(status).json(body);
     // return res.status(status).send(body ?? "");
-   } catch (err) {
-     // Lỗi bất ngờ: cố gắng ghi log 500
-     try {
+  } catch (err) {
+    // Lỗi bất ngờ: cố gắng ghi log 500
+    try {
       const started = Date.now();
       const ip = getClientIp(req);
       await logSvc.insertLog({
         project_id: null,
         endpoint_id: null,
         endpoint_response_id: null,
-        request_method: req.method?.toUpperCase?.() || '',
-        request_path: req.path || req.originalUrl || '',
+        request_method: req.method?.toUpperCase?.() || "",
+        request_path: req.path || req.originalUrl || "",
         request_headers: req.headers || {},
         request_body: req.body || {},
         response_status_code: 500,
-        response_body: { error: 'Internal Server Error' },
+        response_body: { error: "Internal Server Error" },
         ip_address: ip,
         latency_ms: 0,
       });
-     } catch (e) {
-       if (process.env.NODE_ENV !== 'production') {
-         console.warn('[mock.routes] Ghi log (unexpected error) thất bại:', e?.message || e);
-       }
-     }
+    } catch (e) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          "[mock.routes] Ghi log (unexpected error) thất bại:",
+          e?.message || e
+        );
+      }
+    }
     // Cho middleware xử lý lỗi chung xử lý tiếp
     return next(err);
   }

@@ -72,9 +72,10 @@ async function create({ endpoint_id, name, status_code, response_body = {}, cond
 // Business:
 //  - Nếu is_default = true → unset is_default các response khác cùng endpoint
 //  - Không thay đổi priority ở API này (chỉ update dữ liệu)
+//  - Nếu proxy_url/proxy_method null → xóa cấu hình proxy
 // Trả về: response sau khi cập nhật hoặc null nếu không tồn tại
-async function update(id, { name, status_code, response_body, condition, is_default, delay_ms }) {
-  // Fetch endpoint_id for default toggling if needed
+async function update(id, { name, status_code, response_body, condition, is_default, delay_ms, proxy_url, proxy_method }) {
+  // Fetch endpoint_id để xử lý is_default
   let endpointId;
   if (typeof is_default !== 'undefined') {
     const current = await getById(id);
@@ -93,11 +94,14 @@ async function update(id, { name, status_code, response_body, condition, is_defa
          condition = COALESCE($4, condition),
          is_default = COALESCE($5, is_default),
          delay_ms = COALESCE($6, delay_ms),
+         proxy_url = $7,
+         proxy_method = $8,
          updated_at = NOW()
-     WHERE id = $7
-     RETURNING id, endpoint_id, name, status_code, response_body, condition, priority, is_default, delay_ms, created_at, updated_at`,
-    [name, status_code, response_body, condition, is_default, delay_ms, id]
+     WHERE id = $9
+     RETURNING id, endpoint_id, name, status_code, response_body, condition, priority, is_default, delay_ms, proxy_url, proxy_method, created_at, updated_at`,
+    [name, status_code, response_body, condition, is_default, delay_ms, proxy_url, proxy_method, id]
   );
+
   return rows[0] || null;
 }
 
