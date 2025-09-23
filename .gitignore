@@ -1,2 +1,51 @@
-# Environment variables
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env and secrets
 .env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+log-*.log
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Coverage/Tests
+coverage/
+.nyc_output/
+
+# Build artifacts
+build/
+dist/
+*.tgz
+
+# Runtime data
+.tmp/
+.temp/
+.cache/
+
+# Database dumps
+*.sql
+*.sqlite
+*.sqlite3
+
+# Misc
+*.tar
+*.gz
+*.zip
