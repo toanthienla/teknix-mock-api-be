@@ -98,27 +98,50 @@ async function update(req, res) {
     const rid = parseInt(id, 10);
     if (Number.isNaN(rid)) return error(res, 400, 'id phải là số nguyên');
 
-    const { name, status_code, response_body, condition, is_default, delay_ms } = req.body;
-     // Validate name if provided: not empty/whitespace-only
+    const { name, status_code, response_body, condition, is_default, delay_ms, proxy_url, proxy_method } = req.body;
+
+    // Validate name nếu có
     if (typeof name !== 'undefined') {
       if (typeof name !== 'string' || name.trim().length === 0) {
         return error(res, 400, 'name không được rỗng');
       }
     }
+
+    // Validate proxy_method nếu có
+    if (typeof proxy_method !== 'undefined' && proxy_method !== null) {
+      const allowed = ['GET', 'POST', 'PUT', 'DELETE'];
+      if (!allowed.includes(proxy_method)) {
+        return error(res, 400, 'proxy_method không hợp lệ');
+      }
+    }
+
+    // Validate proxy_url nếu có
+    if (typeof proxy_url !== 'undefined' && proxy_url !== null) {
+      if (typeof proxy_url !== 'string' || proxy_url.trim().length === 0) {
+        return error(res, 400, 'proxy_url phải là string hợp lệ');
+      }
+      // Optional: kiểm tra dạng URL cơ bản
+      if (!/^https?:\/\//i.test(proxy_url)) {
+        return error(res, 400, 'proxy_url phải bắt đầu bằng http:// hoặc https://');
+      }
+    }
+
     const row = await svc.update(rid, {
       name: typeof name === 'undefined' ? undefined : name.trim(),
       status_code,
       response_body,
       condition,
       is_default: typeof is_default === 'undefined' ? undefined : Boolean(is_default),
-      delay_ms: typeof delay_ms === 'undefined' ? undefined : parseInt(delay_ms, 10)
+      delay_ms: typeof delay_ms === 'undefined' ? undefined : parseInt(delay_ms, 10),
+      proxy_url: typeof proxy_url === 'undefined' ? undefined : proxy_url,
+      proxy_method: typeof proxy_method === 'undefined' ? undefined : proxy_method
     });
+
     return success(res, row);
   } catch (err) {
     return error(res, 400, err.message);
   }
 }
-
 // [PUT] /endpoint_responses/priority
 // Cập nhật priority theo danh sách item
 // Body: Array<{ id, endpoint_id, priority }>
