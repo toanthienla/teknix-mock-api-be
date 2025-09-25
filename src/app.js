@@ -12,11 +12,13 @@ const endpointResponseRoutes = require('./routes/endpoint_response.routes');
 const projectRequestLogRoutes = require('./routes/project_request_log.routes');
 const mockRoutes = require('./routes/mock.routes');
 const adminResponseLogger = require('./middlewares/adminResponseLogger');
+const projectStateRoutes = require("./routes/project_state.routes");
 
 // Mount routes
 app.use('/workspaces', workspaceRoutes);
 app.use('/projects', projectRoutes);
 app.use('/endpoints', endpointRoutes);
+app.use("/project_states", projectStateRoutes);
 // Log phản hồi của admin routes liên quan endpoint_responses (bao gồm set_default)
 app.use(adminResponseLogger('endpoint_responses'));
 app.use('/', endpointResponseRoutes);
