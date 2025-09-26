@@ -18,10 +18,13 @@ const express = require("express");
 const db = require("../config/db");
 const { match } = require("path-to-regexp");
 // Service ghi log request/response vào bảng project_request_logs
-const logSvc = require("../services/project_request_log.service");
 const router = express.Router();
 const axios = require("axios");
 const https = require("https");
+
+const { logRequest } = require("../services/log.service");
+const endpointService = require("../services/endpoint.service");
+const endpointResponseService = require("../services/endpoint_response.service");
 // Bộ so khớp path-to-regexp có cache đơn giản để tránh tạo lại matcher nhiều lần
 // key: pattern string, value: match function
 const matcherCache = new Map();
@@ -169,18 +172,18 @@ router.use(async (req, res, next) => {
       // Ghi log cho trường hợp endpoint KHÔNG có response cấu hình
       try {
         const ip = getClientIp(req);
-        await logSvc.insertLog({
-          project_id: ep.project_id || null,
-          endpoint_id: ep.id,
-          endpoint_response_id: null,
-          request_method: method,
-          request_path: req.path,
-          request_headers: req.headers || {},
-          request_body: req.body || {},
-          response_status_code: status,
-          response_body: body,
-          ip_address: ip,
-          latency_ms: finished - started,
+        await logRequest({
+          projectId: ep.project_id || null,
+          endpointId: ep.id,
+          endpointResponseId: null,
+          method,
+          path: req.path,
+          headers: req.headers || {},
+          body: req.body || {},
+          statusCode: status,
+          responseBody: body,
+          ip,
+          latencyMs: finished - started,
         });
       } catch (e) {
         if (process.env.NODE_ENV !== "production") {
@@ -267,18 +270,18 @@ router.use(async (req, res, next) => {
         const finished = Date.now();
         try {
           const ip = getClientIp(req);
-          await logSvc.insertLog({
-            project_id: ep.project_id || null,
-            endpoint_id: ep.id,
-            endpoint_response_id: null,
-            request_method: method,
-            request_path: req.path,
-            request_headers: req.headers || {},
-            request_body: req.body || {},
-            response_status_code: status,
-            response_body: body,
-            ip_address: ip,
-            latency_ms: finished - started,
+          await logRequest({
+            projectId: ep.project_id || null,
+            endpointId: ep.id,
+            endpointResponseId: null,
+            method,
+            path: req.path,
+            headers: req.headers || {},
+            body: req.body || {},
+            statusCode: status,
+            responseBody: body,
+            ip,
+            latencyMs: finished - started,
           });
         } catch (e) {
           if (process.env.NODE_ENV !== "production") {
@@ -318,18 +321,18 @@ router.use(async (req, res, next) => {
         const finished = Date.now();
         try {
           const ip = getClientIp(req);
-          await logSvc.insertLog({
-            project_id: ep.project_id || null,
-            endpoint_id: ep.id,
-            endpoint_response_id: r.id || null,
-            request_method: method,
-            request_path: req.path,
-            request_headers: req.headers || {},
-            request_body: req.body || {},
-            response_status_code: proxyResp.status,
-            response_body: proxyResp.data,
-            ip_address: ip,
-            latency_ms: finished - started,
+          await logRequest({
+            projectId: ep.project_id || null,
+            endpointId: ep.id,
+            endpointResponseId: r.id || null,
+            method,
+            path: req.path,
+            headers: req.headers || {},
+            body: req.body || {},
+            statusCode: proxyResp.status,
+            responseBody: proxyResp.data,
+            ip,
+            latencyMs: finished - started,
           });
         } catch (_) {}
 
@@ -379,18 +382,18 @@ router.use(async (req, res, next) => {
       // Ghi log request/response (có endpoint_response_id)
       try {
         const ip = getClientIp(req);
-        await logSvc.insertLog({
-          project_id: ep.project_id || null,
-          endpoint_id: ep.id,
-          endpoint_response_id: r.id || null,
-          request_method: method,
-          request_path: req.path,
-          request_headers: req.headers || {},
-          request_body: req.body || {},
-          response_status_code: status,
-          response_body: body ?? {},
-          ip_address: ip,
-          latency_ms: finished - started,
+        await logRequest({
+          projectId: ep.project_id || null,
+          endpointId: ep.id,
+          endpointResponseId: r.id || null,
+          method,
+          path: req.path,
+          headers: req.headers || {},
+          body: req.body || {},
+          statusCode: status,
+          responseBody: body,
+          ip,
+          latencyMs: finished - started,
         });
       } catch (e) {
         if (process.env.NODE_ENV !== "production") {
@@ -423,18 +426,18 @@ router.use(async (req, res, next) => {
     try {
       const started = Date.now();
       const ip = getClientIp(req);
-      await logSvc.insertLog({
-        project_id: null,
-        endpoint_id: null,
-        endpoint_response_id: null,
-        request_method: req.method?.toUpperCase?.() || "",
-        request_path: req.path || req.originalUrl || "",
-        request_headers: req.headers || {},
-        request_body: req.body || {},
-        response_status_code: 500,
-        response_body: { error: "Internal Server Error" },
-        ip_address: ip,
-        latency_ms: 0,
+      await logRequest({
+        projectId: null,
+        endpointId: null,
+        endpointResponseId: null,
+        method: req.method?.toUpperCase?.() || "",
+        path: req.path || req.originalUrl || "",
+        headers: req.headers || {},
+        body: req.body || {},
+        statusCode: 500,
+        responseBody: { error: "Internal Server Error" },
+        ip,
+        latencyMs: 0,
       });
     } catch (e) {
       if (process.env.NODE_ENV !== "production") {

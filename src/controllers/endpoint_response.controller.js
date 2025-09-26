@@ -4,7 +4,6 @@
 // cập nhật thứ tự (priority), đặt mặc định và xóa
 const svc = require('../services/endpoint_response.service');
 const endpointSvc = require('../services/endpoint.service');
-const logSvc = require('../services/project_request_log.service');
 const { success, error } = require('../utils/response');
 
 // Helper lấy IP client (ưu tiên x-forwarded-for)
