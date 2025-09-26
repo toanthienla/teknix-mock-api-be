@@ -19,8 +19,7 @@ app.use('/workspaces', workspaceRoutes);
 app.use('/projects', projectRoutes);
 app.use('/endpoints', endpointRoutes);
 app.use("/project_states", projectStateRoutes);
-// Log phản hồi của admin routes liên quan endpoint_responses (bao gồm set_default)
-app.use(adminResponseLogger('endpoint_responses'));
+
 app.use('/', endpointResponseRoutes);
 // Mount logs route TRƯỚC router mock catch-all để không bị nuốt
 app.use('/', projectRequestLogRoutes);
