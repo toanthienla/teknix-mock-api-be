@@ -1,4 +1,4 @@
-const db = require('../config/db');
+const db = require("../config/db");
 
 // Service xử lý dữ liệu cho bảng endpoint_responses
 // Quy ước chính:
@@ -41,7 +41,17 @@ async function getById(id) {
 //  - Đảm bảo chỉ 1 response mặc định/endpoint: nếu tạo mới default → unset các default khác
 //  - priority tự động = MAX(priority) + 1 (bắt đầu từ 1)
 // Trả về: response vừa tạo (đầy đủ trường)
-async function create({ endpoint_id, name, status_code, response_body = {}, condition = {}, is_default = false, delay_ms = 0 }) {
+async function create({
+  endpoint_id,
+  name,
+  status_code,
+  response_body = {},
+  condition = {},
+  state_condition = {}, // ✅ thêm field mới
+  state_updates = [], // (chuẩn bị cho step tiếp theo)
+  is_default = false,
+  delay_ms = 0,
+}) {
   // Determine if this is the first response for the endpoint and the next priority
   const { rows: stats } = await db.query(
     `SELECT COUNT(*)::int AS total, COALESCE(MAX(priority), 0)::int AS max_priority
@@ -55,15 +65,32 @@ async function create({ endpoint_id, name, status_code, response_body = {}, cond
 
   // Ensure only one default per endpoint
   if (willBeDefault) {
-    await db.query('UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1', [endpoint_id]);
+    await db.query(
+      "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1",
+      [endpoint_id]
+    );
   }
 
   const { rows } = await db.query(
-    `INSERT INTO endpoint_responses (endpoint_id, name, status_code, response_body, condition, priority, is_default, delay_ms)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 0))
-     RETURNING id, endpoint_id, name, status_code, response_body, condition, priority, is_default, delay_ms, created_at, updated_at`,
-    [endpoint_id, name, status_code, response_body, condition, nextPriority, willBeDefault, delay_ms]
+    `INSERT INTO endpoint_responses 
+    (endpoint_id, name, status_code, response_body, condition, state_condition, state_updates, priority, is_default, delay_ms)
+   VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, COALESCE($10, 0))
+   RETURNING id, endpoint_id, name, status_code, response_body, condition, state_condition, state_updates,
+             priority, is_default, delay_ms, created_at, updated_at`,
+    [
+      endpoint_id,
+      name,
+      status_code,
+      JSON.stringify(response_body ?? {}), // ✅ ép chuỗi JSON
+      JSON.stringify(condition ?? {}),
+      JSON.stringify(state_condition ?? {}),
+      JSON.stringify(state_updates ?? []),
+      nextPriority,
+      willBeDefault,
+      delay_ms,
+    ]
   );
+
   return rows[0];
 }
 
@@ -74,15 +101,32 @@ async function create({ endpoint_id, name, status_code, response_body = {}, cond
 //  - Không thay đổi priority ở API này (chỉ update dữ liệu)
 //  - Nếu proxy_url/proxy_method null → xóa cấu hình proxy
 // Trả về: response sau khi cập nhật hoặc null nếu không tồn tại
-async function update(id, { name, status_code, response_body, condition, is_default, delay_ms, proxy_url, proxy_method }) {
+async function update(
+  id,
+  {
+    name,
+    status_code,
+    response_body,
+    condition,
+    state_condition,
+    state_updates,
+    is_default,
+    delay_ms,
+    proxy_url,
+    proxy_method,
+  }
+) {
   // Fetch endpoint_id để xử lý is_default
   let endpointId;
-  if (typeof is_default !== 'undefined') {
+  if (typeof is_default !== "undefined") {
     const current = await getById(id);
     endpointId = current?.endpoint_id;
     if (!current) return null;
     if (is_default === true && endpointId) {
-      await db.query('UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1 AND id <> $2', [endpointId, id]);
+      await db.query(
+        "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1 AND id <> $2",
+        [endpointId, id]
+      );
     }
   }
 
@@ -92,14 +136,29 @@ async function update(id, { name, status_code, response_body, condition, is_defa
          status_code = COALESCE($2, status_code),
          response_body = COALESCE($3, response_body),
          condition = COALESCE($4, condition),
-         is_default = COALESCE($5, is_default),
-         delay_ms = COALESCE($6, delay_ms),
-         proxy_url = $7,
-         proxy_method = $8,
+         state_condition = COALESCE($5, state_condition),
+         state_updates = COALESCE($6, state_updates),
+         is_default = COALESCE($7, is_default),
+         delay_ms = COALESCE($8, delay_ms),
+         proxy_url = $9,
+         proxy_method = $10,
          updated_at = NOW()
-     WHERE id = $9
-     RETURNING id, endpoint_id, name, status_code, response_body, condition, priority, is_default, delay_ms, proxy_url, proxy_method, created_at, updated_at`,
-    [name, status_code, response_body, condition, is_default, delay_ms, proxy_url, proxy_method, id]
+     WHERE id = $11
+     RETURNING id, endpoint_id, name, status_code, response_body, condition, state_condition, state_updates,
+               priority, is_default, delay_ms, proxy_url, proxy_method, created_at, updated_at`,
+    [
+      name,
+      status_code,
+      JSON.stringify(response_body ?? {}), // ✅ ép chuỗi JSON
+      JSON.stringify(condition ?? {}),
+      JSON.stringify(state_condition ?? {}),
+      JSON.stringify(state_updates ?? []),
+      is_default,
+      delay_ms,
+      proxy_url,
+      proxy_method,
+      id,
+    ]
   );
 
   return rows[0] || null;
@@ -132,7 +191,7 @@ async function updatePriorities(items) {
 // Tham số: id (number)
 // Trả về: true sau khi xóa
 async function remove(id) {
-  await db.query('DELETE FROM endpoint_responses WHERE id = $1', [id]);
+  await db.query("DELETE FROM endpoint_responses WHERE id = $1", [id]);
   return true;
 }
 
@@ -149,12 +208,18 @@ async function setDefault(id) {
   const endpointId = current.endpoint_id;
 
   // Unset others, then set this one
-  await db.query('UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1', [endpointId]);
-  await db.query('UPDATE endpoint_responses SET is_default = TRUE, updated_at = NOW() WHERE id = $1', [id]);
+  await db.query(
+    "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1",
+    [endpointId]
+  );
+  await db.query(
+    "UPDATE endpoint_responses SET is_default = TRUE, updated_at = NOW() WHERE id = $1",
+    [id]
+  );
 
   // Return summary list for that endpoint
   const { rows } = await db.query(
-    'SELECT id, endpoint_id, is_default FROM endpoint_responses WHERE endpoint_id = $1 ORDER BY id ASC',
+    "SELECT id, endpoint_id, is_default FROM endpoint_responses WHERE endpoint_id = $1 ORDER BY id ASC",
     [endpointId]
   );
   return rows;
@@ -168,5 +233,5 @@ module.exports = {
   update,
   updatePriorities,
   remove,
-  setDefault
+  setDefault,
 };
