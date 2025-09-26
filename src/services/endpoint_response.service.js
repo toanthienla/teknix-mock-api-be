@@ -11,7 +11,8 @@ const db = require("../config/db");
 // Trả về: danh sách response kèm đầy đủ trường, sắp xếp theo priority -> default -> thời gian
 async function getByEndpointId(endpointId) {
   const { rows } = await db.query(
-    `SELECT id, endpoint_id, name, status_code, response_body, condition, priority, is_default, delay_ms, created_at, updated_at
+    `SELECT id, endpoint_id, name, status_code, response_body, condition, state_condition, state_updates,
+            priority, is_default, delay_ms, proxy_url, proxy_method, created_at, updated_at
      FROM endpoint_responses
      WHERE endpoint_id = $1
      ORDER BY priority DESC NULLS LAST, is_default DESC, updated_at DESC, created_at DESC`,
@@ -25,7 +26,8 @@ async function getByEndpointId(endpointId) {
 // Trả về: object response hoặc null nếu không tồn tại
 async function getById(id) {
   const { rows } = await db.query(
-    `SELECT id, endpoint_id, name, status_code, response_body, condition, priority, is_default, delay_ms, created_at, updated_at
+    `SELECT id, endpoint_id, name, status_code, response_body, condition, state_condition, state_updates,
+            priority, is_default, delay_ms, proxy_url, proxy_method, created_at, updated_at
      FROM endpoint_responses
      WHERE id = $1
      LIMIT 1`,
