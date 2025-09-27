@@ -57,25 +57,15 @@ async function getById(req, res) {
 //  - Nếu gửi is_default = true → service sẽ unset is_default các response khác cùng endpoint
 async function create(req, res) {
   try {
-    const { 
-      endpoint_id, 
-      name, 
-      status_code, 
-      response_body, 
-      condition, 
-      state_condition,    // ✅ thêm field mới
-      state_updates,      // ✅ thêm field mới
-      is_default, 
-      delay_ms 
-    } = req.body;
-
-    if (!endpoint_id || typeof status_code === 'undefined') {
+    const { endpoint_id, name, status_code, response_body, condition, is_default, delay_ms } = req.body;
+if (!endpoint_id || typeof status_code === 'undefined') {
       return error(res, 400, 'Cần có endpoint_id, status_code');
     }
 
     // Validate name: required and not empty/whitespace-only
     if (typeof name !== 'string' || name.trim().length === 0) {
       return error(res, 400, 'name không được rỗng');
+    
     }
 
     const eid = parseInt(endpoint_id, 10);
@@ -87,12 +77,9 @@ async function create(req, res) {
       status_code,
       response_body: response_body ?? {},
       condition: condition ?? {},
-      state_condition: state_condition ?? {},  // ✅ truyền xuống service
-      state_updates: state_updates ?? [],      // ✅ truyền xuống service
       is_default: Boolean(is_default),
       delay_ms: typeof delay_ms === 'number' ? delay_ms : 0
     });
-
     return success(res, row);
   } catch (err) {
     return error(res, 400, err.message);
@@ -110,18 +97,7 @@ async function update(req, res) {
     const rid = parseInt(id, 10);
     if (Number.isNaN(rid)) return error(res, 400, 'id phải là số nguyên');
 
-    const { 
-      name, 
-      status_code, 
-      response_body, 
-      condition, 
-      state_condition,   // ✅ thêm field mới
-      state_updates,     // ✅ thêm field mới
-      is_default, 
-      delay_ms, 
-      proxy_url, 
-      proxy_method 
-    } = req.body;
+    const { name, status_code, response_body, condition, is_default, delay_ms, proxy_url, proxy_method } = req.body;
 
     // Validate name nếu có
     if (typeof name !== 'undefined') {
@@ -154,8 +130,6 @@ async function update(req, res) {
       status_code,
       response_body,
       condition,
-      state_condition,   // ✅ truyền xuống service
-      state_updates,     // ✅ truyền xuống service
       is_default: typeof is_default === 'undefined' ? undefined : Boolean(is_default),
       delay_ms: typeof delay_ms === 'undefined' ? undefined : parseInt(delay_ms, 10),
       proxy_url: typeof proxy_url === 'undefined' ? undefined : proxy_url,
