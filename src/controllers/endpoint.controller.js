@@ -58,7 +58,7 @@ async function getEndpointById(req, res) {
 // Create endpoint
 async function createEndpoint(req, res) {
   try {
-    const { project_id, name, method, path } = req.body;
+    const { project_id, name, method, path, is_active } = req.body;
     const errors = [];
 
     // Validate required fields
@@ -71,7 +71,7 @@ async function createEndpoint(req, res) {
       return res.status(400).json({ success: false, errors });
     }
 
-    const result = await svc.createEndpoint({ project_id, name, method, path });
+    const result = await svc.createEndpoint({ project_id, name, method, path, is_active });
 
     if (result.success === false) {
       return res.status(400).json(result);
@@ -90,9 +90,9 @@ async function createEndpoint(req, res) {
 async function updateEndpoint(req, res) {
   try {
     const { id } = req.params;
-    const { name, method, path } = req.body;
+    const { name, method, path, is_active } = req.body;
 
-    const result = await svc.updateEndpoint(id, { name, method, path });
+    const result = await svc.updateEndpoint(id, { name, method, path, is_active });
 
     if (!result) {
       return res.status(404).json({

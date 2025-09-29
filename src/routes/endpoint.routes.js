@@ -10,7 +10,7 @@ router.get('/', asyncHandler(ctrl.listEndpoints));
 
 // (Optional) Nếu muốn giữ get by id riêng, nhưng contract không định nghĩa
 // GET /endpoints/:id
-// router.get('/:id', asyncHandler(ctrl.getEndpointById));
+ router.get('/:id', asyncHandler(ctrl.getEndpointById));
 
 // Create endpoint (body phải có project_id, name, method, path)
 // POST /endpoints
