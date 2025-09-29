@@ -1,11 +1,11 @@
 const svc = require('../services/endpoint.service');
-const { success } = require('../utils/response');
+const { success, error } = require('../utils/response');
 
-// List all endpoints (optionally filter by project_id)
+// List all endpoints (optionally filter by folder_id)
 async function listEndpoints(req, res) {
   try {
-    const { project_id } = req.query;
-    const endpoints = await svc.getEndpoints(project_id);
+    const { folder_id } = req.query;
+    const endpoints = await svc.getEndpoints(folder_id);
     return success(res, endpoints);
   } catch (err) {
     return res.status(500).json({
@@ -17,18 +17,18 @@ async function listEndpoints(req, res) {
 
 async function listEndpointsByQuery(req, res) {
   try {
-    const { project_id } = req.query;
+    const { folder_id } = req.query;
 
-    if (!project_id) {
-      return error(res, 400, 'Cần query project_id');
+    if (!folder_id) {
+      return error(res, 400, 'Query parameter folder_id is required');
     }
 
-    const id = parseInt(project_id, 10);
+    const id = parseInt(folder_id, 10);
     if (Number.isNaN(id)) {
-      return error(res, 400, 'project_id phải là số nguyên');
+      return error(res, 400, 'folder_id must be an integer');
     }
 
-    const endpoints = await svc.getEndpointsByProject(id);
+    const endpoints = await svc.getEndpoints(id);
     return success(res, endpoints);
   } catch (err) {
     return error(res, 400, err.message);
@@ -58,26 +58,26 @@ async function getEndpointById(req, res) {
 // Create endpoint
 async function createEndpoint(req, res) {
   try {
-    const { project_id, name, method, path } = req.body;
+    const { folder_id, name, method, path } = req.body;
     const errors = [];
 
     // Validate required fields
-    if (!project_id) errors.push({ field: 'project_id', message: 'Project ID is required' });
+    if (!folder_id) errors.push({ field: 'folder_id', message: 'Folder ID is required' });
     if (!name) errors.push({ field: 'name', message: 'Endpoint name is required' });
-    if (!method) errors.push({ field: 'method', message: 'Method is required' });
+    if (!method) errors.push({ field: 'method', message: 'HTTP method is required' });
     if (!path) errors.push({ field: 'path', message: 'Path is required' });
 
     if (errors.length > 0) {
       return res.status(400).json({ success: false, errors });
     }
 
-    const result = await svc.createEndpoint({ project_id, name, method, path });
+    const result = await svc.createEndpoint({ folder_id, name, method, path });
 
     if (result.success === false) {
       return res.status(400).json(result);
     }
 
-    return success(res, result.data); // object trần
+    return success(res, result.data); // plain object
   } catch (err) {
     return res.status(400).json({
       success: false,
@@ -105,7 +105,7 @@ async function updateEndpoint(req, res) {
       return res.status(400).json(result);
     }
 
-    return success(res, result.data); // object trần
+    return success(res, result.data); // plain object
   } catch (err) {
     return res.status(400).json({
       success: false,
@@ -114,25 +114,31 @@ async function updateEndpoint(req, res) {
   }
 }
 
-// Delete endpoint (giữ log: NULL hoá FK trước, rồi ghi log DELETE)
-// Bước 1: NULL hoá endpoint_id và endpoint_response_id thuộc endpoint trong bảng log
-// Bước 2: Xoá endpoint
-// Bước 3: Ghi 1 dòng log DELETE để truy vết hành động
+// Delete endpoint (keep logs: nullify FKs first, then delete)
 const logSvc = require('../services/project_request_log.service');
 async function deleteEndpoint(req, res) {
-  const started = Date.now();
   try {
     const { id } = req.params;
     const eid = parseInt(id, 10);
     const urlPath = req.originalUrl || req.path || '';
     const headersReq = req.headers || {};
     const bodyReq = req.body || {};
-    const ip = (req.headers['x-forwarded-for'] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || '').toString().split(',')[0].trim().substring(0,45);
+    const ip = (
+      req.headers['x-forwarded-for'] ||
+      req.connection?.remoteAddress ||
+      req.socket?.remoteAddress ||
+      req.ip ||
+      ''
+    )
+      .toString()
+      .split(',')[0]
+      .trim()
+      .substring(0, 45);
 
-    // Lấy endpoint để suy ra project_id trước khi xoá
+    // Get endpoint before deleting
     const current = await svc.getEndpointById(eid);
     if (!current) {
-      // Ghi log 404 cho action DELETE
+      // Log 404 for DELETE action
       try {
         await logSvc.insertLog({
           project_id: null,
@@ -154,10 +160,12 @@ async function deleteEndpoint(req, res) {
       });
     }
 
-    // NULL hoá tham chiếu trong project_request_logs: endpoint_id & endpoint_response_id thuộc endpoint
-    try { await logSvc.nullifyEndpointAndResponses(eid); } catch (_) {}
+    // Nullify references in project_request_logs
+    try {
+      await logSvc.nullifyEndpointAndResponses(eid);
+    } catch (_) {}
 
-    // Xoá endpoint (KHÔNG ghi log xoá theo yêu cầu)
+    // Delete endpoint
     const result = await svc.deleteEndpoint(eid);
     return success(res, result.data);
   } catch (err) {

@@ -12,18 +12,18 @@ const endpointResponseRoutes = require('./routes/endpoint_response.routes');
 const projectRequestLogRoutes = require('./routes/project_request_log.routes');
 const mockRoutes = require('./routes/mock.routes');
 const adminResponseLogger = require('./middlewares/adminResponseLogger');
-const projectStateRoutes = require("./routes/project_state.routes");
+const folderRoutes = require('./routes/folder.routes');
 
 // Mount routes
 app.use('/workspaces', workspaceRoutes);
 app.use('/projects', projectRoutes);
 app.use('/endpoints', endpointRoutes);
-app.use("/project_states", projectStateRoutes);
 
 app.use('/', endpointResponseRoutes);
 // Mount logs route TRƯỚC router mock catch-all để không bị nuốt
 app.use('/', projectRequestLogRoutes);
 // Catch-all mock router MUST be last to avoid shadowing admin routes
 app.use('/', mockRoutes);
+app.use('/folder', folderRoutes);
 
 module.exports = app;

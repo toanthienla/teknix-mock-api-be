@@ -188,7 +188,7 @@ router.use(async (req, res, next) => {
       } catch (e) {
         if (process.env.NODE_ENV !== "production") {
           console.warn(
-            "[mock.routes] Ghi log (no responses) thất bại:",
+            "[mock.routes] Failed to log (no responses):",
             e?.message || e
           );
         }
@@ -201,15 +201,16 @@ router.use(async (req, res, next) => {
       }
     }
 
+
     // 3.1) Áp dụng điều kiện: ưu tiên các response có condition khớp params/query
     const isPlainObject = (v) =>
       v && typeof v === "object" && !Array.isArray(v);
     const matchesCondition = (cond) => {
       if (!isPlainObject(cond) || Object.keys(cond).length === 0) {
-        return false; // condition rỗng thì KHÔNG match
+        return false; // empty condition does NOT match
       }
 
-      // Check params.id đơn giản
+      // Check params.id
       if ("id" in cond) {
         if (String(params.id ?? "") !== String(cond.id)) return false;
       }
@@ -230,7 +231,7 @@ router.use(async (req, res, next) => {
       // Check headers object
       if (isPlainObject(cond.headers)) {
         for (const [k, v] of Object.entries(cond.headers)) {
-          const reqVal = req.headers[k.toLowerCase()]; // headers luôn lowercase
+          const reqVal = req.headers[k.toLowerCase()]; // headers always lowercase
           if (String(reqVal ?? "") !== String(v)) return false;
         }
       }
@@ -242,7 +243,6 @@ router.use(async (req, res, next) => {
         }
       }
 
-      // Có thể mở rộng cho cond.headers/cond.body nếu cần
       return true;
     };
 
@@ -253,16 +253,16 @@ router.use(async (req, res, next) => {
 
     let r;
     if (matchedResponses.length > 0) {
-      // Sắp xếp theo priority ASC (1 là cao nhất), rồi updated_at DESC
+      // Sort by priority ASC, then updated_at DESC
       matchedResponses.sort((a, b) => {
         const pa = a.priority ?? Number.MAX_SAFE_INTEGER;
         const pb = b.priority ?? Number.MAX_SAFE_INTEGER;
-        if (pa !== pb) return pa - pb; // số nhỏ hơn ưu tiên hơn
+        if (pa !== pb) return pa - pb;
         return new Date(b.updated_at) - new Date(a.updated_at);
       });
       r = matchedResponses[0];
     } else {
-      // Nếu không có match và cũng không có default → trả 404
+      // No match and no default → return 404
       r = responses.find((rr) => rr.is_default);
       if (!r) {
         const status = 404;
@@ -286,7 +286,7 @@ router.use(async (req, res, next) => {
         } catch (e) {
           if (process.env.NODE_ENV !== "production") {
             console.warn(
-              "[mock.routes] Ghi log (404 no match) thất bại:",
+              "[mock.routes] Failed to log (404 no match):",
               e?.message || e
             );
           }
@@ -295,14 +295,13 @@ router.use(async (req, res, next) => {
       }
     }
 
-    // 3.3) Nếu có proxy_url → gọi API ngoài (proxy) thay vì trả response_body
+    // 3.3) Nếu có proxy_url → gọi API ngoài (proxy)
     if (r.proxy_url) {
       try {
         const ctx = { params, query: req.query };
         const resolvedUrl = renderTemplate(r.proxy_url, ctx);
         console.log("[Proxy] resolvedUrl =", resolvedUrl);
 
-        // Gọi API ngoài với httpsAgent để bỏ qua verify SSL
         const proxyResp = await axios({
           method: r.proxy_method || req.method,
           url: resolvedUrl,
@@ -317,7 +316,8 @@ router.use(async (req, res, next) => {
           validateStatus: () => true,
           httpsAgent: new https.Agent({ rejectUnauthorized: false }),
         });
-        // Ghi log response từ proxy
+
+        // Log proxy response
         const finished = Date.now();
         try {
           const ip = getClientIp(req);
@@ -334,7 +334,7 @@ router.use(async (req, res, next) => {
             ip,
             latencyMs: finished - started,
           });
-        } catch (_) {}
+        } catch (_) { }
 
         return res
           .status(proxyResp.status)
@@ -345,20 +345,17 @@ router.use(async (req, res, next) => {
         return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
       }
     }
-    // Nếu không proxy thì tiếp tục trả response_body bên dưới
-    // 4) Trả về nội dung response:
-    // - Nếu response_body là object => trả JSON
-    // - Nếu là string/empty => send text/empty string
+
+    // 4) Trả về response_body
     const status = r.status_code || 200;
     let body = r.response_body ?? null;
 
-    // Templating: thay thế {{params.*}} và {{query.*}} trong body (string hoặc object)
     const ctx = { params, query: req.query };
     if (body && (typeof body === "object" || typeof body === "string")) {
       body = renderTemplate(body, ctx);
     }
 
-    // Chuẩn hoá cho GET collection (không có params): nếu body rỗng => trả []
+    // Normalize GET collection
     if (req.method.toUpperCase() === "GET" && !hasParams) {
       const isEmptyObject = (v) =>
         v &&
@@ -374,12 +371,10 @@ router.use(async (req, res, next) => {
       }
     }
 
-    //  Áp dụng delay_ms
     const delay = r.delay_ms ?? 0;
 
     const sendResponse = async () => {
       const finished = Date.now();
-      // Ghi log request/response (có endpoint_response_id)
       try {
         const ip = getClientIp(req);
         await logRequest({
@@ -398,7 +393,7 @@ router.use(async (req, res, next) => {
       } catch (e) {
         if (process.env.NODE_ENV !== "production") {
           console.warn(
-            "[mock.routes] Ghi log (matched response) thất bại:",
+            "[mock.routes] Failed to log (matched response):",
             e?.message || e
           );
         }
@@ -417,12 +412,8 @@ router.use(async (req, res, next) => {
     } else {
       await sendResponse();
     }
-
-    // // Trả đúng response_body đã cấu hình: nếu là object => JSON, còn lại => text
-    // if (body && typeof body === "object") return res.status(status).json(body);
-    // return res.status(status).send(body ?? "");
   } catch (err) {
-    // Lỗi bất ngờ: cố gắng ghi log 500
+    // Unexpected error → log 500
     try {
       const started = Date.now();
       const ip = getClientIp(req);
@@ -442,12 +433,11 @@ router.use(async (req, res, next) => {
     } catch (e) {
       if (process.env.NODE_ENV !== "production") {
         console.warn(
-          "[mock.routes] Ghi log (unexpected error) thất bại:",
+          "[mock.routes] Failed to log (unexpected error):",
           e?.message || e
         );
       }
     }
-    // Cho middleware xử lý lỗi chung xử lý tiếp
     return next(err);
   }
 });

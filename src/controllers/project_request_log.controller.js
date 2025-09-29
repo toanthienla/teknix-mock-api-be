@@ -6,7 +6,7 @@ const { success, error } = require('../utils/response');
 async function list(req, res) {
   try {
     const { project_id, endpoint_id, method, path, status_code, from, to, limit, offset } = req.query;
-    if (!project_id) return error(res, 400, 'Cần query project_id');
+    if (!project_id) return error(res, 400, 'project_id is required');
 
     const filters = {
       project_id: parseInt(project_id, 10),
@@ -33,9 +33,9 @@ async function list(req, res) {
 async function getById(req, res) {
   try {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) return error(res, 400, 'id phải là số nguyên');
+    if (Number.isNaN(id)) return error(res, 400, 'id must be an integer');
     const row = await svc.getLogById(id);
-    if (!row) return error(res, 404, 'Log không tồn tại');
+    if (!row) return error(res, 404, 'Log not found');
     return success(res, row);
   } catch (err) {
     return error(res, 400, err.message);

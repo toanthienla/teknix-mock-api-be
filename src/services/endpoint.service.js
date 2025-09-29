@@ -1,14 +1,14 @@
 const db = require('../config/db');
 const endpointResponseService = require('./endpoint_response.service'); // import service response
 
-// Get all endpoints (optionally filter by project_id)
-async function getEndpoints(project_id) {
+// Get all endpoints (optionally filter by folder_id)
+async function getEndpoints(folder_id) {
   let query = 'SELECT * FROM endpoints';
   const params = [];
 
-  if (project_id) {
-    query += ' WHERE project_id=$1';
-    params.push(project_id);
+  if (folder_id) {
+    query += ' WHERE folder_id=$1';
+    params.push(folder_id);
   }
 
   query += ' ORDER BY created_at DESC';
@@ -26,22 +26,22 @@ async function getEndpointById(endpointId) {
 }
 
 // Create endpoint
-async function createEndpoint({ project_id, name, method, path }) {
+async function createEndpoint({ folder_id, name, method, path }) {
   const errors = [];
 
   // Check duplicate name (ignore case)
   const { rows: nameRows } = await db.query(
-    'SELECT id FROM endpoints WHERE project_id=$1 AND LOWER(name)=LOWER($2)',
-    [project_id, name]
+    'SELECT id FROM endpoints WHERE folder_id=$1 AND LOWER(name)=LOWER($2)',
+    [folder_id, name]
   );
   if (nameRows.length > 0) {
-    errors.push({ field: "name", message: "Name already exists in this project" });
+    errors.push({ field: "name", message: "Name already exists in this folder" });
   }
 
   // Check path + method constraints (case-sensitive path)
   const { rows: samePathRows } = await db.query(
-    'SELECT method FROM endpoints WHERE project_id=$1 AND path=$2',
-    [project_id, path]
+    'SELECT method FROM endpoints WHERE folder_id=$1 AND path=$2',
+    [folder_id, path]
   );
 
   const usedMethods = samePathRows.map(r => r.method.toUpperCase());
@@ -57,8 +57,8 @@ async function createEndpoint({ project_id, name, method, path }) {
   if (errors.length > 0) return { success: false, errors };
 
   const { rows } = await db.query(
-    'INSERT INTO endpoints(project_id, name, method, path) VALUES($1,$2,$3,$4) RETURNING *',
-    [project_id, name, method, path]
+    'INSERT INTO endpoints(folder_id, name, method, path) VALUES($1,$2,$3,$4) RETURNING *',
+    [folder_id, name, method, path]
   );
 
   const endpoint = rows[0];
@@ -97,22 +97,23 @@ async function updateEndpoint(endpointId, { name, method, path }) {
   if (newName === current.name && newMethod === current.method && newPath === current.path) {
     return { success: true, data: current };
   }
-// Check duplicate name (ignore case)
+
+  // Check duplicate name (ignore case)
   if (newName.toLowerCase() !== current.name.toLowerCase()) {
     const { rows: nameRows } = await db.query(
-      'SELECT id FROM endpoints WHERE id<>$1 AND project_id=$2 AND LOWER(name)=LOWER($3)',
-      [endpointId, current.project_id, newName]
+      'SELECT id FROM endpoints WHERE id<>$1 AND folder_id=$2 AND LOWER(name)=LOWER($3)',
+      [endpointId, current.folder_id, newName]
     );
     if (nameRows.length > 0) {
-      errors.push({ field: "name", message: "Name already exists in this project" });
+      errors.push({ field: "name", message: "Name already exists in this folder" });
     }
   }
 
   // Check path + method constraints (case-sensitive path)
   if (newPath !== current.path || newMethod.toUpperCase() !== current.method.toUpperCase()) {
     const { rows: samePathRows } = await db.query(
-      'SELECT method FROM endpoints WHERE id<>$1 AND project_id=$2 AND path=$3',
-      [endpointId, current.project_id, newPath]
+      'SELECT method FROM endpoints WHERE id<>$1 AND folder_id=$2 AND path=$3',
+      [endpointId, current.folder_id, newPath]
     );
 
     const usedMethods = samePathRows.map(r => r.method.toUpperCase());
