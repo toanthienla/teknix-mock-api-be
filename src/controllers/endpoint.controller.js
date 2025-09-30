@@ -1,37 +1,42 @@
 const svc = require("../services/endpoint.service");
 const { success } = require("../utils/response");
 
-// List all endpoints (optionally filter by project_id)
+// Lấy danh sách endpoints theo project_id hoặc folder_id
 async function listEndpoints(req, res) {
   try {
-    const { folder_id } = req.query;
-    const endpoints = await svc.getEndpoints(folder_id);
-    return success(res, endpoints);
-  } catch (err) {
-    return res.status(500).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
-  }
-}
+    const { project_id, folder_id } = req.query;
 
-async function listEndpointsByQuery(req, res) {
-  try {
-    const { folder_id } = req.query;
-
-    if (!folder_id) {
-      return error(res, 400, 'Query parameter folder_id is required');
+    // 1. Kiểm tra xem có ít nhất một tham số được cung cấp không
+    if (!project_id && !folder_id) {
+      return error(res, 400, 'Query parameter project_id or folder_id is required');
     }
 
-    const id = parseInt(folder_id, 10);
-    if (Number.isNaN(id)) {
-      return error(res, 400, 'folder_id must be an integer');
+    // 2. Tạo object filters để truyền vào service, đồng thời validate dữ liệu
+    const filters = {};
+    if (project_id) {
+      const id = parseInt(project_id, 10);
+      if (Number.isNaN(id)) {
+        return error(res, 400, 'project_id must be an integer');
+      }
+      filters.project_id = id;
+    }
+    
+    if (folder_id) {
+      const id = parseInt(folder_id, 10);
+      if (Number.isNaN(id)) {
+        return error(res, 400, 'folder_id must be an integer');
+      }
+      filters.folder_id = id;
     }
 
-    const endpoints = await svc.getEndpoints(id);
+    // 3. Gọi service với đúng cấu trúc tham số là một object
+    const endpoints = await svc.getEndpoints(filters);
+    
     return success(res, endpoints);
+
   } catch (err) {
-    return error(res, 400, err.message);
+    // 4. Lỗi server không mong muốn nên trả về status 500
+    return error(res, 500, err.message);
   }
 }
 
@@ -200,7 +205,6 @@ async function deleteEndpoint(req, res) {
 }
 
 module.exports = {
-  listEndpointsByQuery,
   listEndpoints,
   getEndpointById,
   createEndpoint,

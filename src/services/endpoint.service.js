@@ -1,19 +1,31 @@
 const db = require("../config/db");
 const endpointResponseService = require("./endpoint_response.service"); // import service response
 
-// Get all endpoints (optionally filter by project_id)
-async function getEndpoints(project_id) {
-  let query = "SELECT * FROM endpoints";
+// Get all endpoints (filter by project_id OR folder_id)
+async function getEndpoints({ project_id, folder_id }) {
+  // Chọn tất cả các cột từ bảng endpoints
+  let query = `
+    SELECT e.id, e.folder_id, e.name, e.method, e.path, e.is_active, e.created_at, e.updated_at 
+    FROM endpoints e
+  `;
   const params = [];
+  let paramIndex = 1;
 
+  // Nếu có project_id, chúng ta JOIN với bảng folders
   if (project_id) {
-    query += " WHERE project_id=$1";
+    query += ` JOIN folders f ON e.folder_id = f.id WHERE f.project_id = $${paramIndex++}`;
     params.push(project_id);
+  
+  // Nếu không có project_id nhưng có folder_id, chúng ta lọc trực tiếp
+  } else if (folder_id) {
+    query += ` WHERE e.folder_id = $${paramIndex++}`;
+    params.push(folder_id);
   }
 
-  query += " ORDER BY created_at DESC";
+  query += " ORDER BY e.created_at DESC";
+  
   const { rows } = await db.query(query, params);
-  return rows; // array object trần
+  return rows;
 }
 
 // Get endpoint by id
@@ -121,7 +133,7 @@ async function updateEndpoint(endpointId, { name, method, path, is_active }) {
     if (nameRows.length > 0) {
       errors.push({
         field: "name",
-        message: "Name already exists in this project",
+        message: "Name already exists in this folder",
       });
     }
   }
