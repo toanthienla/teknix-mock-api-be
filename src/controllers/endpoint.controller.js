@@ -4,31 +4,31 @@ const { success } = require("../utils/response");
 // List all endpoints (optionally filter by project_id)
 async function listEndpoints(req, res) {
   try {
-    const { project_id } = req.query;
-    const endpoints = await svc.getEndpoints(project_id);
+    const { folder_id } = req.query;
+    const endpoints = await svc.getEndpoints(folder_id);
     return success(res, endpoints);
   } catch (err) {
     return res.status(500).json({
       success: false,
-      errors: [{ field: "general", message: err.message }],
+      errors: [{ field: 'general', message: err.message }]
     });
   }
 }
 
 async function listEndpointsByQuery(req, res) {
   try {
-    const { project_id } = req.query;
+    const { folder_id } = req.query;
 
-    if (!project_id) {
-      return error(res, 400, "Cần query project_id");
+    if (!folder_id) {
+      return error(res, 400, 'Query parameter folder_id is required');
     }
 
-    const id = parseInt(project_id, 10);
+    const id = parseInt(folder_id, 10);
     if (Number.isNaN(id)) {
-      return error(res, 400, "project_id phải là số nguyên");
+      return error(res, 400, 'folder_id must be an integer');
     }
 
-    const endpoints = await svc.getEndpointsByProject(id);
+    const endpoints = await svc.getEndpoints(id);
     return success(res, endpoints);
   } catch (err) {
     return error(res, 400, err.message);
@@ -43,39 +43,41 @@ async function getEndpointById(req, res) {
     if (!endpoint) {
       return res.status(404).json({
         success: false,
-        errors: [{ field: "id", message: "Endpoint not found" }],
+        errors: [{ field: 'id', message: 'Endpoint not found' }]
       });
     }
     return success(res, endpoint);
   } catch (err) {
     return res.status(500).json({
       success: false,
-      errors: [{ field: "general", message: err.message }],
+      errors: [{ field: 'general', message: err.message }]
     });
   }
 }
 
+
 // Create endpoint
 async function createEndpoint(req, res) {
   try {
-    const { project_id, name, method, path, is_active } = req.body;
+    const { folder_id, name, method, path, is_active } = req.body;
     const errors = [];
 
     // Validate required fields
-    if (!project_id)
-      errors.push({ field: "project_id", message: "Project ID is required" });
+    if (!folder_id)
+      errors.push({ field: "folder_id", message: "Folder ID is required" });
     if (!name)
       errors.push({ field: "name", message: "Endpoint name is required" });
     if (!method)
-      errors.push({ field: "method", message: "Method is required" });
-    if (!path) errors.push({ field: "path", message: "Path is required" });
+      errors.push({ field: "method", message: "HTTP method is required" });
+    if (!path)
+      errors.push({ field: "path", message: "Path is required" });
 
     if (errors.length > 0) {
       return res.status(400).json({ success: false, errors });
     }
 
     const result = await svc.createEndpoint({
-      project_id,
+      folder_id,
       name,
       method,
       path,
@@ -86,7 +88,7 @@ async function createEndpoint(req, res) {
       return res.status(400).json(result);
     }
 
-    return success(res, result.data); // object trần
+    return success(res, result.data); // plain object
   } catch (err) {
     return res.status(400).json({
       success: false,
@@ -94,6 +96,7 @@ async function createEndpoint(req, res) {
     });
   }
 }
+
 
 // Update endpoint
 async function updateEndpoint(req, res) {
@@ -119,7 +122,7 @@ async function updateEndpoint(req, res) {
       return res.status(400).json(result);
     }
 
-    return success(res, result.data); // object trần
+    return success(res, result.data); // plain object
   } catch (err) {
     return res.status(400).json({
       success: false,
