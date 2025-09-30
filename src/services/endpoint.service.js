@@ -26,25 +26,25 @@ async function getEndpointById(endpointId) {
 }
 
 // Create endpoint
-async function createEndpoint({ project_id, name, method, path, is_active }) {
+async function createEndpoint({ folder_id, name, method, path, is_active }) {
   const errors = [];
 
   // Check duplicate name (ignore case)
   const { rows: nameRows } = await db.query(
-    "SELECT id FROM endpoints WHERE project_id=$1 AND LOWER(name)=LOWER($2)",
-    [project_id, name]
+    "SELECT id FROM endpoints WHERE folder_id=$1 AND LOWER(name)=LOWER($2)",
+    [folder_id, name]
   );
   if (nameRows.length > 0) {
     errors.push({
       field: "name",
-      message: "Name already exists in this project",
+      message: "Name already exists in this folder",
     });
   }
 
   // Check path + method constraints (case-sensitive path)
   const { rows: samePathRows } = await db.query(
-    "SELECT method FROM endpoints WHERE project_id=$1 AND path=$2",
-    [project_id, path]
+    "SELECT method FROM endpoints WHERE folder_id=$1 AND path=$2",
+    [folder_id, path]
   );
 
   const usedMethods = samePathRows.map((r) => r.method.toUpperCase());
@@ -63,12 +63,11 @@ async function createEndpoint({ project_id, name, method, path, is_active }) {
   if (errors.length > 0) return { success: false, errors };
 
   // Xử lý giá trị mặc định cho is_active
-  // Nếu is_active không được gửi lên (undefined), mặc định là true. Ngược lại, dùng giá trị được gửi.
   const final_is_active = is_active === undefined ? true : is_active;
 
   const { rows } = await db.query(
-    "INSERT INTO endpoints(project_id, name, method, path, is_active) VALUES($1,$2,$3,$4,$5) RETURNING *",
-    [project_id, name, method, path, final_is_active]
+    "INSERT INTO endpoints(folder_id, name, method, path, is_active) VALUES($1,$2,$3,$4,$5) RETURNING *",
+    [folder_id, name, method, path, final_is_active]
   );
 
   const endpoint = rows[0];

@@ -6,7 +6,7 @@ const pool = new Pool({
   port: process.env.DB_PORT || 5432,
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'admin',
-  database: process.env.DB_NAME || 'Teknix_Mock_API',
+  database: process.env.DB_NAME || 'teknix_mock_api',
 });
 
 module.exports = {

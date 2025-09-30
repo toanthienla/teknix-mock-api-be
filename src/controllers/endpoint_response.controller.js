@@ -19,10 +19,10 @@ function getClientIp(req) {
 async function listByEndpointQuery(req, res) {
   try {
     const { endpoint_id } = req.query;
-    if (!endpoint_id) return error(res, 400, 'Cần query endpoint_id');
+    if (!endpoint_id) return error(res, 400, 'Query parameter endpoint_id is required');
 
     const eid = parseInt(endpoint_id, 10);
-    if (Number.isNaN(eid)) return error(res, 400, 'endpoint_id phải là số nguyên');
+    if (Number.isNaN(eid)) return error(res, 400, 'endpoint_id must be an integer');
 
     const rows = await svc.getByEndpointId(eid);
     return success(res, rows);
@@ -39,10 +39,10 @@ async function getById(req, res) {
   try {
     const { id } = req.params;
     const rid = parseInt(id, 10);
-    if (Number.isNaN(rid)) return error(res, 400, 'id phải là số nguyên');
+    if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
     const row = await svc.getById(rid);
-    if (!row) return error(res, 404, 'Response không tồn tại');
+    if (!row) return error(res, 404, 'Response not found');
     return success(res, row);
   } catch (err) {
     return error(res, 400, err.message);
@@ -59,17 +59,17 @@ async function create(req, res) {
   try {
     const { endpoint_id, name, status_code, response_body, condition, is_default, delay_ms } = req.body;
 if (!endpoint_id || typeof status_code === 'undefined') {
-      return error(res, 400, 'Cần có endpoint_id, status_code');
+      return error(res, 400, 'endpoint_id and status_code are required');
     }
 
     // Validate name: required and not empty/whitespace-only
     if (typeof name !== 'string' || name.trim().length === 0) {
-      return error(res, 400, 'name không được rỗng');
+      return error(res, 400, 'name cannot be empty');
     
     }
 
     const eid = parseInt(endpoint_id, 10);
-    if (Number.isNaN(eid)) return error(res, 400, 'endpoint_id phải là số nguyên');
+    if (Number.isNaN(eid)) return error(res, 400, 'endpoint_id must be an integer');
 
     const row = await svc.create({
       endpoint_id: eid,
@@ -95,14 +95,14 @@ async function update(req, res) {
   try {
     const { id } = req.params;
     const rid = parseInt(id, 10);
-    if (Number.isNaN(rid)) return error(res, 400, 'id phải là số nguyên');
+    if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
     const { name, status_code, response_body, condition, is_default, delay_ms, proxy_url, proxy_method } = req.body;
 
     // Validate name nếu có
     if (typeof name !== 'undefined') {
       if (typeof name !== 'string' || name.trim().length === 0) {
-        return error(res, 400, 'name không được rỗng');
+        return error(res, 400, 'name cannot be empty');
       }
     }
 
@@ -110,18 +110,18 @@ async function update(req, res) {
     if (typeof proxy_method !== 'undefined' && proxy_method !== null) {
       const allowed = ['GET', 'POST', 'PUT', 'DELETE'];
       if (!allowed.includes(proxy_method)) {
-        return error(res, 400, 'proxy_method không hợp lệ');
+        return error(res, 400, 'proxy_method is invalid');
       }
     }
 
     // Validate proxy_url nếu có
     if (typeof proxy_url !== 'undefined' && proxy_url !== null) {
       if (typeof proxy_url !== 'string' || proxy_url.trim().length === 0) {
-        return error(res, 400, 'proxy_url phải là string hợp lệ');
+        return error(res, 400, 'proxy_url must be a valid string');
       }
       // Optional: kiểm tra dạng URL cơ bản
       if (!/^https?:\/\//i.test(proxy_url)) {
-        return error(res, 400, 'proxy_url phải bắt đầu bằng http:// hoặc https://');
+        return error(res, 400, 'proxy_url must start with http:// or https://');
       }
     }
 
@@ -156,7 +156,7 @@ async function updatePriorities(req, res) {
   // Ghi LOG cả khi lỗi 400: payload không đúng định dạng
   // Mục tiêu: vẫn lưu lại request sai định dạng vào bảng log để dễ truy vết
     if (!Array.isArray(items)) {
-      const message = 'Payload phải là mảng các item {id, endpoint_id, priority}';
+      const message = 'Payload must be an array of items {id, endpoint_id, priority}';
       try {
         // Suy luận project_id từ bodyReq.endpoint_id nếu có
         let project_id = null;
@@ -191,7 +191,7 @@ async function updatePriorities(req, res) {
   // Nếu từng item thiếu trường bắt buộc → trả lỗi 400 và vẫn GHI LOG kèm bad_item để debug
     for (const it of items) {
       if (!it || typeof it.id === 'undefined' || typeof it.endpoint_id === 'undefined' || typeof it.priority === 'undefined') {
-        const message = 'Mỗi item cần có id, endpoint_id, priority';
+        const message = 'Each item must include id, endpoint_id, and priority';
         try {
           let project_id = null;
           let endpoint_id = null;
@@ -281,10 +281,10 @@ async function updatePriorities(req, res) {
         const rejected = results.filter(r => r.status === 'rejected');
         const fulfilled = results.filter(r => r.status === 'fulfilled');
         if (fulfilled.length > 0) {
-          console.warn(`[updatePriorities] Đã ghi ${fulfilled.length} bản ghi log vào project_request_logs`);
+          console.warn(`[updatePriorities] Logged ${fulfilled.length} records into project_request_logs`);
         }
         if (rejected.length > 0) {
-          console.warn('[updatePriorities] Một số bản ghi log thất bại:', rejected.map(r => r.reason?.message || r.reason));
+          console.warn('[updatePriorities] Some log records failed:', rejected.map(r => r.reason?.message || r.reason));
         }
       }
     } catch (_) {
@@ -306,7 +306,7 @@ async function remove(req, res) {
   try {
     const { id } = req.params;
     const rid = parseInt(id, 10);
-    if (Number.isNaN(rid)) return error(res, 400, 'id phải là số nguyên');
+    if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
     const urlPath = req.originalUrl || req.path || '';
     const ip = getClientIp(req);
@@ -368,7 +368,7 @@ async function setDefault(req, res) {
   try {
     const { id } = req.params;
     const rid = parseInt(id, 10);
-    if (Number.isNaN(rid)) return error(res, 400, 'id phải là số nguyên');
+    if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
     const rows = await svc.setDefault(rid);
     return success(res, rows);
