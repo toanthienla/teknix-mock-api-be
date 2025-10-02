@@ -5,7 +5,7 @@ const endpointResponseService = require("./endpoint_response.service"); // impor
 async function getEndpoints({ project_id, folder_id }) {
   // Chọn tất cả các cột từ bảng endpoints
   let query = `
-    SELECT e.id, e.folder_id, e.name, e.method, e.path, e.is_active, e.created_at, e.updated_at 
+    SELECT e.id, e.folder_id, e.name, e.method, e.path, e.is_active, e.is_stateful, e.created_at, e.updated_at 
     FROM endpoints e
   `;
   const params = [];
