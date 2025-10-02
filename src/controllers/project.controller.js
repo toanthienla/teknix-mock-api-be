@@ -1,76 +1,55 @@
 const svc = require('../services/project.service');
+const { success, error } = require('../utils/response');
 
 // List all projects (optionally filter by workspace_id)
 async function listProjects(req, res) {
   try {
     const { workspace_id } = req.query;
-    const data = await svc.getProjects(workspace_id);
-    return res.status(200).json(data); // array object trần
+    const result = await svc.getProjects(req.db.stateless, workspace_id);
+    return success(res, result.data);
   } catch (err) {
-    return res.status(500).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
+    return error(res, 500, err.message);
   }
 }
-
 // Get project by id
 async function getProjectById(req, res) {
   try {
-    const data = await svc.getProjectById(req.params.id);
-    if (!data) {
-      return res.status(404).json({
-        success: false,
-        errors: [{ field: 'id', message: 'Project not found' }]
-      });
+    const result = await svc.getProjectById(req.db.stateless, req.params.id);
+    if (!result.data) {
+      return error(res, 404, 'Project not found');
     }
-    return res.status(200).json(data); // object trần
+    return success(res, result.data);
   } catch (err) {
-    return res.status(500).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
+    return error(res, 500, err.message);
   }
 }
 
 // Create project
 async function createProject(req, res) {
   try {
-    const result = await svc.createProject(req.body);
-    if (!result || result.success === false) {
-      return res.status(400).json(result || {
-        success: false,
-        errors: [{ field: 'general', message: 'Create failed' }]
-      });
+    const result = await svc.createProject(req.db.stateless, req.body);
+    if (result.success === false) {
+      return res.status(400).json(result);
     }
-    return res.status(200).json(result); // object trần
+    return success(res, result.data);
   } catch (err) {
-    return res.status(400).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
+    return error(res, 500, err.message);
   }
 }
 
 // Update project
 async function updateProject(req, res) {
   try {
-    const result = await svc.updateProject(req.params.id, req.body);
-    if (!result) {
-      return res.status(404).json({
-        success: false,
-        errors: [{ field: 'id', message: 'Project not found' }]
-      });
+    const result = await svc.updateProject(req.db.stateless, req.params.id, req.body);
+    if (result.notFound) {
+      return error(res, 404, 'Project not found');
     }
     if (result.success === false) {
       return res.status(400).json(result);
     }
-    return res.status(200).json(result); // object trần
+    return success(res, result.data);
   } catch (err) {
-    return res.status(400).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
+    return error(res, 500, err.message);
   }
 }
 
@@ -79,28 +58,13 @@ const logSvc = require('../services/project_request_log.service');
 async function deleteProject(req, res) {
   try {
     const { id } = req.params;
-    const pid = parseInt(id, 10);
-
-    // Kiểm tra tồn tại trước khi xoá
-    const exist = await svc.getProjectById(pid);
-    if (!exist) {
-      return res.status(404).json({
-        success: false,
-        errors: [{ field: 'id', message: 'Project not found' }]
-      });
+    const result = await svc.deleteProjectAndHandleLogs(req.db.stateless, parseInt(id, 10));
+    if (result.notFound) {
+      return error(res, 404, 'Project not found');
     }
-
-    // NULL hoá toàn bộ tham chiếu liên quan project trong bảng log
-    try { await logSvc.nullifyProjectTree(pid); } catch (_) {}
-
-    // Xoá project
-    const result = await svc.deleteProject(pid);
-    return res.status(200).json(result); // object trần { id: ... }
+    return success(res, { message: `Project with ID: ${id} has been deleted.` });
   } catch (err) {
-    return res.status(400).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
+    return error(res, 500, err.message);
   }
 }
 
