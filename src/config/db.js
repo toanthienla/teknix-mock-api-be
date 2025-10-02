@@ -1,14 +1,41 @@
+// db.js
 const { Pool } = require('pg');
 require('dotenv').config();
 
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'admin',
-  database: process.env.DB_NAME || 'teknix_mock_api',
+// Pool 1: Kết nối đến DB STATELESS (bảng chỉ dẫn)
+const statelessPool = new Pool({
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
 });
 
+// Pool 2: Kết nối đến DB STATEFUL
+const statefulPool = new Pool({
+  host: process.env.STATEFUL_DB_HOST,
+  port: process.env.STATEFUL_DB_PORT,
+  user: process.env.STATEFUL_DB_USER,
+  password: process.env.STATEFUL_DB_PASSWORD,
+  database: process.env.STATEFUL_DB_NAME,
+});
+
+// Hàm kiểm tra kết nối (tùy chọn nhưng nên có)
+const checkConnections = async () => {
+    try {
+        await statelessPool.query('SELECT NOW()');
+        console.log('✅ Kết nối đến Stateless DB thành công!');
+        await statefulPool.query('SELECT NOW()');
+        console.log('✅ Kết nối đến Stateful DB thành công!');
+    } catch (error) {
+        console.error('❌ Lỗi khi kiểm tra kết nối database:', error);
+        throw error; // Ném lỗi để server có thể bắt và dừng lại
+    }
+};
+
+// Export cả hai pool để các module khác có thể sử dụng
 module.exports = {
-  query: (text, params) => pool.query(text, params)
+  statelessPool,
+  statefulPool,
+  checkConnections
 };

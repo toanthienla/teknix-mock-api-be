@@ -5,11 +5,11 @@ const { success, error } = require('../utils/response');
 // GET /project_request_logs?project_id=..&endpoint_id=..&method=GET&path=/users&status_code=200&from=...&to=...&limit=50&offset=0
 async function list(req, res) {
   try {
-    const { project_id, endpoint_id, method, path, status_code, from, to, limit, offset } = req.query;
-    if (!project_id) return error(res, 400, 'Cần query project_id');
+    const { folder_id, endpoint_id, method, path, status_code, from, to, limit, offset } = req.query;
+    if (!project_id) return error(res, 400, 'Cần query folder_id');
 
     const filters = {
-      project_id: parseInt(project_id, 10),
+      folder_id: parseInt(folder_id, 10),
       endpoint_id: endpoint_id ? parseInt(endpoint_id, 10) : undefined,
       method,
       path,

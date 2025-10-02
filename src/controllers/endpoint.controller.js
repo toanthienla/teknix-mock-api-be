@@ -30,7 +30,7 @@ async function listEndpoints(req, res) {
     }
 
     // 3. Gọi service với đúng cấu trúc tham số là một object
-    const endpoints = await svc.getEndpoints(filters);
+    const endpoints = await svc.getEndpoints(req.db.stateless, filters);
     
     return success(res, endpoints);
 
@@ -44,7 +44,7 @@ async function listEndpoints(req, res) {
 async function getEndpointById(req, res) {
   try {
     const { id } = req.params;
-    const endpoint = await svc.getEndpointById(id);
+    const endpoint = await svc.getEndpointById(req.db.stateless, id);
     if (!endpoint) {
       return res.status(404).json({
         success: false,
@@ -81,14 +81,7 @@ async function createEndpoint(req, res) {
       return res.status(400).json({ success: false, errors });
     }
 
-    const result = await svc.createEndpoint({
-      folder_id,
-      name,
-      method,
-      path,
-      is_active,
-      is_stateful,
-    });
+     const result = await svc.createEndpoint(req.db.stateless, req.body);
 
     if (result.success === false) {
       return res.status(400).json(result);
@@ -110,13 +103,7 @@ async function updateEndpoint(req, res) {
     const { id } = req.params;
     const { name, method, path, is_active, is_stateful } = req.body;
 
-    const result = await svc.updateEndpoint(id, {
-      name,
-      method,
-      path,
-      is_active,
-      is_stateful,
-    });
+const result = await svc.updateEndpoint(req.db.stateless, id, req.body); 
 
     if (!result) {
       return res.status(404).json({
@@ -164,7 +151,7 @@ async function deleteEndpoint(req, res) {
       .substring(0, 45);
 
     // Lấy endpoint để suy ra project_id trước khi xoá
-    const current = await svc.getEndpointById(eid);
+    const current = await svc.getEndpointById(req.db.stateless, eid);
     if (!current) {
       // Ghi log 404 cho action DELETE
       try {
@@ -190,11 +177,11 @@ async function deleteEndpoint(req, res) {
 
     // NULL hoá tham chiếu trong project_request_logs: endpoint_id & endpoint_response_id thuộc endpoint
     try {
-      await logSvc.nullifyEndpointAndResponses(eid);
+      await logSvc.nullifyEndpointAndResponses(req.db.stateless, eid);
     } catch (_) {}
 
     // Xoá endpoint (KHÔNG ghi log xoá theo yêu cầu)
-    const result = await svc.deleteEndpoint(eid);
+    const result = await svc.deleteEndpoint(req.db.stateless, eid);
     return success(res, {
       message: `Endpoint with ID: ${eid} has been deleted successfully.`,
     });

@@ -1,7 +1,8 @@
-const pool = require("../config/db"); // PostgreSQL connection pool
+//const pool = require("../config/db"); // PostgreSQL connection pool
 
 /**
  * Lưu log request/response vào DB
+ * @param {Object} dbPool
  * @param {Object} log
  * @param {number} log.projectId
  * @param {number} [log.endpointId]
@@ -15,10 +16,10 @@ const pool = require("../config/db"); // PostgreSQL connection pool
  * @param {string} log.ip
  * @param {number} log.latencyMs
  */
-async function logRequest(log) {
+async function logRequest(dbPool, log) {
   const query = `
     INSERT INTO project_request_logs (
-      project_id, endpoint_id, endpoint_response_id,
+      folder_id, endpoint_id, endpoint_response_id,
       request_method, request_path, request_headers, request_body,
       response_status_code, response_body, ip_address, latency_ms
     ) VALUES (
@@ -30,7 +31,7 @@ async function logRequest(log) {
   `;
 
   const values = [
-    log.projectId,
+    log.folderId || null,
     log.endpointId || null,
     log.endpointResponseId || null,
     log.method,
@@ -44,7 +45,7 @@ async function logRequest(log) {
   ];
 
   try {
-    const result = await pool.query(query, values);
+    const result = await dbPool.query(query, values);
     return result.rows[0].id;
   } catch (err) {
     console.error("❌ Error inserting request log:", err.message);
