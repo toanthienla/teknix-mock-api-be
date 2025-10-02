@@ -1,12 +1,12 @@
 // middlewares/validateEndpoint.js
 
 module.exports = function validateEndpoint(req, res, next) {
-  const { name, method, path, project_id } = req.body;
+  const { name, method, path, folder_id } = req.body;
   const errors = [];
 
-  // project_id is required when creating an endpoint
-  if (req.method === "POST" && !project_id) {
-    errors.push({ field: "project_id", message: "Project ID is required" });
+  // folder_id is required when creating an endpoint
+   if (req.method === 'POST' && (folder_id === undefined || folder_id === null)) {
+    errors.push({ field: "folder_id", message: "Folder ID is required" });
   }
 
   // validate name

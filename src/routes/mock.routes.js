@@ -115,7 +115,7 @@ router.use(async (req, res, next) => {
 
     // 1) Lấy danh sách endpoint theo method hiện tại
     const { rows: endpoints } = await db.query(
-      `SELECT e.id, e.method, e.path, e.project_id,
+      `SELECT e.id, e.method, e.path, e.folder_id, f.project_id,
               EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id) AS has_response,
               EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id AND r.is_default = true) AS has_default
        FROM endpoints e
