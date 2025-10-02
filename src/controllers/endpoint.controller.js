@@ -1,5 +1,5 @@
 const svc = require("../services/endpoint.service");
-const { success } = require("../utils/response");
+const { success, error } = require("../utils/response");
 
 // Lấy danh sách endpoints theo project_id hoặc folder_id
 async function listEndpoints(req, res) {
@@ -64,7 +64,7 @@ async function getEndpointById(req, res) {
 // Create endpoint
 async function createEndpoint(req, res) {
   try {
-    const { folder_id, name, method, path, is_active } = req.body;
+    const { folder_id, name, method, path, is_active, is_stateful  } = req.body;
     const errors = [];
 
     // Validate required fields
@@ -87,6 +87,7 @@ async function createEndpoint(req, res) {
       method,
       path,
       is_active,
+      is_stateful,
     });
 
     if (result.success === false) {
@@ -107,13 +108,14 @@ async function createEndpoint(req, res) {
 async function updateEndpoint(req, res) {
   try {
     const { id } = req.params;
-    const { name, method, path, is_active } = req.body;
+    const { name, method, path, is_active, is_stateful } = req.body;
 
     const result = await svc.updateEndpoint(id, {
       name,
       method,
       path,
       is_active,
+      is_stateful,
     });
 
     if (!result) {
