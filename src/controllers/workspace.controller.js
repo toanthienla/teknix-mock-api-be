@@ -1,9 +1,10 @@
 const svc = require('../services/workspace.service');
+const { success, error } = require('../utils/response');
 
 // List all workspaces
 async function listWorkspaces(req, res) {
   try {
-    const data = await svc.getAllWorkspaces();
+    const data = await svc.getAllWorkspaces(req.db.stateless);
     return res.status(200).json(data); // array object trần
   } catch (err) {
     return res.status(500).json({
@@ -16,7 +17,7 @@ async function listWorkspaces(req, res) {
 // Get workspace by id
 async function getWorkspace(req, res) {
   try {
-    const data = await svc.getWorkspaceById(req.params.id);
+    const data = await svc.getWorkspaceById(req.db.stateless, req.params.id);
     if (!data) {
       return res.status(404).json({
         success: false,
@@ -35,7 +36,7 @@ async function getWorkspace(req, res) {
 // Create workspace
 async function createWorkspace(req, res) {
   try {
-    const result = await svc.createWorkspace(req.body);
+    const result = await svc.createWorkspace(req.db.stateless, req.body);
     if (!result || result.success === false) {
       return res.status(400).json(result || {
         success: false,
@@ -54,7 +55,7 @@ async function createWorkspace(req, res) {
 // Update workspace
 async function updateWorkspace(req, res) {
   try {
-    const result = await svc.updateWorkspace(req.params.id, req.body);
+    const result = await svc.updateWorkspace(req.db.stateless, req.params.id, req.body);
     if (!result) {
       return res.status(404).json({
         success: false,
@@ -79,50 +80,17 @@ async function updateWorkspace(req, res) {
 // Bước 3: Ghi 1 dòng log DELETE để truy vết
 const logSvc = require('../services/project_request_log.service');
 async function deleteWorkspace(req, res) {
-  const started = Date.now();
   try {
     const { id } = req.params;
-    const wid = parseInt(id, 10);
-    const urlPath = req.originalUrl || req.path || '';
-    const headersReq = req.headers || {};
-    const bodyReq = req.body || {};
-    const ip = (req.headers['x-forwarded-for'] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || '').toString().split(',')[0].trim().substring(0,45);
-
-    // Kiểm tra tồn tại
-    const exists = await svc.getWorkspaceById(wid);
-    if (!exists) {
-      try {
-        await logSvc.insertLog({
-          project_id: null,
-          endpoint_id: null,
-          endpoint_response_id: null,
-          request_method: 'DELETE',
-          request_path: urlPath,
-          request_headers: headersReq,
-          request_body: bodyReq,
-          response_status_code: 404,
-          response_body: { error: { message: 'Workspace not found' } },
-          ip_address: ip,
-          latency_ms: 0,
-        });
-      } catch (_) {}
-      return res.status(404).json({
-        success: false,
-        errors: [{ field: 'id', message: 'Workspace not found' }]
-      });
+    const result = await svc.deleteWorkspaceAndHandleLogs(req.db.stateless, parseInt(id, 10));
+    
+    if (result.notFound) {
+      return error(res, 404, 'Workspace not found');
     }
-
-    // NULL hoá tham chiếu ở toàn bộ cây workspace
-    try { await logSvc.nullifyWorkspaceTree(wid); } catch (_) {}
-
-    // Xoá workspace (KHÔNG ghi log xoá theo yêu cầu)
-    const result = await svc.deleteWorkspace(wid);
-    return res.status(200).json(result);
+    
+    return success(res, { message: `Workspace with ID: ${id} has been deleted.` });
   } catch (err) {
-    return res.status(400).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
+    return error(res, 500, err.message);
   }
 }
 

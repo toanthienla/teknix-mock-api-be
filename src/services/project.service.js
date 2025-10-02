@@ -1,7 +1,8 @@
-const db = require('../config/db');
+//const db = require('../config/db');
+const logSvc = require('./project_request_log.service');
 
 // Get all projects (optionally filter by workspace_id)
-async function getProjects(workspace_id) {
+async function getProjects(db, workspace_id) {
   let query = 'SELECT * FROM projects';
   const params = [];
 
@@ -13,20 +14,20 @@ async function getProjects(workspace_id) {
   query += ' ORDER BY created_at DESC';
 
   const { rows } = await db.query(query, params);
-  return rows; // array object trần
+  return { success: true, data: rows };
 }
 
 // Get project by id
-async function getProjectById(projectId) {
+async function getProjectById(db, projectId) {
   const { rows } = await db.query(
     'SELECT * FROM projects WHERE id=$1',
     [projectId]
   );
-  return rows[0] || null; // object trần hoặc null
+  return { success: true, data: rows[0] || null };
 }
 
 // Create project (check duplicate in same workspace)
-async function createProject({ workspace_id, name, description }) {
+async function createProject(db, { workspace_id, name, description }) {
   const { rows: existRows } = await db.query(
     'SELECT id FROM projects WHERE workspace_id=$1 AND LOWER(name)=LOWER($2)',
     [workspace_id, name]
@@ -43,15 +44,20 @@ async function createProject({ workspace_id, name, description }) {
     'INSERT INTO projects(workspace_id, name, description) VALUES($1,$2,$3) RETURNING *',
     [workspace_id, name, description]
   );
-  return rows[0]; // object trần
+  return { success: true, data: rows[0] };
 }
 
 // Update project (check duplicate in same workspace, ignore itself)
-async function updateProject(projectId, { name, description }) {
+async function updateProject(db, projectId, { name, description }) {
+  const { rows: currentRows } = await db.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+  if (currentRows.length === 0) {
+    return { success: false, notFound: true };
+  }
+
   if (name) {
     const { rows: existRows } = await db.query(
-      'SELECT id, workspace_id FROM projects WHERE LOWER(name)=LOWER($1) AND id<>$2',
-      [name, projectId]
+      'SELECT id FROM projects WHERE workspace_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3',
+      [currentRows[0].workspace_id, name, projectId]
     );
     if (existRows.length > 0) {
       return {
@@ -70,16 +76,34 @@ async function updateProject(projectId, { name, description }) {
      RETURNING *`,
     [name, description, projectId]
   );
-  return rows[0] || null; // object trần hoặc null
+  return { success: true, data: rows[0] };
 }
 
 // Delete project
-async function deleteProject(projectId) {
-  const { rows } = await db.query(
-    'DELETE FROM projects WHERE id=$1 RETURNING id',
-    [projectId]
-  );
-  return rows[0] || null; // { id: ... } hoặc null nếu project không tồn tại
+async function deleteProjectAndHandleLogs(db, projectId) {
+  const client = await db.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const { rows: projectRows } = await client.query('SELECT id FROM projects WHERE id = $1', [projectId]);
+    if (projectRows.length === 0) {
+      await client.query('ROLLBACK');
+      return { success: false, notFound: true };
+    }
+
+    await logSvc.nullifyProjectTree(projectId, client);
+
+    await client.query('DELETE FROM projects WHERE id = $1', [projectId]);
+
+    await client.query('COMMIT');
+    return { success: true, data: { id: projectId } };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 module.exports = { 
@@ -87,5 +111,5 @@ module.exports = {
   getProjectById, 
   createProject, 
   updateProject, 
-  deleteProject 
+  deleteProjectAndHandleLogs 
 };
