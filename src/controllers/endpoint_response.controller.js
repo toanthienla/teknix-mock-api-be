@@ -24,7 +24,7 @@ async function listByEndpointQuery(req, res) {
     const eid = parseInt(endpoint_id, 10);
     if (Number.isNaN(eid)) return error(res, 400, 'endpoint_id must be an integer');
 
-    const rows = await svc.getByEndpointId(eid);
+    const rows = await svc.getByEndpointId(req.db.stateless, eid);
     return success(res, rows);
   } catch (err) {
     return error(res, 400, err.message);
@@ -41,7 +41,7 @@ async function getById(req, res) {
     const rid = parseInt(id, 10);
     if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
-    const row = await svc.getById(rid);
+    const row = await svc.getById(req.db.stateless, rid);
     if (!row) return error(res, 404, 'Response not found');
     return success(res, row);
   } catch (err) {
@@ -71,7 +71,7 @@ if (!endpoint_id || typeof status_code === 'undefined') {
     const eid = parseInt(endpoint_id, 10);
     if (Number.isNaN(eid)) return error(res, 400, 'endpoint_id must be an integer');
 
-    const row = await svc.create({
+    const row = await svc.create(req.db.stateless, {
       endpoint_id: eid,
       name: name.trim(),
       status_code,
@@ -125,7 +125,7 @@ async function update(req, res) {
       }
     }
 
-    const row = await svc.update(rid, {
+    const row = await svc.update(req.db.stateless, rid, {
       name: typeof name === 'undefined' ? undefined : name.trim(),
       status_code,
       response_body,
@@ -166,7 +166,7 @@ async function updatePriorities(req, res) {
           if (!Number.isNaN(eid)) {
             endpoint_id = eid;
             try {
-              const ep = await endpointSvc.getEndpointById(eid);
+              const ep = await endpointSvc.getEndpointById(req.db.stateless, eid);
               project_id = ep?.project_id ?? null;
             } catch (_) {}
           }
@@ -220,7 +220,7 @@ async function updatePriorities(req, res) {
         return error(res, 400, message);
       }
     }
-    const result = await svc.updatePriorities(items.map((it) => ({
+    const result = await svc.updatePriorities(req.db.stateless, items.map((it) => ({
       id: parseInt(it.id, 10),
       endpoint_id: parseInt(it.endpoint_id, 10),
       priority: parseInt(it.priority, 10)
@@ -253,7 +253,7 @@ async function updatePriorities(req, res) {
           project_id = projectCache.get(endpoint_id);
         } else {
           try {
-            const ep = await endpointSvc.getEndpointById(endpoint_id);
+            const ep = await endpointSvc.getEndpointById(req.db.stateless, endpoint_id);
             project_id = ep?.project_id ?? null;
             projectCache.set(endpoint_id, project_id);
           } catch (_) {}
@@ -317,11 +317,11 @@ async function remove(req, res) {
     let endpoint_id = null;
     let project_id = null;
     try {
-      const existing = await svc.getById(rid);
+      const existing = await svc.getById(req.db.stateless, rid);
       if (existing?.endpoint_id) {
         endpoint_id = existing.endpoint_id;
         try {
-          const ep = await endpointSvc.getEndpointById(endpoint_id);
+          const ep = await endpointSvc.getEndpointById(req.db.stateless, endpoint_id);
           project_id = ep?.project_id ?? null;
         } catch (_) {}
       }
@@ -335,7 +335,7 @@ async function remove(req, res) {
     } catch (_) {}
 
     // Bước 2: Xóa bản ghi endpoint_response
-    await svc.remove(rid);
+    await svc.remove(req.db.stateless, rid);
 
     const finished = Date.now();
     // Bước 3: Ghi 1 dòng log cho hành vi DELETE (endpoint_response_id = NULL để không bị FK)
@@ -370,7 +370,7 @@ async function setDefault(req, res) {
     const rid = parseInt(id, 10);
     if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
-    const rows = await svc.setDefault(rid);
+    const rows = await svc.setDefault(req.db.stateless, rid);
     return success(res, rows);
   } catch (err) {
     return error(res, 400, err.message);

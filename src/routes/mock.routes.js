@@ -15,7 +15,7 @@
 //
 
 const express = require("express");
-const db = require("../config/db");
+//const db = require("../config/db");
 const { match } = require("path-to-regexp");
 // Service ghi log request/response vào bảng project_request_logs
 const router = express.Router();
@@ -114,13 +114,10 @@ router.use(async (req, res, next) => {
     }
 
     // 1) Lấy danh sách endpoint theo method hiện tại
-    const { rows: endpoints } = await db.query(
-      `SELECT e.id, e.method, e.path, e.folder_id, f.project_id,
-              EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id) AS has_response,
-              EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id AND r.is_default = true) AS has_default
-       FROM endpoints e
-       WHERE UPPER(e.method) = $1
-       ORDER BY has_default DESC, has_response DESC, e.id DESC`,
+    const { rows: endpoints } = await req.db.stateless.query(
+      `SELECT id, method, path, folder_id, is_stateful
+       FROM endpoints
+       WHERE UPPER(method) = $1 AND is_active = true`,
       [method]
     );
 
@@ -137,14 +134,36 @@ router.use(async (req, res, next) => {
     });
     if (!ep) return next();
 
-    // 3) Lấy toàn bộ responses của endpoint để có thể áp dụng điều kiện theo params/query
-    const matchFn = getMatcher(ep.path);
-    const matchRes = matchFn(req.path);
-    const params = (matchRes && matchRes.params) || {};
-    const hasParams = Object.keys(params).length > 0;
+    if (ep.is_stateful) {
+      // ==========================================================
+      // LOGIC CHO ENDPOINT STATEFUL
+      // ==========================================================
+      console.log(`--> Endpoint ID ${ep.id} là STATEFUL. Path: ${ep.path}`);
 
-    const { rows: responses } = await db.query(
-      `SELECT id, endpoint_id, name, status_code, response_body,
+      // Truy vấn DB stateful để lấy dữ liệu
+      const { rows: dataRows } = await req.db.stateful.query(
+        // <-- SỬ DỤNG req.db.stateful
+        "SELECT data_current FROM endpoint_data WHERE path = $1",
+        [ep.path]
+      );
+
+      if (dataRows.length === 0) {
+        return res
+          .status(404)
+          .json({ error: `Stateful data for path '${ep.path}' not found.` });
+      }
+
+      const responseBody = dataRows[0].data_current;
+      return res.status(200).json(responseBody);
+    } else {
+      // 3) Lấy toàn bộ responses của endpoint để có thể áp dụng điều kiện theo params/query
+      const matchFn = getMatcher(ep.path);
+      const matchRes = matchFn(req.path);
+      const params = (matchRes && matchRes.params) || {};
+      const hasParams = Object.keys(params).length > 0;
+
+      const { rows: responses } = await req.db.stateless.query(
+        `SELECT id, endpoint_id, name, status_code, response_body,
        is_default, priority, condition, delay_ms,
        proxy_url, proxy_method, 
        created_at, updated_at
@@ -152,126 +171,30 @@ router.use(async (req, res, next) => {
   WHERE endpoint_id = $1
   ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at DESC
   `,
-      [ep.id]
-    );
+        [ep.id]
+      );
 
-    // Nếu không có response nào cấu hình:
-    // - GET item (có params): trả {} (rỗng)
-    // - GET collection: trả [] (rỗng)
-    if (responses.length === 0) {
-      // No configured responses for this endpoint
-      // For GET: return empty object/array (legacy behavior)
-      const status = req.method.toUpperCase() === "GET" ? 200 : 501;
-      const body =
-        req.method.toUpperCase() === "GET"
-          ? hasParams
-            ? {}
-            : []
-          : { error: { message: "No response configured for this endpoint" } };
-      const finished = Date.now();
-      // Ghi log cho trường hợp endpoint KHÔNG có response cấu hình
-      try {
-        const ip = getClientIp(req);
-        await logRequest({
-          projectId: ep.project_id || null,
-          endpointId: ep.id,
-          endpointResponseId: null,
-          method,
-          path: req.path,
-          headers: req.headers || {},
-          body: req.body || {},
-          statusCode: status,
-          responseBody: body,
-          ip,
-          latencyMs: finished - started,
-        });
-      } catch (e) {
-        if (process.env.NODE_ENV !== "production") {
-          console.warn(
-            "[mock.routes] Ghi log (no responses) thất bại:",
-            e?.message || e
-          );
-        }
-      }
-
-      if (req.method.toUpperCase() === "GET") {
-        return res.status(status).json(body);
-      } else {
-        return res.status(status).json(body);
-      }
-    }
-
-    // 3.1) Áp dụng điều kiện: ưu tiên các response có condition khớp params/query
-    const isPlainObject = (v) =>
-      v && typeof v === "object" && !Array.isArray(v);
-    const matchesCondition = (cond) => {
-      if (!isPlainObject(cond) || Object.keys(cond).length === 0) {
-        return false; // condition rỗng thì KHÔNG match
-      }
-
-      // Check params.id đơn giản
-      if ("id" in cond) {
-        if (String(params.id ?? "") !== String(cond.id)) return false;
-      }
-      // Check params object
-      if (isPlainObject(cond.params)) {
-        for (const [k, v] of Object.entries(cond.params)) {
-          if (String(params[k] ?? "") !== String(v)) return false;
-        }
-      }
-
-      // Check query object
-      if (isPlainObject(cond.query)) {
-        for (const [k, v] of Object.entries(cond.query)) {
-          if (String(req.query[k] ?? "") !== String(v)) return false;
-        }
-      }
-
-      // Check headers object
-      if (isPlainObject(cond.headers)) {
-        for (const [k, v] of Object.entries(cond.headers)) {
-          const reqVal = req.headers[k.toLowerCase()]; // headers luôn lowercase
-          if (String(reqVal ?? "") !== String(v)) return false;
-        }
-      }
-
-      // Check body object
-      if (isPlainObject(cond.body)) {
-        for (const [k, v] of Object.entries(cond.body)) {
-          if (String(req.body?.[k] ?? "") !== String(v)) return false;
-        }
-      }
-
-      // Có thể mở rộng cho cond.headers/cond.body nếu cần
-      return true;
-    };
-
-    // 3.2) Lọc toàn bộ response có condition khớp
-    const matchedResponses = responses.filter((r) =>
-      matchesCondition(r.condition)
-    );
-
-    let r;
-    if (matchedResponses.length > 0) {
-      // Sắp xếp theo priority ASC (1 là cao nhất), rồi updated_at DESC
-      matchedResponses.sort((a, b) => {
-        const pa = a.priority ?? Number.MAX_SAFE_INTEGER;
-        const pb = b.priority ?? Number.MAX_SAFE_INTEGER;
-        if (pa !== pb) return pa - pb; // số nhỏ hơn ưu tiên hơn
-        return new Date(b.updated_at) - new Date(a.updated_at);
-      });
-      r = matchedResponses[0];
-    } else {
-      // Nếu không có match và cũng không có default → trả 404
-      r = responses.find((rr) => rr.is_default);
-      if (!r) {
-        const status = 404;
-        const body = { error: "No matching response found" };
+      // Nếu không có response nào cấu hình:
+      // - GET item (có params): trả {} (rỗng)
+      // - GET collection: trả [] (rỗng)
+      if (responses.length === 0) {
+        // No configured responses for this endpoint
+        // For GET: return empty object/array (legacy behavior)
+        const status = req.method.toUpperCase() === "GET" ? 200 : 501;
+        const body =
+          req.method.toUpperCase() === "GET"
+            ? hasParams
+              ? {}
+              : []
+            : {
+                error: { message: "No response configured for this endpoint" },
+              };
         const finished = Date.now();
+        // Ghi log cho trường hợp endpoint KHÔNG có response cấu hình
         try {
           const ip = getClientIp(req);
-          await logRequest({
-            projectId: ep.project_id || null,
+          await logRequest(req.db.stateless, {
+            folderId: ep.folder_id || null,
             endpointId: ep.id,
             endpointResponseId: null,
             method,
@@ -286,138 +209,236 @@ router.use(async (req, res, next) => {
         } catch (e) {
           if (process.env.NODE_ENV !== "production") {
             console.warn(
-              "[mock.routes] Ghi log (404 no match) thất bại:",
+              "[mock.routes] Ghi log (no responses) thất bại:",
               e?.message || e
             );
           }
         }
-        return res.status(status).json(body);
+
+        if (req.method.toUpperCase() === "GET") {
+          return res.status(status).json(body);
+        } else {
+          return res.status(status).json(body);
+        }
       }
-    }
 
-    // 3.3) Nếu có proxy_url → gọi API ngoài (proxy) thay vì trả response_body
-    if (r.proxy_url) {
-      try {
-        const ctx = { params, query: req.query };
-        const resolvedUrl = renderTemplate(r.proxy_url, ctx);
-        console.log("[Proxy] resolvedUrl =", resolvedUrl);
+      // 3.1) Áp dụng điều kiện: ưu tiên các response có condition khớp params/query
+      const isPlainObject = (v) =>
+        v && typeof v === "object" && !Array.isArray(v);
+      const matchesCondition = (cond) => {
+        if (!isPlainObject(cond) || Object.keys(cond).length === 0) {
+          return false; // condition rỗng thì KHÔNG match
+        }
 
-        // Gọi API ngoài với httpsAgent để bỏ qua verify SSL
-        const proxyResp = await axios({
-          method: r.proxy_method || req.method,
-          url: resolvedUrl,
-          data: req.body,
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            Accept: "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            Referer: "https://jsonplaceholder.typicode.com/",
-          },
-          validateStatus: () => true,
-          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+        // Check params.id đơn giản
+        if ("id" in cond) {
+          if (String(params.id ?? "") !== String(cond.id)) return false;
+        }
+        // Check params object
+        if (isPlainObject(cond.params)) {
+          for (const [k, v] of Object.entries(cond.params)) {
+            if (String(params[k] ?? "") !== String(v)) return false;
+          }
+        }
+
+        // Check query object
+        if (isPlainObject(cond.query)) {
+          for (const [k, v] of Object.entries(cond.query)) {
+            if (String(req.query[k] ?? "") !== String(v)) return false;
+          }
+        }
+
+        // Check headers object
+        if (isPlainObject(cond.headers)) {
+          for (const [k, v] of Object.entries(cond.headers)) {
+            const reqVal = req.headers[k.toLowerCase()]; // headers luôn lowercase
+            if (String(reqVal ?? "") !== String(v)) return false;
+          }
+        }
+
+        // Check body object
+        if (isPlainObject(cond.body)) {
+          for (const [k, v] of Object.entries(cond.body)) {
+            if (String(req.body?.[k] ?? "") !== String(v)) return false;
+          }
+        }
+
+        // Có thể mở rộng cho cond.headers/cond.body nếu cần
+        return true;
+      };
+
+      // 3.2) Lọc toàn bộ response có condition khớp
+      const matchedResponses = responses.filter((r) =>
+        matchesCondition(r.condition)
+      );
+
+      let r;
+      if (matchedResponses.length > 0) {
+        // Sắp xếp theo priority ASC (1 là cao nhất), rồi updated_at DESC
+        matchedResponses.sort((a, b) => {
+          const pa = a.priority ?? Number.MAX_SAFE_INTEGER;
+          const pb = b.priority ?? Number.MAX_SAFE_INTEGER;
+          if (pa !== pb) return pa - pb; // số nhỏ hơn ưu tiên hơn
+          return new Date(b.updated_at) - new Date(a.updated_at);
         });
-        // Ghi log response từ proxy
+        r = matchedResponses[0];
+      } else {
+        // Nếu không có match và cũng không có default → trả 404
+        r = responses.find((rr) => rr.is_default);
+        if (!r) {
+          const status = 404;
+          const body = { error: "No matching response found" };
+          const finished = Date.now();
+          try {
+            const ip = getClientIp(req);
+            await logRequest(req.db.stateless, {
+              folderId: ep.folder_id || null,
+              endpointId: ep.id,
+              endpointResponseId: null,
+              method,
+              path: req.path,
+              headers: req.headers || {},
+              body: req.body || {},
+              statusCode: status,
+              responseBody: body,
+              ip,
+              latencyMs: finished - started,
+            });
+          } catch (e) {
+            if (process.env.NODE_ENV !== "production") {
+              console.warn(
+                "[mock.routes] Ghi log (404 no match) thất bại:",
+                e?.message || e
+              );
+            }
+          }
+          return res.status(status).json(body);
+        }
+      }
+
+      // 3.3) Nếu có proxy_url → gọi API ngoài (proxy) thay vì trả response_body
+      if (r.proxy_url) {
+        try {
+          const ctx = { params, query: req.query };
+          const resolvedUrl = renderTemplate(r.proxy_url, ctx);
+          console.log("[Proxy] resolvedUrl =", resolvedUrl);
+
+          // Gọi API ngoài với httpsAgent để bỏ qua verify SSL
+          const proxyResp = await axios({
+            method: r.proxy_method || req.method,
+            url: resolvedUrl,
+            data: req.body,
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              Accept: "application/json, text/plain, */*",
+              "Accept-Language": "en-US,en;q=0.9",
+              Referer: "https://jsonplaceholder.typicode.com/",
+            },
+            validateStatus: () => true,
+            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          });
+          // Ghi log response từ proxy
+          const finished = Date.now();
+          try {
+            const ip = getClientIp(req);
+            await logRequest(req.db.stateless, {
+              folderId: ep.folder_id || null,
+              endpointId: ep.id,
+              endpointResponseId: r.id || null,
+              method,
+              path: req.path,
+              headers: req.headers || {},
+              body: req.body || {},
+              statusCode: proxyResp.status,
+              responseBody: proxyResp.data,
+              ip,
+              latencyMs: finished - started,
+            });
+          } catch (_) {}
+
+          return res
+            .status(proxyResp.status)
+            .set(proxyResp.headers)
+            .send(proxyResp.data);
+        } catch (err) {
+          console.error("[mock.routes] Proxy request failed:", err.message);
+          return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
+        }
+      }
+      // Nếu không proxy thì tiếp tục trả response_body bên dưới
+      // 4) Trả về nội dung response:
+      // - Nếu response_body là object => trả JSON
+      // - Nếu là string/empty => send text/empty string
+      const status = r.status_code || 200;
+      let body = r.response_body ?? null;
+
+      // Templating: thay thế {{params.*}} và {{query.*}} trong body (string hoặc object)
+      const ctx = { params, query: req.query };
+      if (body && (typeof body === "object" || typeof body === "string")) {
+        body = renderTemplate(body, ctx);
+      }
+
+      // Chuẩn hoá cho GET collection (không có params): nếu body rỗng => trả []
+      if (req.method.toUpperCase() === "GET" && !hasParams) {
+        const isEmptyObject = (v) =>
+          v &&
+          typeof v === "object" &&
+          !Array.isArray(v) &&
+          Object.keys(v).length === 0;
+        if (
+          body == null ||
+          (typeof body === "string" && body.trim() === "") ||
+          isEmptyObject(body)
+        ) {
+          body = [];
+        }
+      }
+
+      //  Áp dụng delay_ms
+      const delay = r.delay_ms ?? 0;
+
+      const sendResponse = async () => {
         const finished = Date.now();
+        // Ghi log request/response (có endpoint_response_id)
         try {
           const ip = getClientIp(req);
-          await logRequest({
-            projectId: ep.project_id || null,
+          await logSvc.insertLog(req.db.stateless, {
+            folderId: ep.folder_id || null,
             endpointId: ep.id,
             endpointResponseId: r.id || null,
             method,
             path: req.path,
             headers: req.headers || {},
             body: req.body || {},
-            statusCode: proxyResp.status,
-            responseBody: proxyResp.data,
+            statusCode: status,
+            responseBody: body,
             ip,
             latencyMs: finished - started,
           });
-        } catch (_) {}
-
-        return res
-          .status(proxyResp.status)
-          .set(proxyResp.headers)
-          .send(proxyResp.data);
-      } catch (err) {
-        console.error("[mock.routes] Proxy request failed:", err.message);
-        return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
-      }
-    }
-    // Nếu không proxy thì tiếp tục trả response_body bên dưới
-    // 4) Trả về nội dung response:
-    // - Nếu response_body là object => trả JSON
-    // - Nếu là string/empty => send text/empty string
-    const status = r.status_code || 200;
-    let body = r.response_body ?? null;
-
-    // Templating: thay thế {{params.*}} và {{query.*}} trong body (string hoặc object)
-    const ctx = { params, query: req.query };
-    if (body && (typeof body === "object" || typeof body === "string")) {
-      body = renderTemplate(body, ctx);
-    }
-
-    // Chuẩn hoá cho GET collection (không có params): nếu body rỗng => trả []
-    if (req.method.toUpperCase() === "GET" && !hasParams) {
-      const isEmptyObject = (v) =>
-        v &&
-        typeof v === "object" &&
-        !Array.isArray(v) &&
-        Object.keys(v).length === 0;
-      if (
-        body == null ||
-        (typeof body === "string" && body.trim() === "") ||
-        isEmptyObject(body)
-      ) {
-        body = [];
-      }
-    }
-
-    //  Áp dụng delay_ms
-    const delay = r.delay_ms ?? 0;
-
-    const sendResponse = async () => {
-      const finished = Date.now();
-      // Ghi log request/response (có endpoint_response_id)
-      try {
-        const ip = getClientIp(req);
-        await logRequest({
-          projectId: ep.project_id || null,
-          endpointId: ep.id,
-          endpointResponseId: r.id || null,
-          method,
-          path: req.path,
-          headers: req.headers || {},
-          body: req.body || {},
-          statusCode: status,
-          responseBody: body,
-          ip,
-          latencyMs: finished - started,
-        });
-      } catch (e) {
-        if (process.env.NODE_ENV !== "production") {
-          console.warn(
-            "[mock.routes] Ghi log (matched response) thất bại:",
-            e?.message || e
-          );
+        } catch (e) {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn(
+              "[mock.routes] Ghi log (matched response) thất bại:",
+              e?.message || e
+            );
+          }
         }
-      }
 
-      if (body && typeof body === "object") {
-        return res.status(status).json(body);
-      }
-      return res.status(status).send(body ?? "");
-    };
+        if (body && typeof body === "object") {
+          return res.status(status).json(body);
+        }
+        return res.status(status).send(body ?? "");
+      };
 
-    if (delay > 0) {
-      setTimeout(() => {
-        sendResponse();
-      }, delay);
-    } else {
-      await sendResponse();
+      if (delay > 0) {
+        setTimeout(() => {
+          sendResponse();
+        }, delay);
+      } else {
+        await sendResponse();
+      }
     }
-
     // // Trả đúng response_body đã cấu hình: nếu là object => JSON, còn lại => text
     // if (body && typeof body === "object") return res.status(status).json(body);
     // return res.status(status).send(body ?? "");
@@ -426,8 +447,8 @@ router.use(async (req, res, next) => {
     try {
       const started = Date.now();
       const ip = getClientIp(req);
-      await logRequest({
-        projectId: null,
+      await logRequest(req.db.stateless, {
+        folderId: null,
         endpointId: null,
         endpointResponseId: null,
         method: req.method?.toUpperCase?.() || "",
