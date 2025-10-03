@@ -1,16 +1,18 @@
 const svc = require('../services/folder.service');
 const { success, error } = require('../utils/response');
-
-// List all folders by project_id
+// List all folders (optionally filter by project_id)
 async function listFolders(req, res) {
   try {
     const { project_id } = req.query;
-    if (!project_id) {
-      return error(res, 400, 'Query parameter project_id is required');
-    }
-    const pid = parseInt(project_id, 10);
-    if (Number.isNaN(pid)) {
-      return error(res, 400, 'project_id must be an integer');
+    let pid = null;
+
+    // Chỉ validate và gán pid nếu project_id được cung cấp
+    if (project_id) {
+      const parsedId = parseInt(project_id, 10);
+      if (Number.isNaN(parsedId)) {
+        return error(res, 400, 'project_id must be an integer');
+      }
+      pid = parsedId;
     }
 
     const result = await svc.getFolders(req.db.stateless, pid);

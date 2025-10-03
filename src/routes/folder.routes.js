@@ -5,8 +5,9 @@ const ctrl = require('../controllers/folder.controller');
 const asyncHandler = require('../middlewares/asyncHandler');
 const validateFolder = require('../middlewares/validateFolder'); // Import middleware mới
 
+
 // Get all folders (filter by project_id nếu có query param)
-// GET /folder?project_id=123
+// GET /folders?project_id=123 HOẶC GET /folders
 router.get('/', asyncHandler(ctrl.listFolders));
 
 // Get folder by id
