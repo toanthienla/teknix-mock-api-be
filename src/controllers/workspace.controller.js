@@ -4,32 +4,30 @@ const { success, error } = require('../utils/response');
 // List all workspaces
 async function listWorkspaces(req, res) {
   try {
-    const data = await svc.getAllWorkspaces(req.db.stateless);
-    return res.status(200).json(data); // array object trần
+    // Service trả về { success: true, data: [...] }
+    const result = await svc.getAllWorkspaces(req.db.stateless);
+    // Chỉ trả về mảng data
+    return success(res, result.data);
   } catch (err) {
-    return res.status(500).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
+    return error(res, 500, err.message);
   }
 }
 
 // Get workspace by id
 async function getWorkspace(req, res) {
   try {
-    const data = await svc.getWorkspaceById(req.db.stateless, req.params.id);
-    if (!data) {
-      return res.status(404).json({
-        success: false,
-        errors: [{ field: 'id', message: 'Workspace not found' }]
-      });
+    // Service trả về { success: true, data: {...} }
+    const result = await svc.getWorkspaceById(req.db.stateless, req.params.id);
+    
+    // Sửa lỗi logic: kiểm tra thuộc tính .data thay vì toàn bộ object result
+    if (!result.data) {
+      return error(res, 404, 'Workspace not found');
     }
-    return res.status(200).json(data); // object trần
+
+    // Chỉ trả về object data
+    return success(res, result.data);
   } catch (err) {
-    return res.status(500).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
+    return error(res, 500, err.message);
   }
 }
 
