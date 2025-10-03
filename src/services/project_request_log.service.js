@@ -3,10 +3,15 @@
 // Hàm stringify an toàn: tránh lỗi vòng tham chiếu/BigInt khi convert sang JSON cho cột JSONB
 function safeStringify(value) {
   try {
-    return JSON.stringify(value, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
+    return JSON.stringify(value, (_, v) =>
+      typeof v === "bigint" ? v.toString() : v
+    );
   } catch (e) {
     // Fallback: wrap as string message
-    return JSON.stringify({ __non_serializable__: true, message: e?.message || String(e) });
+    return JSON.stringify({
+      __non_serializable__: true,
+      message: e?.message || String(e),
+    });
   }
 }
 
@@ -18,7 +23,7 @@ function safeStringify(value) {
 
 async function insertLog(dbPool, payload) {
   const {
-    folder_id,
+    project_id,
     endpoint_id,
     endpoint_response_id = null,
     request_method,
@@ -35,7 +40,7 @@ async function insertLog(dbPool, payload) {
   // Lưu ý: các cột JSONB dùng $param::jsonb nên tham số phải là CHUỖI JSON HỢP LỆ
   const { rows } = await dbPool.query(
     `INSERT INTO project_request_logs (
-      folder_id, endpoint_id, endpoint_response_id,
+       project_id, endpoint_id, endpoint_response_id,
       request_method, request_path, request_headers, request_body,
       response_status_code, response_body, ip_address, latency_ms
     ) VALUES (
@@ -44,7 +49,7 @@ async function insertLog(dbPool, payload) {
       $8, $9::jsonb, $10, $11
     ) RETURNING *`,
     [
-      folder_id,
+      project_id,
       endpoint_id,
       endpoint_response_id,
       request_method ?? null,
@@ -77,7 +82,8 @@ async function nullifyEndpointResponseRef(dbPool, endpointResponseId) {
 // NULL hoá tham chiếu endpoint_id và toàn bộ endpoint_response_id thuộc 1 endpoint (để có thể xoá endpoint mà vẫn giữ log)
 async function nullifyEndpointAndResponses(dbPool, endpointId) {
   const eid = Number(endpointId);
-  if (!Number.isInteger(eid)) return { clearedEndpoint: 0, clearedResponses: 0 };
+  if (!Number.isInteger(eid))
+    return { clearedEndpoint: 0, clearedResponses: 0 };
 
   // 1) Bỏ tham chiếu endpoint_id
   const r1 = await dbPool.query(
@@ -97,19 +103,23 @@ async function nullifyEndpointAndResponses(dbPool, endpointId) {
     [eid]
   );
 
-  return { clearedEndpoint: r1.rowCount || 0, clearedResponses: r2.rowCount || 0 };
+  return {
+    clearedEndpoint: r1.rowCount || 0,
+    clearedResponses: r2.rowCount || 0,
+  };
 }
 
 // NULL hoá toàn bộ tham chiếu thuộc một workspace: folder_id,, endpoint_id, endpoint_response_id
 // Mục tiêu: xoá workspace mà không đụng schema, vẫn giữ dữ liệu log lịch sử
 async function nullifyWorkspaceTree(dbPool, workspaceId) {
   const wid = Number(workspaceId);
-  if (!Number.isInteger(wid)) return { clearedProjects: 0, clearedEndpoints: 0, clearedResponses: 0 };
+  if (!Number.isInteger(wid))
+    return { clearedProjects: 0, clearedEndpoints: 0, clearedResponses: 0 };
 
   // 1) Bỏ tham chiếu folder_id, của các project thuộc workspace
   const p = await dbPool.query(
     `UPDATE project_request_logs
-     SET folder_id, = NULL
+     SET folder_id = NULL
      WHERE project_id IN (
        SELECT p.id FROM projects p WHERE p.workspace_id = $1
      )`,
@@ -152,7 +162,8 @@ async function nullifyWorkspaceTree(dbPool, workspaceId) {
 // Dùng khi xoá project để không vi phạm FK và VẪN GIỮ dữ liệu log
 async function nullifyProjectTree(dbPool, projectId) {
   const pid = Number(projectId);
-  if (!Number.isInteger(pid)) return { clearedProject: 0, clearedEndpoints: 0, clearedResponses: 0 };
+  if (!Number.isInteger(pid))
+    return { clearedProject: 0, clearedEndpoints: 0, clearedResponses: 0 };
 
   // 1) Bỏ tham chiếu project_id
   const p = await dbPool.query(
@@ -192,47 +203,84 @@ async function nullifyProjectTree(dbPool, projectId) {
 }
 
 // Lấy danh sách log theo filter (bắt buộc project_id; còn lại tùy chọn)
-async function listLogs(dbPool, { project_id, folder_id, endpoint_id, method, path, status_code, from, to, limit = 100, offset = 0 }) {
+async function listLogs(
+  dbPool,
+  {
+    project_id,
+    folder_id,
+    endpoint_id,
+    method,
+    path,
+    status_code,
+    from,
+    to,
+    limit = 100,
+    offset = 0,
+  }
+) {
   // Khởi tạo query và các mảng điều kiện, tham số
-  let query = 'SELECT l.* FROM project_request_logs l';
+  let query = "SELECT l.* FROM project_request_logs l";
   const conds = [];
   const params = [];
   let idx = 0;
 
   // Nếu có project_id, chúng ta cần JOIN với bảng folders
-  if (project_id) {
-    query += ' JOIN folders f ON l.folder_id = f.id';
+   if (project_id) {
     idx += 1;
-    conds.push(`f.project_id = $${idx}`);
+    conds.push(`project_id = $${idx}`);
     params.push(project_id);
-  
-  // Ngược lại, nếu có folder_id thì lọc trực tiếp
-  } else if (folder_id) {
-    idx += 1;
-    conds.push(`l.folder_id = $${idx}`);
-    params.push(folder_id);
+  } else {
+    // Nếu không có project_id, trả về mảng rỗng hoặc ném lỗi
+    // tùy theo yêu cầu nghiệp vụ. Ở đây ta trả về mảng rỗng.
+    return []; 
   }
 
   // Thêm các điều kiện lọc khác một cách linh hoạt
-  if (endpoint_id) { idx += 1; conds.push(`l.endpoint_id = $${idx}`); params.push(endpoint_id); }
-  if (method) { idx += 1; conds.push(`UPPER(l.request_method) = UPPER($${idx})`); params.push(method); }
-  if (path) { idx += 1; conds.push(`l.request_path ILIKE $${idx}`); params.push(`%${path}%`); }
-  if (status_code) { idx += 1; conds.push(`l.response_status_code = $${idx}`); params.push(status_code); }
-  if (from) { idx += 1; conds.push(`l.created_at >= $${idx}`); params.push(from); }
-  if (to) { idx += 1; conds.push(`l.created_at <= $${idx}`); params.push(to); }
+  if (endpoint_id) {
+    idx += 1;
+    conds.push(`l.endpoint_id = $${idx}`);
+    params.push(endpoint_id);
+  }
+  if (method) {
+    idx += 1;
+    conds.push(`UPPER(l.request_method) = UPPER($${idx})`);
+    params.push(method);
+  }
+  if (path) {
+    idx += 1;
+    conds.push(`l.request_path ILIKE $${idx}`);
+    params.push(`%${path}%`);
+  }
+  if (status_code) {
+    idx += 1;
+    conds.push(`l.response_status_code = $${idx}`);
+    params.push(status_code);
+  }
+  if (from) {
+    idx += 1;
+    conds.push(`l.created_at >= $${idx}`);
+    params.push(from);
+  }
+  if (to) {
+    idx += 1;
+    conds.push(`l.created_at <= $${idx}`);
+    params.push(to);
+  }
 
   // Gắn các điều kiện vào câu query chính
   if (conds.length > 0) {
-    query += ` WHERE ${conds.join(' AND ')}`;
+    query += ` WHERE ${conds.join(" AND ")}`;
   }
-  
+
   // Thêm ORDER BY, LIMIT, OFFSET
   query += ` ORDER BY l.created_at DESC`;
-  
-  idx += 1; params.push(limit);
+
+  idx += 1;
+  params.push(limit);
   query += ` LIMIT $${idx}`;
-  
-  idx += 1; params.push(offset);
+
+  idx += 1;
+  params.push(offset);
   query += ` OFFSET $${idx}`;
 
   const { rows } = await dbPool.query(query, params);
@@ -241,7 +289,10 @@ async function listLogs(dbPool, { project_id, folder_id, endpoint_id, method, pa
 
 async function getLogById(dbPool, id) {
   // Lấy chi tiết 1 log theo id
-  const { rows } = await dbPool.query('SELECT * FROM project_request_logs WHERE id = $1', [id]);
+  const { rows } = await dbPool.query(
+    "SELECT * FROM project_request_logs WHERE id = $1",
+    [id]
+  );
   return rows[0] || null;
 }
 

@@ -7,7 +7,6 @@ async function list(req, res) {
   try {
     const {
       project_id,
-      folder_id,
       endpoint_id,
       method,
       path,
@@ -19,17 +18,12 @@ async function list(req, res) {
     } = req.query;
 
     // Yêu cầu người dùng cung cấp ít nhất project_id hoặc folder_id
-    if (!project_id && !folder_id) {
-      return error(
-        res,
-        400,
-        "Cần cung cấp query parameter project_id hoặc folder_id"
-      );
+if (!project_id) {
+      return error(res, 400, "Cần cung cấp query parameter project_id");
     }
 
     const filters = {
       project_id: project_id ? parseInt(project_id, 10) : undefined,
-      folder_id: folder_id ? parseInt(folder_id, 10) : undefined,
       endpoint_id: endpoint_id ? parseInt(endpoint_id, 10) : undefined,
       method,
       path,
