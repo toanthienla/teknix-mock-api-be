@@ -4,7 +4,7 @@ const path = require('path');    // 2. import path
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 // Pool 1: Kết nối đến DB STATELESS (bảng chỉ dẫn)
-const statelessPool = new Pool({
+const dbPool = new Pool({
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
   user: process.env.DB_USER,
@@ -13,7 +13,7 @@ const statelessPool = new Pool({
 });
 
 // Pool 2: Kết nối đến DB STATEFUL
-const statefulPool = new Pool({
+const dbPoolfull = new Pool({
   host: process.env.STATEFUL_DB_HOST,
   port: process.env.STATEFUL_DB_PORT,
   user: process.env.STATEFUL_DB_USER,
@@ -24,9 +24,9 @@ const statefulPool = new Pool({
 // Hàm kiểm tra kết nối (tùy chọn nhưng nên có)
 const checkConnections = async () => {
     try {
-        await statelessPool.query('SELECT NOW()');
+        await dbPool.query('SELECT NOW()');
         console.log('✅ Kết nối đến Stateless DB thành công!');
-        await statefulPool.query('SELECT NOW()');
+        await dbPoolfull.query('SELECT NOW()');
         console.log('✅ Kết nối đến Statefull DB thành công!');
     } catch (error) {
         console.error('❌ Lỗi khi kiểm tra kết nối database:', error);
@@ -35,8 +35,4 @@ const checkConnections = async () => {
 };
 
 // Export cả hai pool để các module khác có thể sử dụng
-module.exports = {
-  statelessPool,
-  statefulPool,
-  checkConnections
-};
+module.exports = { dbPool, dbPoolfull, checkConnections };

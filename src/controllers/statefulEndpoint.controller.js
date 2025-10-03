@@ -1,4 +1,3 @@
-// src/controllers/statefulEndpoint.controller.js
 const statefulService = require("../services/statefulEndpoint.service");
 
 async function convertToStateful(req, res) {
@@ -6,12 +5,9 @@ async function convertToStateful(req, res) {
 
   try {
     const result = await statefulService.convertToStateful(id);
-
-    return res.status(201).json({
+    return res.status(200).json({
       message: "Endpoint converted to stateful successfully",
-      stateless: result.stateless,
-      stateful: result.stateful,
-      responses: result.responses,
+      data: result,
     });
   } catch (err) {
     console.error("Error convertToStateful:", err.message);
@@ -19,6 +15,25 @@ async function convertToStateful(req, res) {
   }
 }
 
+async function updateEndpointResponse(req, res) {
+  try {
+    const { id } = req.params;
+    // Hỗ trợ cả responseBody và response_body
+    const response_body = req.body.response_body ?? req.body.responseBody;
+    const delay = req.body.delay ?? req.body.delay_ms;
+
+    const updated = await statefulService.updateEndpointResponse(id, { response_body, delay });
+
+    return res.status(200).json({
+      message: "Response updated successfully",
+      data: updated,
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+}
+
 module.exports = {
   convertToStateful,
+  updateEndpointResponse,
 };

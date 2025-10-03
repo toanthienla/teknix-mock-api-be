@@ -10,15 +10,15 @@ const endpointRoutes = require('./routes/endpoint.routes');
 const endpointResponseRoutes = require('./routes/endpoint_response.routes');
 const folderRoutes = require('./routes/folder.routes');
 // Routes xem log request/response theo project
-const projectRequestLogRoutes = require('./routes/project_request_log.routes');
+//const projectRequestLogRoutes = require('./routes/project_request_log.routes');
 const mockRoutes = require('./routes/mock.routes');
-const adminResponseLogger = require('./middlewares/adminResponseLogger');
-
-//import statefull chuyển đổi từ stateless -> statefull
+//const adminResponseLogger = require('./middlewares/adminResponseLogger');
 const statefulRoutes = require("./routes/statefulEndpoint.routes");
 
+
+
 // Import DB pools
-const { statelessPool, statefulPool } = require('./config/db'); 
+const { statelessPool, statefulPool } = require('./config/db');
 
 // Thêm Middleware để inject DB pools vào mỗi request
 // Đoạn code này phải nằm TRƯỚC khi bạn mount các routes
@@ -30,6 +30,8 @@ app.use((req, res, next) => {
     next();
 });
 
+app.use(express.json());
+
 // Mount routes
 app.use('/workspaces', workspaceRoutes);
 app.use('/projects', projectRoutes);
@@ -38,10 +40,10 @@ app.use('/folders', folderRoutes); // (Số nhiều)
 
 app.use('/', endpointResponseRoutes);
 // Mount logs route TRƯỚC router mock catch-all để không bị nuốt
-app.use('/', projectRequestLogRoutes);
+//app.use('/', projectRequestLogRoutes);
 // Catch-all mock router MUST be last to avoid shadowing admin routes
-app.use('/', mockRoutes);
+//app.use('/', mockRoutes);
 
-app.use("/endpoints", statefulRoutes);
+app.use("/", statefulRoutes);
 
 module.exports = app;

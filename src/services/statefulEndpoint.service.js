@@ -1,8 +1,13 @@
-const { statelessPool, statefulPool } = require("../config/db");
+// src/services/statefulEndpoint.service.js
+const { dbPool, dbPoolfull } = require("../config/db"); // phải là dbPool và dbPoolfull
 
+/**
+ * Chuyển một endpoint từ stateless sang stateful
+ * @param {number} endpointId - ID của endpoint trong DB stateless
+ */
 async function convertToStateful(endpointId) {
-    const clientStateless = await statelessPool.connect();
-    const clientStateful = await statefulPool.connect();
+    const clientStateless = await dbPool.connect();
+    const clientStateful = await dbPoolfull.connect();
 
     try {
         await clientStateless.query("BEGIN");
@@ -56,6 +61,10 @@ async function convertToStateful(endpointId) {
     }
 }
 
+/**
+ * Sinh default responses dựa trên method của endpoint
+ * @param {object} endpoint - endpoint vừa insert vào stateful
+ */
 async function generateDefaultResponses(endpoint) {
     const { id: endpointId, method } = endpoint;
 
@@ -76,6 +85,8 @@ async function generateDefaultResponses(endpoint) {
             return { message: `No default responses defined for method: ${method}` };
     }
 }
+
+// ------------------- RESPONSES CHO TỪNG METHOD -------------------
 
 // 1. GET
 async function ResponsesForGET(endpointId) {
@@ -169,6 +180,7 @@ async function ResponsesForDELETE(endpointId) {
     return insertResponses(endpointId, responses);
 }
 
+// ------------------- HÀM CHUNG CHÈN RESPONSES -------------------
 /**
  * Insert nhiều response mặc định cho một endpoint trong DB stateful
  * @param {number} endpointId - ID của endpoint_ful
@@ -181,7 +193,7 @@ async function ResponsesForDELETE(endpointId) {
  *    }
  */
 async function insertResponses(endpointId, responses) {
-    const client = await statefulPool.connect();
+    const client = await dbPoolfull.connect();
     try {
         for (const res of responses) {
             await client.query(
@@ -206,6 +218,68 @@ async function insertResponses(endpointId, responses) {
     }
 }
 
+// ------------------- CẬP NHẬT RESPONSE -------------------
+/**
+ * Cập nhật response_body hoặc delay của response stateful
+ * @param {number} responseId - ID của response trong endpoint_responses_ful
+ * @param {object} param1 - { response_body, delay }
+ */
+async function updateEndpointResponse(responseId, { response_body, delay }) {
+    const client = await dbPoolfull.connect();
+    try {
+        // 1. Lấy response theo id
+        const { rows: [response] } = await client.query(
+            `SELECT * FROM endpoint_responses_ful WHERE id = $1`,
+            [responseId]
+        );
+        if (!response) {
+            throw new Error("Response not found");
+        }
+
+        // 2. Rule: GET 200 (all, detail) thì không cho chỉnh
+        if (
+            response.status_code === 200 &&
+            (response.name === "Get All Success" || response.name === "Get Detail Success")
+        ) {
+            throw new Error("This response is not editable.");
+        }
+
+        // 3. Chuẩn bị dữ liệu update
+        const updates = [];
+        const values = [];
+        let idx = 1;
+
+        if (response_body !== undefined) {
+            updates.push(`response_body = $${idx++}`);
+            values.push(JSON.stringify(response_body));
+        }
+
+        if (delay !== undefined) {
+            updates.push(`delay_ms = $${idx++}`);
+            values.push(delay);
+        }
+
+        if (updates.length === 0) {
+            throw new Error("Nothing to update");
+        }
+
+        values.push(responseId);
+
+        // 4. Update DB
+        const { rows: [updated] } = await client.query(
+            `UPDATE endpoint_responses_ful
+             SET ${updates.join(", ")}, updated_at = NOW()
+             WHERE id = $${idx}
+             RETURNING *`,
+            values
+        );
+
+        return updated;
+    } finally {
+        client.release();
+    }
+}
+
 module.exports = {
     convertToStateful,
     generateDefaultResponses,
@@ -214,4 +288,5 @@ module.exports = {
     ResponsesForPOST,
     ResponsesForPUT,
     ResponsesForDELETE,
+    updateEndpointResponse,
 };
