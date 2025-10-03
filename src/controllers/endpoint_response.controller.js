@@ -24,7 +24,7 @@ async function listByEndpointQuery(req, res) {
     const eid = parseInt(endpoint_id, 10);
     if (Number.isNaN(eid)) return error(res, 400, 'endpoint_id must be an integer');
 
-    const rows = await svc.getByEndpointId(eid);
+    const rows = await svc.getByEndpointId(req.db.stateless, eid);
     return success(res, rows);
   } catch (err) {
     return error(res, 400, err.message);
@@ -41,7 +41,7 @@ async function getById(req, res) {
     const rid = parseInt(id, 10);
     if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
-    const row = await svc.getById(rid);
+    const row = await svc.getById(req.db.stateless, rid);
     if (!row) return error(res, 404, 'Response not found');
     return success(res, row);
   } catch (err) {
@@ -57,41 +57,29 @@ async function getById(req, res) {
 //  - Nếu gửi is_default = true → service sẽ unset is_default các response khác cùng endpoint
 async function create(req, res) {
   try {
-    const {
-      endpoint_id,
-      name,
-      status_code,
-      response_body,
-      condition,
-      state_condition,
-      state_updates,
-      is_default,
-      delay_ms
-    } = req.body;
-
-    if (!endpoint_id || typeof status_code === 'undefined') {
+    const { endpoint_id, name, status_code, response_body, condition, is_default, delay_ms } = req.body;
+if (!endpoint_id || typeof status_code === 'undefined') {
       return error(res, 400, 'endpoint_id and status_code are required');
     }
 
+    // Validate name: required and not empty/whitespace-only
     if (typeof name !== 'string' || name.trim().length === 0) {
       return error(res, 400, 'name cannot be empty');
+    
     }
 
     const eid = parseInt(endpoint_id, 10);
     if (Number.isNaN(eid)) return error(res, 400, 'endpoint_id must be an integer');
 
-    const row = await svc.create({
+    const row = await svc.create(req.db.stateless, {
       endpoint_id: eid,
       name: name.trim(),
       status_code,
       response_body: response_body ?? {},
       condition: condition ?? {},
-      state_condition: state_condition ?? {},
-      state_updates: state_updates ?? [],
       is_default: Boolean(is_default),
       delay_ms: typeof delay_ms === 'number' ? delay_ms : 0
     });
-
     return success(res, row);
   } catch (err) {
     return error(res, 400, err.message);
@@ -109,24 +97,15 @@ async function update(req, res) {
     const rid = parseInt(id, 10);
     if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
-    const {
-      name,
-      status_code,
-      response_body,
-      condition,
-      state_condition,
-      state_updates,
-      is_default,
-      delay_ms,
-      proxy_url,
-      proxy_method
-    } = req.body;
+    const { name, status_code, response_body, condition, is_default, delay_ms, proxy_url, proxy_method } = req.body;
+
     // Validate name nếu có
     if (typeof name !== 'undefined') {
       if (typeof name !== 'string' || name.trim().length === 0) {
         return error(res, 400, 'name cannot be empty');
       }
     }
+
     // Validate proxy_method nếu có
     if (typeof proxy_method !== 'undefined' && proxy_method !== null) {
       const allowed = ['GET', 'POST', 'PUT', 'DELETE'];
@@ -134,23 +113,23 @@ async function update(req, res) {
         return error(res, 400, 'proxy_method is invalid');
       }
     }
+
     // Validate proxy_url nếu có
     if (typeof proxy_url !== 'undefined' && proxy_url !== null) {
       if (typeof proxy_url !== 'string' || proxy_url.trim().length === 0) {
         return error(res, 400, 'proxy_url must be a valid string');
       }
+      // Optional: kiểm tra dạng URL cơ bản
       if (!/^https?:\/\//i.test(proxy_url)) {
         return error(res, 400, 'proxy_url must start with http:// or https://');
       }
     }
-    // Optional: kiểm tra dạng URL cơ bản
-    const row = await svc.update(rid, {
+
+    const row = await svc.update(req.db.stateless, rid, {
       name: typeof name === 'undefined' ? undefined : name.trim(),
       status_code,
       response_body,
       condition,
-      state_condition,
-      state_updates,
       is_default: typeof is_default === 'undefined' ? undefined : Boolean(is_default),
       delay_ms: typeof delay_ms === 'undefined' ? undefined : parseInt(delay_ms, 10),
       proxy_url: typeof proxy_url === 'undefined' ? undefined : proxy_url,
@@ -162,14 +141,6 @@ async function update(req, res) {
     return error(res, 400, err.message);
   }
 }
-
-module.exports = {
-  listByEndpointQuery,
-  getById,
-  create,
-  update
-};
-
 // [PUT] /endpoint_responses/priority
 // Cập nhật priority theo danh sách item
 // Body: Array<{ id, endpoint_id, priority }>
@@ -182,8 +153,8 @@ async function updatePriorities(req, res) {
     const headersReq = req.headers || {};
     const bodyReq = req.body || {};
 
-    // Ghi LOG cả khi lỗi 400: payload không đúng định dạng
-    // Mục tiêu: vẫn lưu lại request sai định dạng vào bảng log để dễ truy vết
+  // Ghi LOG cả khi lỗi 400: payload không đúng định dạng
+  // Mục tiêu: vẫn lưu lại request sai định dạng vào bảng log để dễ truy vết
     if (!Array.isArray(items)) {
       const message = 'Payload must be an array of items {id, endpoint_id, priority}';
       try {
@@ -195,9 +166,9 @@ async function updatePriorities(req, res) {
           if (!Number.isNaN(eid)) {
             endpoint_id = eid;
             try {
-              const ep = await endpointSvc.getEndpointById(eid);
+              const ep = await endpointSvc.getEndpointById(req.db.stateless, eid);
               project_id = ep?.project_id ?? null;
-            } catch (_) { }
+            } catch (_) {}
           }
         }
         await logSvc.insertLog({
@@ -213,11 +184,11 @@ async function updatePriorities(req, res) {
           ip_address: ip,
           latency_ms: 0,
         });
-      } catch (_) { }
+      } catch (_) {}
       return error(res, 400, message);
     }
-    // Basic validation
-    // Nếu từng item thiếu trường bắt buộc → trả lỗi 400 và vẫn GHI LOG kèm bad_item để debug
+  // Basic validation
+  // Nếu từng item thiếu trường bắt buộc → trả lỗi 400 và vẫn GHI LOG kèm bad_item để debug
     for (const it of items) {
       if (!it || typeof it.id === 'undefined' || typeof it.endpoint_id === 'undefined' || typeof it.priority === 'undefined') {
         const message = 'Each item must include id, endpoint_id, and priority';
@@ -230,7 +201,7 @@ async function updatePriorities(req, res) {
             try {
               const ep = await endpointSvc.getEndpointById(eid);
               project_id = ep?.project_id ?? null;
-            } catch (_) { }
+            } catch (_) {}
           }
           await logSvc.insertLog({
             project_id,
@@ -245,18 +216,18 @@ async function updatePriorities(req, res) {
             ip_address: ip,
             latency_ms: 0,
           });
-        } catch (_) { }
+        } catch (_) {}
         return error(res, 400, message);
       }
     }
-    const result = await svc.updatePriorities(items.map((it) => ({
+    const result = await svc.updatePriorities(req.db.stateless, items.map((it) => ({
       id: parseInt(it.id, 10),
       endpoint_id: parseInt(it.endpoint_id, 10),
       priority: parseInt(it.priority, 10)
     })));
 
-    // Ghi LOG: ghi theo DANH SÁCH ĐẦU VÀO để luôn có log kể cả khi không update được bản ghi nào
-    // Mỗi phần tử trong payload → 1 dòng log tương ứng (array to many rows)
+  // Ghi LOG: ghi theo DANH SÁCH ĐẦU VÀO để luôn có log kể cả khi không update được bản ghi nào
+  // Mỗi phần tử trong payload → 1 dòng log tương ứng (array to many rows)
     try {
       const urlPath = req.originalUrl || req.path || '';
       const ip = getClientIp(req);
@@ -264,8 +235,8 @@ async function updatePriorities(req, res) {
       const bodyReq = req.body || {};
       const status = 200;
 
-      // Tạo map kết quả theo id để gắn kèm vào log (nếu có)
-      // Nếu không có bản ghi update tương ứng → responseBody sẽ có updated:false
+  // Tạo map kết quả theo id để gắn kèm vào log (nếu có)
+  // Nếu không có bản ghi update tương ứng → responseBody sẽ có updated:false
       const resById = new Map();
       for (const r of result) {
         if (r && typeof r.id !== 'undefined') resById.set(Number(r.id), r);
@@ -274,7 +245,7 @@ async function updatePriorities(req, res) {
       // Cache project_id theo endpoint_id để giảm query
       const projectCache = new Map();
 
-      // Duyệt THEO items (payload đầu vào) để đảm bảo luôn có ghi log kể cả khi update 0 bản ghi
+  // Duyệt THEO items (payload đầu vào) để đảm bảo luôn có ghi log kể cả khi update 0 bản ghi
       const tasks = items.map(async (item) => {
         const endpoint_id = parseInt(item.endpoint_id, 10);
         let project_id = null;
@@ -282,10 +253,10 @@ async function updatePriorities(req, res) {
           project_id = projectCache.get(endpoint_id);
         } else {
           try {
-            const ep = await endpointSvc.getEndpointById(endpoint_id);
+            const ep = await endpointSvc.getEndpointById(req.db.stateless, endpoint_id);
             project_id = ep?.project_id ?? null;
             projectCache.set(endpoint_id, project_id);
-          } catch (_) { }
+          } catch (_) {}
         }
         const updatedRow = resById.get(Number(item.id));
         const responseBody = updatedRow || { id: Number(item.id), endpoint_id: Number(item.endpoint_id), priority: Number(item.priority), updated: false };
@@ -346,25 +317,25 @@ async function remove(req, res) {
     let endpoint_id = null;
     let project_id = null;
     try {
-      const existing = await svc.getById(rid);
+      const existing = await svc.getById(req.db.stateless, rid);
       if (existing?.endpoint_id) {
         endpoint_id = existing.endpoint_id;
         try {
-          const ep = await endpointSvc.getEndpointById(endpoint_id);
+          const ep = await endpointSvc.getEndpointById(req.db.stateless, endpoint_id);
           project_id = ep?.project_id ?? null;
-        } catch (_) { }
+        } catch (_) {}
       }
-    } catch (_) { }
+    } catch (_) {}
 
     // Bước 1: NULL hoá tham chiếu trong bảng log để tránh FK
     try {
       if (rid) {
         await logSvc.nullifyEndpointResponseRef(rid);
       }
-    } catch (_) { }
+    } catch (_) {}
 
     // Bước 2: Xóa bản ghi endpoint_response
-    await svc.remove(rid);
+    await svc.remove(req.db.stateless, rid);
 
     const finished = Date.now();
     // Bước 3: Ghi 1 dòng log cho hành vi DELETE (endpoint_response_id = NULL để không bị FK)
@@ -382,7 +353,7 @@ async function remove(req, res) {
         ip_address: ip,
         latency_ms: finished - started,
       });
-    } catch (_) { }
+    } catch (_) {}
 
     return success(res, { deleted_id: rid });
   } catch (err) {
@@ -399,7 +370,7 @@ async function setDefault(req, res) {
     const rid = parseInt(id, 10);
     if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
-    const rows = await svc.setDefault(rid);
+    const rows = await svc.setDefault(req.db.stateless, rid);
     return success(res, rows);
   } catch (err) {
     return error(res, 400, err.message);
