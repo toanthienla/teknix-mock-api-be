@@ -1,6 +1,7 @@
 // db.js
-const { Pool } = require('pg');
-require('dotenv').config();
+const { Pool } = require('pg');  // 1. import pg
+const path = require('path');    // 2. import path
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 // Pool 1: Kết nối đến DB STATELESS (bảng chỉ dẫn)
 const statelessPool = new Pool({
@@ -26,7 +27,7 @@ const checkConnections = async () => {
         await statelessPool.query('SELECT NOW()');
         console.log('✅ Kết nối đến Stateless DB thành công!');
         await statefulPool.query('SELECT NOW()');
-        console.log('✅ Kết nối đến Stateful DB thành công!');
+        console.log('✅ Kết nối đến Statefull DB thành công!');
     } catch (error) {
         console.error('❌ Lỗi khi kiểm tra kết nối database:', error);
         throw error; // Ném lỗi để server có thể bắt và dừng lại

@@ -48,3 +48,7 @@ dist/
 *.tar
 *.gz
 *.zip
+
+# Local database config (ignore personal DB settings)
+src/config/db.js
+src/config/*.local.js

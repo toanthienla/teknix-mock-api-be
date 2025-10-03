@@ -14,6 +14,9 @@ const projectRequestLogRoutes = require('./routes/project_request_log.routes');
 const mockRoutes = require('./routes/mock.routes');
 const adminResponseLogger = require('./middlewares/adminResponseLogger');
 
+//import statefull chuyển đổi từ stateless -> statefull
+const statefulRoutes = require("./routes/statefulEndpoint.routes");
+
 // Import DB pools
 const { statelessPool, statefulPool } = require('./config/db'); 
 
@@ -38,5 +41,7 @@ app.use('/', endpointResponseRoutes);
 app.use('/', projectRequestLogRoutes);
 // Catch-all mock router MUST be last to avoid shadowing admin routes
 app.use('/', mockRoutes);
+
+app.use("/endpoints", statefulRoutes);
 
 module.exports = app;
