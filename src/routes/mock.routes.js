@@ -25,6 +25,7 @@ const https = require("https");
 const { logRequest } = require("../services/log.service");
 const endpointService = require("../services/endpoint.service");
 const endpointResponseService = require("../services/endpoint_response.service");
+const logSvc = require("../services/project_request_log.service");
 // Bộ so khớp path-to-regexp có cache đơn giản để tránh tạo lại matcher nhiều lần
 // key: pattern string, value: match function
 const matcherCache = new Map();
@@ -404,17 +405,16 @@ router.use(async (req, res, next) => {
         try {
           const ip = getClientIp(req);
           await logSvc.insertLog(req.db.stateless, {
-            folderId: ep.folder_id || null,
-            endpointId: ep.id,
-            endpointResponseId: r.id || null,
-            method,
-            path: req.path,
-            headers: req.headers || {},
-            body: req.body || {},
-            statusCode: status,
-            responseBody: body,
-            ip,
-            latencyMs: finished - started,
+            folder_id: ep.folder_id || null,
+            endpoint_id: ep.id,
+            endpoint_response_id: r.id || null,
+            request_method: method, // <-- Đã sửa
+            request_path: req.path, // <-- Đã sửa
+            request_headers: req.headers || {}, // <-- Đã sửa
+            request_body: req.body || {}, // <-- Đã sửa
+            response_status_code: status, // <-- Đã sửa
+            response_body: body, // <-- Đã sửa
+            ip_address: ip, // <-- Đã sửa
           });
         } catch (e) {
           if (process.env.NODE_ENV !== "production") {

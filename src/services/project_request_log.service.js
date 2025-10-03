@@ -192,28 +192,50 @@ async function nullifyProjectTree(dbPool, projectId) {
 }
 
 // Lấy danh sách log theo filter (bắt buộc project_id; còn lại tùy chọn)
-async function listLogs(dbPool, { folder_id, endpoint_id, method, path, status_code, from, to, limit = 100, offset = 0 }) {
-  const conds = ['folder_id = $1'];
-  const params = [folder_id];
-  let idx = params.length;
+async function listLogs(dbPool, { project_id, folder_id, endpoint_id, method, path, status_code, from, to, limit = 100, offset = 0 }) {
+  // Khởi tạo query và các mảng điều kiện, tham số
+  let query = 'SELECT l.* FROM project_request_logs l';
+  const conds = [];
+  const params = [];
+  let idx = 0;
 
-  if (endpoint_id) { idx += 1; conds.push(`endpoint_id = $${idx}`); params.push(endpoint_id); }
-  if (method) { idx += 1; conds.push(`UPPER(request_method) = UPPER($${idx})`); params.push(method); }
-  if (path) { idx += 1; conds.push(`request_path ILIKE $${idx}`); params.push(`%${path}%`); }
-  if (status_code) { idx += 1; conds.push(`response_status_code = $${idx}`); params.push(status_code); }
-  if (from) { idx += 1; conds.push(`created_at >= $${idx}`); params.push(from); }
-  if (to) { idx += 1; conds.push(`created_at <= $${idx}`); params.push(to); }
+  // Nếu có project_id, chúng ta cần JOIN với bảng folders
+  if (project_id) {
+    query += ' JOIN folders f ON l.folder_id = f.id';
+    idx += 1;
+    conds.push(`f.project_id = $${idx}`);
+    params.push(project_id);
+  
+  // Ngược lại, nếu có folder_id thì lọc trực tiếp
+  } else if (folder_id) {
+    idx += 1;
+    conds.push(`l.folder_id = $${idx}`);
+    params.push(folder_id);
+  }
 
+  // Thêm các điều kiện lọc khác một cách linh hoạt
+  if (endpoint_id) { idx += 1; conds.push(`l.endpoint_id = $${idx}`); params.push(endpoint_id); }
+  if (method) { idx += 1; conds.push(`UPPER(l.request_method) = UPPER($${idx})`); params.push(method); }
+  if (path) { idx += 1; conds.push(`l.request_path ILIKE $${idx}`); params.push(`%${path}%`); }
+  if (status_code) { idx += 1; conds.push(`l.response_status_code = $${idx}`); params.push(status_code); }
+  if (from) { idx += 1; conds.push(`l.created_at >= $${idx}`); params.push(from); }
+  if (to) { idx += 1; conds.push(`l.created_at <= $${idx}`); params.push(to); }
+
+  // Gắn các điều kiện vào câu query chính
+  if (conds.length > 0) {
+    query += ` WHERE ${conds.join(' AND ')}`;
+  }
+  
+  // Thêm ORDER BY, LIMIT, OFFSET
+  query += ` ORDER BY l.created_at DESC`;
+  
   idx += 1; params.push(limit);
+  query += ` LIMIT $${idx}`;
+  
   idx += 1; params.push(offset);
+  query += ` OFFSET $${idx}`;
 
-  const { rows } = await dbPool.query(
-    `SELECT * FROM project_request_logs
-     WHERE ${conds.join(' AND ')}
-     ORDER BY created_at DESC
-     LIMIT $${idx - 1} OFFSET $${idx}`,
-    params
-  );
+  const { rows } = await dbPool.query(query, params);
   return rows;
 }
 
