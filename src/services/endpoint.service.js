@@ -1,8 +1,8 @@
 //const db = require("../config/db");
 const endpointResponseService = require("./endpoint_response.service"); // import service response
 
-// Get all endpoints (filter by project_id OR folder_id)
-async function getEndpoints(dbPool, { project_id, folder_id }) {
+// Get all endpoints (optionally filter by project_id OR folder_id)
+async function getEndpoints(dbPool, { project_id, folder_id } = {}) {
   // Chọn tất cả các cột từ bảng endpoints
   let query = `
     SELECT e.id, e.folder_id, e.name, e.method, e.path, e.is_active, e.is_stateful, e.created_at, e.updated_at 
@@ -11,21 +11,22 @@ async function getEndpoints(dbPool, { project_id, folder_id }) {
   const params = [];
   let paramIndex = 1;
 
-  // Nếu có project_id, chúng ta JOIN với bảng folders
+  // Nếu có project_id, chúng ta JOIN với bảng folders để lọc
   if (project_id) {
     query += ` JOIN folders f ON e.folder_id = f.id WHERE f.project_id = $${paramIndex++}`;
     params.push(project_id);
 
-    // Nếu không có project_id nhưng có folder_id, chúng ta lọc trực tiếp
+  // Nếu không có project_id nhưng có folder_id, lọc trực tiếp
   } else if (folder_id) {
     query += ` WHERE e.folder_id = $${paramIndex++}`;
     params.push(folder_id);
   }
+  // Nếu không có cả hai, không thêm điều kiện nào, trả về tất cả
 
   query += " ORDER BY e.created_at DESC";
 
   const { rows } = await dbPool.query(query, params);
-  return rows;
+  return { success: true, data: rows };
 }
 
 // Get endpoint by id

@@ -1,15 +1,22 @@
-// src/services/folder.service.js
-const logSvc = require('./project_request_log.service'); // Giả định service log tồn tại
+const logSvc = require('./project_request_log.service');
 
-// Get all folders by project_id
+// Get all folders (optionally filter by project_id)
 async function getFolders(db, project_id) {
-  const { rows } = await db.query(
-    `SELECT id, project_id, name, description, created_at, updated_at
-     FROM folders
-     WHERE project_id = $1
-     ORDER BY id ASC`,
-    [project_id]
-  );
+  let query = `
+    SELECT id, project_id, name, description, created_at, updated_at
+    FROM folders
+  `;
+  const params = [];
+
+  // Nếu có project_id, thêm điều kiện WHERE để lọc
+  if (project_id) {
+    query += ' WHERE project_id = $1';
+    params.push(project_id);
+  }
+
+  query += ' ORDER BY id ASC';
+
+  const { rows } = await db.query(query, params);
   return { success: true, data: rows };
 }
 

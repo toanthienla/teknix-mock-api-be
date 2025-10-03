@@ -1,18 +1,12 @@
 const svc = require("../services/endpoint.service");
 const { success, error } = require("../utils/response");
 
-// Lấy danh sách endpoints theo project_id hoặc folder_id
+// Lấy danh sách endpoints (có thể lọc theo project_id hoặc folder_id)
 async function listEndpoints(req, res) {
   try {
     const { project_id, folder_id } = req.query;
-
-    // 1. Kiểm tra xem có ít nhất một tham số được cung cấp không
-    if (!project_id && !folder_id) {
-      return error(res, 400, 'Query parameter project_id or folder_id is required');
-    }
-
-    // 2. Tạo object filters để truyền vào service, đồng thời validate dữ liệu
     const filters = {};
+
     if (project_id) {
       const id = parseInt(project_id, 10);
       if (Number.isNaN(id)) {
@@ -29,10 +23,10 @@ async function listEndpoints(req, res) {
       filters.folder_id = id;
     }
 
-    // 3. Gọi service với đúng cấu trúc tham số là một object
-    const endpoints = await svc.getEndpoints(req.db.stateless, filters);
+    // Gọi service với filters (có thể là object rỗng)
+    const result = await svc.getEndpoints(req.db.stateless, filters);
     
-    return success(res, endpoints);
+    return success(res, result.data);
 
   } catch (err) {
     // 4. Lỗi server không mong muốn nên trả về status 500
