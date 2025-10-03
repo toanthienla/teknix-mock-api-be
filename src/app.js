@@ -13,6 +13,8 @@ const folderRoutes = require('./routes/folder.routes');
 const projectRequestLogRoutes = require('./routes/project_request_log.routes');
 const mockRoutes = require('./routes/mock.routes');
 const adminResponseLogger = require('./middlewares/adminResponseLogger');
+//stateful
+const statefulRoutes = require('./routes/stateful.routes'); 
 
 // Import DB pools
 const { statelessPool, statefulPool } = require('./config/db'); 
@@ -31,7 +33,10 @@ app.use((req, res, next) => {
 app.use('/workspaces', workspaceRoutes);
 app.use('/projects', projectRoutes);
 app.use('/endpoints', endpointRoutes);
-app.use('/folders', folderRoutes); // (Số nhiều)
+app.use('/folders', folderRoutes); 
+
+// MOUNT STATEFUL ROUTES
+app.use('/stateful-data', statefulRoutes);
 
 app.use('/', endpointResponseRoutes);
 // Mount logs route TRƯỚC router mock catch-all để không bị nuốt
