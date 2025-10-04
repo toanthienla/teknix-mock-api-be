@@ -36,7 +36,7 @@ app.use('/endpoints', endpointRoutes);
 app.use('/folders', folderRoutes); 
 
 // MOUNT STATEFUL ROUTES
-app.use('/stateful-data', statefulRoutes);
+app.use('/', statefulRoutes);
 
 app.use('/', endpointResponseRoutes);
 // Mount logs route TRƯỚC router mock catch-all để không bị nuốt

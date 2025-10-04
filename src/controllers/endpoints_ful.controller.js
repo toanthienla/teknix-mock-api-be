@@ -44,8 +44,8 @@ async function deleteEndpointById(req, res) {
 async function convertToStateful(req, res) {
   const { id } = req.params;
   try {
-    // Sửa lỗi: Dùng biến EndpointStatefulService đã được khai báo ở trên
-    const result = await EndpointStatefulService.convertToStateful(id); 
+    // Dòng này bây giờ đã ĐÚNG vì service đã được cấu trúc lại
+    const result = await EndpointStatefulService.convertToStateful(req.db.stateless, req.db.stateful, id);
     return res.status(200).json({
       message: "Endpoint converted to stateful successfully",
       data: result,
@@ -56,14 +56,15 @@ async function convertToStateful(req, res) {
   }
 };
 
+
 async function updateEndpointResponse(req, res) {
   try {
     const { id } = req.params;
     const response_body = req.body.response_body ?? req.body.responseBody;
     const delay = req.body.delay ?? req.body.delay_ms;
 
-    // Sửa lỗi: Dùng biến EndpointStatefulService đã được khai báo ở trên
-    const updated = await EndpointStatefulService.updateEndpointResponse(id, { response_body, delay });
+    // SỬA: Truyền dbStateful vào service
+    const updated = await EndpointStatefulService.updateEndpointResponse(req.db.stateful, id, { response_body, delay });
 
     return res.status(200).json({
       message: "Response updated successfully",
@@ -72,6 +73,8 @@ async function updateEndpointResponse(req, res) {
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
+
+  
 };
 
 // --- Export tất cả các hàm ra ngoài tại một nơi duy nhất ---

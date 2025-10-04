@@ -25,5 +25,8 @@ router.delete('/endpoint_responses/:id', responseController.deleteResponseById);
 router.get('/endpoint_data', dataController.getDataByPath);
 router.delete('/endpoint_data', dataController.deleteDataByPath);
 
+router.put("/endpoint_data", dataController.updateEndpointData);
+
+router.put("/endpoint_data/set_default", dataController.setDefaultEndpointData);
 
 module.exports = router;
