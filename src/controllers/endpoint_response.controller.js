@@ -5,6 +5,7 @@
 const svc = require('../services/endpoint_response.service');
 const endpointSvc = require('../services/endpoint.service');
 const { success, error } = require('../utils/response');
+const statefulSvc = require('../services/endpoint_responses_ful.service');
 
 // Helper lấy IP client (ưu tiên x-forwarded-for)
 function getClientIp(req) {
@@ -41,9 +42,22 @@ async function getById(req, res) {
     const rid = parseInt(id, 10);
     if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
-    const row = await svc.getById(req.db.stateless, rid);
-    if (!row) return error(res, 404, 'Response not found');
-    return success(res, row);
+    // Bước 1: Lấy dữ liệu stateless
+    const statelessResponse = await svc.getById(req.db.stateless, rid);
+    if (!statelessResponse) return error(res, 404, 'Response not found');
+
+    // Bước 2: Kiểm tra cờ is_stateful (giả định bạn sẽ thêm cột này vào bảng endpoint_responses)
+    // Nếu chưa có, bạn cần thêm cột is_stateful: BOOLEAN vào bảng endpoint_responses
+    if (statelessResponse.is_stateful === true) {
+        const statefulResponse = await statefulSvc.findByOriginId(statelessResponse.id);
+        if (!statefulResponse) {
+            return error(res, 404, `Stateful data for response ${rid} not found.`);
+        }
+        return success(res, { ...statefulResponse, is_stateful: true });
+    }
+    
+    // Bước 3: Trả về dữ liệu stateless
+    return success(res, statelessResponse);
   } catch (err) {
     return error(res, 400, err.message);
   }

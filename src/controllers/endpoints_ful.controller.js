@@ -1,4 +1,3 @@
-// src/controllers/endpoints_ful.controller.js
 const EndpointStatefulService = require("../services/endpoints_ful.service");
 
 exports.listEndpoints = async (req, res) => {
@@ -14,7 +13,6 @@ exports.listEndpoints = async (req, res) => {
   res.status(200).json(result);
 };
 
-// đường dẫn phụ để test
 exports.getEndpointById = async (req, res) => {
   const { id } = req.params;
 
@@ -23,16 +21,12 @@ exports.getEndpointById = async (req, res) => {
 
   if (!endpointDetail) {
     return res.status(404).json({ error: "Không tìm thấy stateful endpoint." });
-  };
+  }
 
   res.status(200).json(endpointDetail);
-
-
 };
 
-
-  //  Xóa một stateful endpoint
-  exports.deleteEndpointById = async (req, res) => {
+exports.deleteEndpointById = async (req, res) => {
     try {
         const { id } = req.params;
         const result = await EndpointStatefulService.deleteById(parseInt(id, 10));
