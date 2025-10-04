@@ -1,5 +1,6 @@
 const svc = require("../services/endpoint.service");
 const { success, error } = require("../utils/response");
+const statefulSvc = require("../services/endpoints_ful.service");
 
 // Lấy danh sách endpoints (có thể lọc theo project_id hoặc folder_id)
 async function listEndpoints(req, res) {
@@ -23,13 +24,37 @@ async function listEndpoints(req, res) {
       filters.folder_id = id;
     }
 
-    // Gọi service với filters (có thể là object rỗng)
+    // Bước 1: Lấy danh sách stateless như bình thường
     const result = await svc.getEndpoints(req.db.stateless, filters);
-    
-    return success(res, result.data);
+    let endpoints = result.data;
 
+    // Bước 2: Tìm các ID của endpoint cần lấy dữ liệu stateful
+    const statefulIds = endpoints
+        .filter(ep => ep.is_stateful === true)
+        .map(ep => ep.id);
+
+    // Bước 3: Nếu có, lấy tất cả dữ liệu stateful trong MỘT lần gọi
+    if (statefulIds.length > 0) {
+        const { rows: statefulEndpoints } = await req.db.stateful.query(
+            `SELECT * FROM endpoints_ful WHERE origin_id = ANY($1::int[])`,
+            [statefulIds]
+        );
+        
+        // Tạo một map để tra cứu nhanh
+        const statefulMap = new Map(statefulEndpoints.map(sep => [sep.origin_id, sep]));
+        
+        // Bước 4: Hợp nhất dữ liệu
+        endpoints = endpoints.map(ep => {
+            if (ep.is_stateful === true && statefulMap.has(ep.id)) {
+                // Thay thế bản ghi stateless bằng bản ghi stateful
+                return { ...statefulMap.get(ep.id), is_stateful: true };
+            }
+            return ep;
+        });
+    }
+    
+    return success(res, endpoints);
   } catch (err) {
-    // 4. Lỗi server không mong muốn nên trả về status 500
     return error(res, 500, err.message);
   }
 }
@@ -38,19 +63,28 @@ async function listEndpoints(req, res) {
 async function getEndpointById(req, res) {
   try {
     const { id } = req.params;
-    const endpoint = await svc.getEndpointById(req.db.stateless, id);
-    if (!endpoint) {
-      return res.status(404).json({
-        success: false,
-        errors: [{ field: 'id', message: 'Endpoint not found' }]
-      });
+
+    // Bước 1: Luôn lấy dữ liệu từ stateless trước
+    const statelessEndpoint = await svc.getEndpointById(req.db.stateless, id);
+
+    if (!statelessEndpoint) {
+      return error(res, 404, 'Endpoint not found');
     }
-    return success(res, endpoint);
+
+    // Bước 2: Kiểm tra cờ is_stateful
+    if (statelessEndpoint.is_stateful === true) {
+      // Nếu true, tìm bản ghi stateful tương ứng bằng origin_id
+      const statefulEndpoint = await statefulSvc.findByOriginId(statelessEndpoint.id);
+      if (!statefulEndpoint) {
+          return error(res, 404, `Stateful data for endpoint ${id} not found, but it is marked as stateful.`);
+      }
+      return success(res, statefulEndpoint);
+    }
+
+    // Bước 3: Nếu không, trả về dữ liệu stateless như bình thường
+    return success(res, statelessEndpoint);
   } catch (err) {
-    return res.status(500).json({
-      success: false,
-      errors: [{ field: 'general', message: err.message }]
-    });
+    return error(res, 500, err.message);
   }
 }
 

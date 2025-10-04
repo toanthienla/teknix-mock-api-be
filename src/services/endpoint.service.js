@@ -197,15 +197,25 @@ async function updateEndpoint(
 
 // Delete endpoint
 async function deleteEndpoint(dbPool, endpointId) {
-  const { rows: currentRows } = await dbPool.query(
-    "SELECT * FROM endpoints WHERE id=$1",
-    [endpointId]
-  );
-  const current = currentRows[0];
-  if (!current) return null;
+  // Lấy thông tin endpoint để kiểm tra is_stateful
+  const endpoint = await getEndpointById(dbPool, endpointId);
+  if (!endpoint) return null;
 
+  // Nếu là stateful, gọi service xóa của stateful
+  if (endpoint.is_stateful === true) {
+    // Tìm stateful endpoint bằng origin_id
+    const statefulEndpoint = await statefulEndpointSvc.findByOriginId(endpoint.id);
+    if (statefulEndpoint) {
+      await statefulEndpointSvc.deleteById(statefulEndpoint.id);
+    }
+  }
+
+  // Luôn thực hiện xóa cho stateless (xóa bản ghi gốc)
+  // Logic cũ để null hóa log và xóa vẫn được giữ lại
+  await logSvc.nullifyEndpointAndResponses(dbPool, endpointId);
   await dbPool.query("DELETE FROM endpoints WHERE id=$1", [endpointId]);
-  return { success: true, data: current };
+  
+  return { success: true, data: endpoint };
 }
 
 module.exports = {

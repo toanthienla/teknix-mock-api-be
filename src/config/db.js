@@ -1,6 +1,7 @@
 // db.js
 const { Pool } = require('pg');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 // Pool 1: Kết nối đến DB STATELESS (bảng chỉ dẫn)
 const statelessPool = new Pool({

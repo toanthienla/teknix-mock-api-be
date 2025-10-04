@@ -11,14 +11,24 @@ const matcherCache = new Map();
 function getMatcher(pattern) {
   let fn = matcherCache.get(pattern);
   if (!fn) {
-    fn = match(pattern, { decode: decodeURIComponent, strict: true, end: true });
+    fn = match(pattern, {
+      decode: decodeURIComponent,
+      strict: true,
+      end: true,
+    });
     matcherCache.set(pattern, fn);
   }
   return fn;
 }
 
 function getClientIp(req) {
-  const raw = (req.headers["x-forwarded-for"] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || "").toString();
+  const raw = (
+    req.headers["x-forwarded-for"] ||
+    req.connection?.remoteAddress ||
+    req.socket?.remoteAddress ||
+    req.ip ||
+    ""
+  ).toString();
   const first = raw.split(",")[0].trim();
   return first.substring(0, 45);
 }
@@ -38,10 +48,11 @@ function getByPath(obj, path) {
 }
 
 function renderTemplate(value, ctx) {
-  const replaceInString = (str) => str.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, vpath) => {
-    const v = getByPath(ctx, vpath);
-    return v == null ? "" : String(v);
-  });
+  const replaceInString = (str) =>
+    str.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, vpath) => {
+      const v = getByPath(ctx, vpath);
+      return v == null ? "" : String(v);
+    });
   if (typeof value === "string") return replaceInString(value);
   if (Array.isArray(value)) return value.map((v) => renderTemplate(v, ctx));
   if (value && typeof value === "object") {
@@ -58,7 +69,7 @@ router.use(async (req, res, next) => {
   const started = Date.now();
   try {
     const method = req.method.toUpperCase();
-    
+
     const { rows: endpoints } = await req.db.stateless.query(
       `SELECT e.id, e.method, e.path, e.folder_id, e.is_stateful, f.project_id
        FROM endpoints e
@@ -78,15 +89,159 @@ router.use(async (req, res, next) => {
 
     if (!ep) return next();
 
-    if (ep.is_stateful) {
-      // Logic cho stateful endpoints 
-      const { rows: dataRows } = await req.db.stateful.query("SELECT data_current FROM endpoint_data WHERE path = $1", [ep.path]);
-      if (dataRows.length === 0) {
-        return res.status(404).json({ error: `Stateful data for path '${ep.path}' not found.` });
+    // Helper function để validate dữ liệu dựa trên schema
+    const validateSchema = (schema, data) => {
+      const errors = [];
+      if (!schema || typeof schema !== "object") {
+        return errors; // Bỏ qua nếu không có schema
       }
-      return res.status(200).json(dataRows[0].data_current);
-    } 
-    
+
+      for (const key in schema) {
+        const rule = schema[key];
+        const value = data[key];
+
+        // 1. Kiểm tra trường bắt buộc
+        if (rule.required && typeof value === "undefined") {
+          errors.push(`Field '${key}' is required.`);
+          continue; // Bỏ qua các kiểm tra khác nếu thiếu
+        }
+
+        // 2. Kiểm tra kiểu dữ liệu (nếu trường đó tồn tại)
+        if (typeof value !== "undefined") {
+          const expectedType = rule.type.toLowerCase();
+          const actualType = Array.isArray(value) ? "array" : typeof value;
+
+          if (actualType !== expectedType) {
+            errors.push(
+              `Field '${key}' must be of type '${expectedType}', but received '${actualType}'.`
+            );
+          }
+        }
+      }
+      return errors;
+    };
+    if (ep.is_stateful) {
+      // ===== BẮT ĐẦU KHỐI LOGIC STATEFUL MỚI =====
+
+      // 1. Lấy dữ liệu stateful từ CSDL
+      const { rows: dataRows } = await req.db.stateful.query(
+        "SELECT id, data_current, schema FROM endpoint_data_ful WHERE path = $1 LIMIT 1",
+        [ep.path]
+      );
+
+      if (dataRows.length === 0) {
+        return res
+          .status(404)
+          .json({ error: `Stateful data for path '${ep.path}' not found.` });
+      }
+
+      const statefulData = dataRows[0];
+      const currentData = statefulData.data_current || []; // Mặc định là mảng rỗng
+
+      const method = req.method.toUpperCase();
+      const matchFn = getMatcher(ep.path);
+      const matchRes = matchFn(req.path);
+      const params = (matchRes && matchRes.params) || {};
+
+      switch (method) {
+        case "GET": {
+          // Xử lý GET: Lấy tất cả hoặc lấy theo ID
+          if (params.id) {
+            // Tìm item theo id trong params
+            const item = currentData.find(
+              (d) => String(d.id) === String(params.id)
+            );
+            if (item) {
+              return res.status(200).json(item);
+            } else {
+              // TODO: Có thể tìm response "Get Detail Not Found" để trả về
+              return res.status(404).json({ message: "Resource not found." });
+            }
+          } else {
+            // Trả về toàn bộ danh sách
+            return res.status(200).json(currentData);
+          }
+        }
+
+        case "POST": {
+          // Xử lý POST: Thêm mới dữ liệu
+          const newItem = req.body;
+          const schema = statefulData.schema;
+
+          // ===== BƯỚC 1: VALIDATE SCHEMA (Thêm vào) =====
+          const validationErrors = validateSchema(schema, newItem);
+          if (validationErrors.length > 0) {
+            const errResponse = (
+              await req.db.stateful.query(
+                `SELECT status_code, response_body FROM endpoint_responses_ful WHERE endpoint_id = $1 AND name = 'Schema Invalid' LIMIT 1`,
+                [ep.id]
+              )
+            ).rows[0] || {
+              status_code: 400,
+              response_body: { error: "Schema validation failed" },
+            };
+
+            return res
+              .status(errResponse.status_code)
+              .json({
+                ...errResponse.response_body,
+                details: validationErrors,
+              });
+          }
+
+       // ===== BƯỚC 2: KIỂM TRA ID VÀ TẠO MỚI =====
+    if (typeof newItem.id !== 'undefined') {
+        const idExists = currentData.some(item => String(item.id) === String(newItem.id));
+        if (idExists) {
+            const errResponse = (await req.db.stateful.query(
+                `SELECT status_code, response_body FROM endpoint_responses_ful WHERE endpoint_id = $1 AND name = 'ID Conflict' LIMIT 1`,
+                [ep.id]
+            )).rows[0] || { status_code: 409, response_body: { error: `Conflict: An item with id '${newItem.id}' already exists.` } };
+            
+            return res.status(errResponse.status_code).json(errResponse.response_body);
+        }
+    } else {
+        const maxId = currentData.reduce((max, item) => (item.id > max ? item.id : max), 0);
+        newItem.id = maxId + 1;
+    }
+
+
+          const newData = [...currentData, newItem];
+          // Cập nhật lại CSDL
+          await req.db.stateful.query(
+            `UPDATE endpoint_data_ful SET data_current = $1, updated_at = NOW() WHERE path = $2`,
+            [JSON.stringify(newData), ep.path]
+          );  
+
+          // TODO: Có thể tìm response "Create Success" để trả về status_code và body động
+          return res.status(201).json(newItem);
+        }
+
+        case "PUT": {
+          // TODO: Logic cho PUT (cập nhật) sẽ được thêm ở đây
+          return res
+            .status(501)
+            .json({ message: "PUT method not implemented yet." });
+        }
+
+        case "DELETE": {
+          // TODO: Logic cho DELETE (xóa) sẽ được thêm ở đây
+          return res
+            .status(501)
+            .json({ message: "DELETE method not implemented yet." });
+        }
+
+        default: {
+          return res
+            .status(405)
+            .json({
+              error: `Method ${method} not allowed for this stateful endpoint.`,
+            });
+        }
+      }
+      // ===== KẾT THÚC KHỐI LOGIC STATEFUL MỚI =====
+    }
+
     // Logic cho stateless endpoints
     const matchFn = getMatcher(ep.path);
     const matchRes = matchFn(req.path);
@@ -102,9 +257,15 @@ router.use(async (req, res, next) => {
 
     if (responses.length === 0) {
       const status = req.method.toUpperCase() === "GET" ? 200 : 501;
-      const body = req.method.toUpperCase() === "GET" ? (hasParams ? {} : []) : { error: { message: "No response configured" } };
-      
-      await logSvc.insertLog(req.db.stateless, { // SỬA Ở ĐÂY
+      const body =
+        req.method.toUpperCase() === "GET"
+          ? hasParams
+            ? {}
+            : []
+          : { error: { message: "No response configured" } };
+
+      await logSvc.insertLog(req.db.stateless, {
+        // SỬA Ở ĐÂY
         project_id: ep.project_id || null,
         endpoint_id: ep.id,
         request_method: method,
@@ -117,19 +278,26 @@ router.use(async (req, res, next) => {
       return res.status(status).json(body);
     }
 
-    const isPlainObject = (v) => v && typeof v === "object" && !Array.isArray(v);
+    const isPlainObject = (v) =>
+      v && typeof v === "object" && !Array.isArray(v);
     const matchesCondition = (cond) => {
       if (!isPlainObject(cond) || Object.keys(cond).length === 0) return false;
       if (isPlainObject(cond.params)) {
-        for (const [k, v] of Object.entries(cond.params)) { if (String(params[k] ?? "") !== String(v)) return false; }
+        for (const [k, v] of Object.entries(cond.params)) {
+          if (String(params[k] ?? "") !== String(v)) return false;
+        }
       }
       if (isPlainObject(cond.query)) {
-        for (const [k, v] of Object.entries(cond.query)) { if (String(req.query[k] ?? "") !== String(v)) return false; }
+        for (const [k, v] of Object.entries(cond.query)) {
+          if (String(req.query[k] ?? "") !== String(v)) return false;
+        }
       }
       return true;
     };
 
-    const matchedResponses = responses.filter((r) => matchesCondition(r.condition));
+    const matchedResponses = responses.filter((r) =>
+      matchesCondition(r.condition)
+    );
     let r;
     if (matchedResponses.length > 0) {
       r = matchedResponses[0];
@@ -138,70 +306,45 @@ router.use(async (req, res, next) => {
       if (!r) {
         const status = 404;
         const body = { error: "No matching response found" };
-        await logSvc.insertLog(req.db.stateless, { // SỬA Ở ĐÂY
-            project_id: ep.project_id || null,
-            endpoint_id: ep.id,
-            request_method: method,
-            request_path: req.path,
-            response_status_code: status,
-            response_body: body,
-            ip_address: getClientIp(req),
-            latency_ms: Date.now() - started,
+        await logSvc.insertLog(req.db.stateless, {
+          // SỬA Ở ĐÂY
+          project_id: ep.project_id || null,
+          endpoint_id: ep.id,
+          request_method: method,
+          request_path: req.path,
+          response_status_code: status,
+          response_body: body,
+          ip_address: getClientIp(req),
+          latency_ms: Date.now() - started,
         });
         return res.status(status).json(body);
       }
     }
 
     if (r.proxy_url) {
-        // Khối logic proxy
-        const delay = r.delay_ms ?? 0;
-        const handleProxyRequest = async () => {
-          const finished = Date.now();
-          try {
-            const ctx = { params, query: req.query };
-            const resolvedUrl = renderTemplate(r.proxy_url, ctx);
-            const proxyResp = await axios({
-              method: r.proxy_method || req.method,
-              url: resolvedUrl, data: req.body,
-              validateStatus: () => true,
-              httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-            });
-            let safeResponseBody;
-            if (proxyResp.data && typeof proxyResp.data === 'object') {
-                safeResponseBody = proxyResp.data;
-            } else {
-                safeResponseBody = { non_json_response: true, raw_body: String(proxyResp.data ?? '') };
-            }
-            await logSvc.insertLog(req.db.stateless, {
-              project_id: ep.project_id || null,
-              endpoint_id: ep.id,
-              endpoint_response_id: r.id || null,
-              request_method: method,
-              request_path: req.path,
-              request_headers: req.headers || {},
-              request_body: req.body || {},
-              response_status_code: proxyResp.status,
-              response_body: safeResponseBody,
-              ip_address: getClientIp(req),
-              latency_ms: finished - started,
-            });
-            return res.status(proxyResp.status).set(proxyResp.headers).send(proxyResp.data);
-          } catch (err) {
-            return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
+      // Khối logic proxy
+      const delay = r.delay_ms ?? 0;
+      const handleProxyRequest = async () => {
+        const finished = Date.now();
+        try {
+          const ctx = { params, query: req.query };
+          const resolvedUrl = renderTemplate(r.proxy_url, ctx);
+          const proxyResp = await axios({
+            method: r.proxy_method || req.method,
+            url: resolvedUrl,
+            data: req.body,
+            validateStatus: () => true,
+            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          });
+          let safeResponseBody;
+          if (proxyResp.data && typeof proxyResp.data === "object") {
+            safeResponseBody = proxyResp.data;
+          } else {
+            safeResponseBody = {
+              non_json_response: true,
+              raw_body: String(proxyResp.data ?? ""),
+            };
           }
-        };
-        if (delay > 0) { setTimeout(handleProxyRequest, delay); } else { await handleProxyRequest(); }
-    } else {
-        // Khối logic response thông thường
-        const status = r.status_code || 200;
-        let body = r.response_body ?? null;
-        const delay = r.delay_ms ?? 0;
-        const ctx = { params, query: req.query };
-        if (body && (typeof body === "object" || typeof body === "string")) {
-            body = renderTemplate(body, ctx);
-        }
-        const sendResponse = async () => {
-          const finished = Date.now();
           await logSvc.insertLog(req.db.stateless, {
             project_id: ep.project_id || null,
             endpoint_id: ep.id,
@@ -210,31 +353,74 @@ router.use(async (req, res, next) => {
             request_path: req.path,
             request_headers: req.headers || {},
             request_body: req.body || {},
-            response_status_code: status,
-            response_body: body,
+            response_status_code: proxyResp.status,
+            response_body: safeResponseBody,
             ip_address: getClientIp(req),
             latency_ms: finished - started,
           });
-          if (body && typeof body === "object") { return res.status(status).json(body); }
-          return res.status(status).send(body ?? "");
-        };
-        if (delay > 0) { setTimeout(sendResponse, delay); } else { await sendResponse(); }
+          return res
+            .status(proxyResp.status)
+            .set(proxyResp.headers)
+            .send(proxyResp.data);
+        } catch (err) {
+          return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
+        }
+      };
+      if (delay > 0) {
+        setTimeout(handleProxyRequest, delay);
+      } else {
+        await handleProxyRequest();
+      }
+    } else {
+      // Khối logic response thông thường
+      const status = r.status_code || 200;
+      let body = r.response_body ?? null;
+      const delay = r.delay_ms ?? 0;
+      const ctx = { params, query: req.query };
+      if (body && (typeof body === "object" || typeof body === "string")) {
+        body = renderTemplate(body, ctx);
+      }
+      const sendResponse = async () => {
+        const finished = Date.now();
+        await logSvc.insertLog(req.db.stateless, {
+          project_id: ep.project_id || null,
+          endpoint_id: ep.id,
+          endpoint_response_id: r.id || null,
+          request_method: method,
+          request_path: req.path,
+          request_headers: req.headers || {},
+          request_body: req.body || {},
+          response_status_code: status,
+          response_body: body,
+          ip_address: getClientIp(req),
+          latency_ms: finished - started,
+        });
+        if (body && typeof body === "object") {
+          return res.status(status).json(body);
+        }
+        return res.status(status).send(body ?? "");
+      };
+      if (delay > 0) {
+        setTimeout(sendResponse, delay);
+      } else {
+        await sendResponse();
+      }
     }
   } catch (err) {
     // Sửa khối catch cuối cùng
     try {
-        await logSvc.insertLog(req.db.stateless, {
-            project_id: null, // Không có context project_id ở đây
-            endpoint_id: null,
-            request_method: req.method?.toUpperCase?.() || "",
-            request_path: req.path || req.originalUrl || "",
-            response_status_code: 500,
-            response_body: { error: "Internal Server Error", message: err.message },
-            ip_address: getClientIp(req),
-            latency_ms: Date.now() - started,
-        });
+      await logSvc.insertLog(req.db.stateless, {
+        project_id: null, // Không có context project_id ở đây
+        endpoint_id: null,
+        request_method: req.method?.toUpperCase?.() || "",
+        request_path: req.path || req.originalUrl || "",
+        response_status_code: 500,
+        response_body: { error: "Internal Server Error", message: err.message },
+        ip_address: getClientIp(req),
+        latency_ms: Date.now() - started,
+      });
     } catch (logErr) {
-        console.error("CRITICAL: Failed to log an unexpected error.", logErr);
+      console.error("CRITICAL: Failed to log an unexpected error.", logErr);
     }
     return next(err);
   }
