@@ -35,10 +35,11 @@ app.use('/projects', projectRoutes);
 app.use('/endpoints', endpointRoutes);
 app.use('/folders', folderRoutes); 
 
+
+app.use('/', endpointResponseRoutes);
 // MOUNT STATEFUL ROUTES
 app.use('/', statefulRoutes);
 
-app.use('/', endpointResponseRoutes);
 // Mount logs route TRƯỚC router mock catch-all để không bị nuốt
 //app.use('/', projectRequestLogRoutes);
 // Catch-all mock router MUST be last to avoid shadowing admin routes

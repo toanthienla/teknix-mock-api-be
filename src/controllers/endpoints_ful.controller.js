@@ -56,6 +56,23 @@ async function convertToStateful(req, res) {
   }
 };
 
+async function revertToStateless(req, res) {
+  const { id } = req.params;
+  try {
+    const result = await EndpointStatefulService.revertToStateless(
+      req.db.stateless,
+      req.db.stateful,
+      parseInt(id, 10)
+    );
+    return res.status(200).json({
+      message: "Endpoint reverted to stateless successfully",
+      data: { endpoint_id: parseInt(id, 10), ...result },
+    });
+  } catch (err) {
+    console.error("Error revertToStateless:", err);
+    return res.status(500).json({ error: err.message || "Revert to stateless failed" });
+  }
+};
 
 async function updateEndpointResponse(req, res) {
   try {
@@ -84,5 +101,6 @@ module.exports = {
   getEndpointById,
   deleteEndpointById,
   convertToStateful,
+  revertToStateless,
   updateEndpointResponse,
 };
