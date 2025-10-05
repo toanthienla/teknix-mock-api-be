@@ -2,6 +2,7 @@
 
 // SỬA Ở ĐÂY: Đổi tên biến import cho đúng với đối tượng được export
 const EndpointStatefulService = require("../services/endpoints_ful.service");
+const DataStatefulService = require("../services/endpoint_data_ful.service");
 
 /**
  * Lấy dữ liệu stateful theo path
@@ -13,13 +14,14 @@ exports.getDataByPath = async (req, res) => {
     if (!path) {
       return res.status(400).json({ error: "Tham số 'path' là bắt buộc." });
     }
-
-    // LƯU Ý: Hàm findByPath chưa tồn tại trong EndpointStatefulService bạn gửi.
-    // Bạn cần phải tự định nghĩa nó.
-    // const data = await EndpointStatefulService.findByPath(path); 
-
-    // Tạm thời trả về lỗi để bạn biết cần bổ sung
-    return res.status(501).json({ error: "Chức năng 'findByPath' chưa được cài đặt trong service." });
+    // KÍCH HOẠT: Gọi hàm findByPath từ service
+    const data = await DataStatefulService.findByPath(path); 
+    // XỬ LÝ KẾT QUẢ: Kiểm tra xem có dữ liệu trả về không
+    if (data) {
+      return res.status(200).json(data);
+    } else {
+      return res.status(404).json({ error: `Không tìm thấy dữ liệu với path: '${path}'` });
+    }
 
   } catch (err) {
     console.error("Error in getDataByPath:", err.message);
@@ -70,7 +72,6 @@ exports.updateEndpointData = async (req, res) => {
 
     const { schema, data_default } = req.body;
 
-    // SỬA Ở ĐÂY: Gọi hàm từ EndpointStatefulService
     const result = await EndpointStatefulService.updateEndpointData(
       req.db.stateful,
       path,

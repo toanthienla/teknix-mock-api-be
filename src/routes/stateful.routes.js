@@ -6,6 +6,8 @@ const router = express.Router();
 const endpointController = require('../controllers/endpoints_ful.controller');
 const responseController = require('../controllers/endpoint_responses_ful.controller');
 const dataController = require('../controllers/endpoint_data_ful.controller');
+const asyncHandler = require('../middlewares/asyncHandler');
+
 
 // --- Định nghĩa routes cho Endpoints ---
 router.get('/endpoints', endpointController.listEndpoints);
@@ -13,6 +15,8 @@ router.get('/endpoints/:id', endpointController.getEndpointById);
 router.delete('/endpoints/:id', endpointController.deleteEndpointById);
 // Route mới để convert endpoint sang stateful
 router.post('/endpoints/:id/convert-to-stateful', endpointController.convertToStateful);
+// Route mới để convert endpoint sang stateless
+router.post('/endpoints/:id/convert-to-stateless', asyncHandler(endpointController.revertToStateless));
 
 
 // --- Định nghĩa routes cho Endpoint Responses ---

@@ -110,81 +110,135 @@ const EndpointStatefulService = {
     return this.getFullDetailById(statefulEndpoint.id);
   },
 
-  async convertToStateful(statelessPool, statefulPool, endpointId) {
-    const clientStateless = await statelessPool.connect();
-    const clientStateful = await statefulPool.connect();
-    try {
-      await clientStateless.query("BEGIN");
-      await clientStateful.query("BEGIN");
+  async  convertToStateful(statelessPool, statefulPool, endpointId) {
+  const clientStateless = await statelessPool.connect();
+  const clientStateful = await statefulPool.connect();
+  try {
+    await clientStateless.query("BEGIN");
+    await clientStateful.query("BEGIN");
 
-      const {
-        rows: [endpoint],
-      } = await clientStateless.query(`SELECT * FROM endpoints WHERE id = $1`, [
-        endpointId,
-      ]);
-      if (!endpoint) throw new Error("Stateless endpoint not found");
+    // 1) Lấy endpoint stateless
+    const { rows: [endpoint] } = await clientStateless.query(
+      `SELECT id, folder_id, name, method, path, is_active FROM endpoints WHERE id = $1`,
+      [endpointId]
+    );
+    if (!endpoint) throw new Error("Stateless endpoint not found");
 
-      const { rows: existing } = await clientStateful.query(
-        `SELECT * FROM endpoints_ful WHERE origin_id = $1`,
-        [endpoint.id]
+    // 2) Đã có endpoints_ful cho origin này chưa?
+    const { rows: existing } = await clientStateful.query(
+      `SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1`,
+      [endpoint.id]
+    );
+
+    let statefulEndpoint;
+    if (existing.length > 0) {
+      // (A) ĐÃ TỒN TẠI → tái liên kết (IDEMPOTENT): đồng bộ metadata + BẬT ACTIVE
+      const { rows: [updated] } = await clientStateful.query(
+        `UPDATE endpoints_ful
+         SET folder_id = $1, name = $2, method = $3, path = $4, is_active = TRUE, updated_at = NOW()
+         WHERE id = $5
+         RETURNING *`,
+        [endpoint.folder_id, endpoint.name, endpoint.method, endpoint.path, existing[0].id]
       );
-      if (existing.length > 0)
-        throw new Error("This endpoint has already been converted to stateful");
-
-      await clientStateless.query(
-        `UPDATE endpoints SET is_stateful = true, is_active = false, updated_at = NOW() WHERE id = $1`,
-        [endpointId]
+      statefulEndpoint = updated;
+    } else {
+      // (B) CHƯA CÓ → tạo mới (ACTIVE = TRUE)
+      const { rows: [created] } = await clientStateful.query(
+        `INSERT INTO endpoints_ful (folder_id, name, method, path, is_active, origin_id)
+         VALUES ($1, $2, $3, $4, TRUE, $5)
+         RETURNING *`,
+        [endpoint.folder_id, endpoint.name, endpoint.method, endpoint.path, endpoint.id]
       );
+      statefulEndpoint = created;
 
-      const {
-        rows: [statefulEndpoint],
-      } = await clientStateful.query(
-        `INSERT INTO endpoints_ful (folder_id, name, method, path, is_active, origin_id) VALUES ($1, $2, $3, $4, true, $5) RETURNING *`,
+      // Sinh default responses trong lần tạo đầu
+      await this.generateDefaultResponses(statefulPool, statefulEndpoint);
+
+      // Tạo endpoint_data_ful nếu chưa có (ngay trong pool stateful)
+      await statefulPool.query(
+        `INSERT INTO endpoint_data_ful (path, schema, data_default, data_current)
+         SELECT $1, $2, $3, $4
+         WHERE NOT EXISTS (SELECT 1 FROM endpoint_data_ful WHERE path = $1)`,
         [
-          endpoint.folder_id,
-          endpoint.name,
-          endpoint.method,
-          endpoint.path,
-          endpoint.id,
+          statefulEndpoint.path,
+          JSON.stringify({ id: { type: "number", required: false } }),
+          JSON.stringify([{ id: 1 }]),
+          JSON.stringify([]),
         ]
       );
-
-      await clientStateless.query("COMMIT");
-      await clientStateful.query("COMMIT");
-
-      const responsesResult = await this.generateDefaultResponses(
-        statefulPool,
-        statefulEndpoint
-      );
-
-      const { rows: existingData } = await clientStateful.query(
-        `SELECT * FROM endpoint_data_ful WHERE path = $1`,
-        [statefulEndpoint.path]
-      );
-      if (existingData.length === 0) {
-        await clientStateful.query(
-          `INSERT INTO endpoint_data_ful (path, schema, data_default, data_current) VALUES ($1, $2, $3, $4)`,
-          [
-            statefulEndpoint.path,
-            JSON.stringify({ id: { type: "number", required: false } }),
-            JSON.stringify([{ id: 1 }]),
-            JSON.stringify([]),
-          ]
-        );
-      }
-      return {
-        stateless: endpoint,
-        stateful: statefulEndpoint,
-        responses: responsesResult,
-      };
-    } catch (err) {
-      await clientStateless.query("ROLLBACK");
-      await clientStateful.query("ROLLBACK");
-    } finally {
-      clientStateless.release();
-      clientStateful.release();
     }
-  },
+
+    // 3) Đặt cờ ở stateless: is_stateful=TRUE, is_active=FALSE (luôn làm)
+    await clientStateless.query(
+      `UPDATE endpoints
+       SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW()
+       WHERE id = $1`,
+      [endpointId]
+    );
+
+    await clientStateless.query("COMMIT");
+    await clientStateful.query("COMMIT");
+
+    return {
+      reused: existing.length > 0,
+      stateless: { id: endpoint.id, is_stateful: true, is_active: false },
+      stateful: statefulEndpoint,
+    };
+  } catch (err) {
+    await clientStateless.query("ROLLBACK");
+    await clientStateful.query("ROLLBACK");
+    throw err;
+  } finally {
+    clientStateless.release();
+    clientStateful.release();
+  }
+},
+
+
+  async revertToStateless(statelessPool, statefulPool, endpointId) {
+  const clientStateless = await statelessPool.connect();
+  const clientStateful = await statefulPool.connect();
+  try {
+    await clientStateless.query("BEGIN");
+    await clientStateful.query("BEGIN");
+
+    // 1) Tắt stateful nếu tồn tại
+    const { rows: existing } = await clientStateful.query(
+      `SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1`,
+      [endpointId]
+    );
+    if (existing.length > 0) {
+      await clientStateful.query(
+        `UPDATE endpoints_ful SET is_active = FALSE, updated_at = NOW() WHERE id = $1`,
+        [existing[0].id]
+      );
+    }
+
+    // 2) Bật lại stateless + hạ cờ is_stateful
+    await clientStateless.query(
+      `UPDATE endpoints SET is_stateful = FALSE, is_active = TRUE, updated_at = NOW() WHERE id = $1`,
+      [endpointId]
+    );
+
+    await clientStateless.query("COMMIT");
+    await clientStateful.query("COMMIT");
+
+    return {
+      statefulExists: existing.length > 0,
+      statefulActive: false,
+      statelessIsStateful: false,
+      statelessActive: true,
+    };
+  } catch (err) {
+    await clientStateless.query("ROLLBACK");
+    await clientStateful.query("ROLLBACK");
+    throw err;
+  } finally {
+    clientStateless.release();
+    clientStateful.release();
+  }
+},
+
 
   /**
    * Sinh default responses dựa trên method của endpoint
