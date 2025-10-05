@@ -13,6 +13,7 @@ const asyncHandler = require('../middlewares/asyncHandler');
 router.get('/endpoints', endpointController.listEndpoints);
 router.get('/endpoints/:id', endpointController.getEndpointById);
 router.delete('/endpoints/:id', endpointController.deleteEndpointById);
+
 // Route mới để convert endpoint sang stateful
 router.post('/endpoints/:id/convert-to-stateful', endpointController.convertToStateful);
 // Route mới để convert endpoint sang stateless
@@ -24,13 +25,13 @@ router.get('/endpoint_responses', responseController.listResponsesForEndpoint);
 router.get('/endpoint_responses/:id', responseController.getResponseById);
 router.delete('/endpoint_responses/:id', responseController.deleteResponseById);
 
+//Định nghĩa routes cho Endpoint Responses ful
+router.get('/endpoint_responses_ful/:id', responseController.getResponseById);
 
 // --- Định nghĩa routes cho Endpoint Data ---
 router.get('/endpoint_data', dataController.getDataByPath);
 router.delete('/endpoint_data', dataController.deleteDataByPath);
-
 router.put("/endpoint_data", dataController.updateEndpointData);
-
 router.put("/endpoint_data/set_default", dataController.setDefaultEndpointData);
 
 module.exports = router;
