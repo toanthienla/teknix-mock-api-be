@@ -1,14 +1,40 @@
+// Mock runtime router
+// ------------------------------------------------------------
+// Mục đích: Bắt tất cả request còn lại (sau các route quản trị)
+// và trả về dữ liệu mô phỏng từ DB theo bảng endpoints + endpoint_responses.
+//
+// Luồng xử lý tổng quát:
+// 1) Lấy HTTP method hiện tại (GET/POST/PUT/DELETE,...)
+// 2) Query tất cả endpoint có method tương ứng từ bảng endpoints
+// 3) Dùng path-to-regexp để so khớp pattern endpoint.path với req.path
+//    - Hỗ trợ dynamic params: ví dụ '/users/:id'
+//    - strict: true, end: true => khớp chính xác (nhạy cảm dấu '/')
+// 4) Nếu tìm thấy endpoint phù hợp, lấy endpoint_responses tương ứng
+//    và chọn 1 response để trả về (ưu tiên condition match > is_default > mới nhất)
+// 5) Trả về body (JSON nếu là object, còn lại send text)
+//
+
 const express = require("express");
+const db = require("../config/db");
 const { match } = require("path-to-regexp");
+// Service ghi log request/response vào bảng project_request_logs
 const router = express.Router();
 const axios = require("axios");
 const https = require("https");
-
-const logSvc = require("../services/project_request_log.service");
-
+const endpointService = require("../services/endpoint.service");
+const endpointResponseService = require("../services/endpoint_response.service");
+// Bộ so khớp path-to-regexp có cache đơn giản để tránh tạo lại matcher nhiều lần
+// key: pattern string, value: match function
 const matcherCache = new Map();
 
+/**
+ * Tạo/đọc matcher cho 1 pattern endpoint.path
+ * Ví dụ pattern: '/users/:id' sẽ khớp '/users/42'
+ * - strict: true => phân biệt có/không có dấu '/' ở cuối
+ * - end: true => phải khớp toàn bộ path (không cho phép phần dư)
+ */
 function getMatcher(pattern) {
+  // Tạo matcher path-to-regexp cho từng endpoint.path, có cache
   let fn = matcherCache.get(pattern);
   if (!fn) {
     fn = match(pattern, {
@@ -33,6 +59,9 @@ function getClientIp(req) {
   return first.substring(0, 45);
 }
 
+// ------------------------------------------------------------
+// Templating đơn giản cho response_body: hỗ trợ {{params.id}}, {{query.id}}
+// Có thể mở rộng thêm: {{headers.x_token}}, {{body.foo}} nếu cần sau này
 function getByPath(obj, path) {
   if (!obj || typeof path !== "string") return undefined;
   const parts = path.split(".");
@@ -53,6 +82,7 @@ function renderTemplate(value, ctx) {
       const v = getByPath(ctx, vpath);
       return v == null ? "" : String(v);
     });
+
   if (typeof value === "string") return replaceInString(value);
   if (Array.isArray(value)) return value.map((v) => renderTemplate(v, ctx));
   if (value && typeof value === "object") {
@@ -65,19 +95,39 @@ function renderTemplate(value, ctx) {
   return value;
 }
 
+// Catch-all sau các route admin; tìm endpoint tương ứng và trả mock response từ DB
+// Đặt router.use ở cuối app để không “nuốt” các route quản trị phía trên.
+
 router.use(async (req, res, next) => {
-  const started = Date.now();
   try {
+    req.body = req.body || {};
+    req.query = req.query || {};
+    req.params = req.params || {};
+
+    const started = Date.now();
     const method = req.method.toUpperCase();
 
+    // Kiểm tra xem request có /proxy prefix hay không
+    let originalPath = req.path;
+    let isProxyRequest = false;
+    if (originalPath.startsWith("/proxy/")) {
+      isProxyRequest = true;
+      req.path = originalPath.replace(/^\/proxy/, ""); // bỏ prefix để match endpoint
+    }
+
+    // 1) Lấy danh sách endpoint theo method hiện tại
     const { rows: endpoints } = await req.db.stateless.query(
-      `SELECT e.id, e.method, e.path, e.folder_id, e.is_stateful, f.project_id
-       FROM endpoints e
-       JOIN folders f ON e.folder_id = f.id
-       WHERE UPPER(e.method) = $1 AND e.is_active = true`,
+      `SELECT e.id, e.method, e.path, e.folder_id, f.project_id,
+   EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id) AS has_response,
+   EXISTS (SELECT 1 FROM endpoint_responses r WHERE r.endpoint_id = e.id AND r.is_default = true) AS has_default
+   FROM endpoints e
+   ORDER BY has_default DESC, has_response DESC, e.id DESC`,
       [method]
     );
 
+    // 2) Chọn endpoint đầu tiên có path khớp req.path
+    //    Lưu ý: nếu có nhiều endpoint trùng method + path, endpoint có id cao hơn (mới hơn)
+    //    sẽ được duyệt trước do ORDER BY id DESC.
     const ep = endpoints.find((e) => {
       try {
         const fn = getMatcher(e.path);
@@ -86,343 +136,204 @@ router.use(async (req, res, next) => {
         return false;
       }
     });
-
     if (!ep) return next();
 
-    // Helper function để validate dữ liệu dựa trên schema
-    const validateSchema = (schema, data) => {
-      const errors = [];
-      if (!schema || typeof schema !== "object") {
-        return errors; // Bỏ qua nếu không có schema
-      }
-
-      for (const key in schema) {
-        const rule = schema[key];
-        const value = data[key];
-
-        // 1. Kiểm tra trường bắt buộc
-        if (rule.required && typeof value === "undefined") {
-          errors.push(`Field '${key}' is required.`);
-          continue; // Bỏ qua các kiểm tra khác nếu thiếu
-        }
-
-        // 2. Kiểm tra kiểu dữ liệu (nếu trường đó tồn tại)
-        if (typeof value !== "undefined") {
-          const expectedType = rule.type.toLowerCase();
-          const actualType = Array.isArray(value) ? "array" : typeof value;
-
-          if (actualType !== expectedType) {
-            errors.push(
-              `Field '${key}' must be of type '${expectedType}', but received '${actualType}'.`
-            );
-          }
-        }
-      }
-      return errors;
-    };
-    if (ep.is_stateful) {
-      // ===== BẮT ĐẦU KHỐI LOGIC STATEFUL MỚI =====
-
-      // 1. Lấy dữ liệu stateful từ CSDL
-      const { rows: dataRows } = await req.db.stateful.query(
-        "SELECT id, data_current, schema FROM endpoint_data_ful WHERE path = $1 LIMIT 1",
-        [ep.path]
-      );
-
-      if (dataRows.length === 0) {
-        return res
-          .status(404)
-          .json({ error: `Stateful data for path '${ep.path}' not found.` });
-      }
-
-      const statefulData = dataRows[0];
-      const currentData = statefulData.data_current || []; // Mặc định là mảng rỗng
-
-      const method = req.method.toUpperCase();
-      const matchFn = getMatcher(ep.path);
-      const matchRes = matchFn(req.path);
-      const params = (matchRes && matchRes.params) || {};
-
-      switch (method) {
-        case "GET": {
-          // Xử lý GET: Lấy tất cả hoặc lấy theo ID
-          if (params.id) {
-            // Tìm item theo id trong params
-            const item = currentData.find(
-              (d) => String(d.id) === String(params.id)
-            );
-            if (item) {
-              return res.status(200).json(item);
-            } else {
-              // TODO: Có thể tìm response "Get Detail Not Found" để trả về
-              return res.status(404).json({ message: "Resource not found." });
-            }
-          } else {
-            // Trả về toàn bộ danh sách
-            return res.status(200).json(currentData);
-          }
-        }
-
-        case "POST": {
-          // Xử lý POST: Thêm mới dữ liệu
-          const newItem = req.body;
-          const schema = statefulData.schema;
-
-          // ===== BƯỚC 1: VALIDATE SCHEMA (Thêm vào) =====
-          const validationErrors = validateSchema(schema, newItem);
-          if (validationErrors.length > 0) {
-            const errResponse = (
-              await req.db.stateful.query(
-                `SELECT status_code, response_body FROM endpoint_responses_ful WHERE endpoint_id = $1 AND name = 'Schema Invalid' LIMIT 1`,
-                [ep.id]
-              )
-            ).rows[0] || {
-              status_code: 400,
-              response_body: { error: "Schema validation failed" },
-            };
-
-            return res
-              .status(errResponse.status_code)
-              .json({
-                ...errResponse.response_body,
-                details: validationErrors,
-              });
-          }
-
-       // ===== BƯỚC 2: KIỂM TRA ID VÀ TẠO MỚI =====
-    if (typeof newItem.id !== 'undefined') {
-        const idExists = currentData.some(item => String(item.id) === String(newItem.id));
-        if (idExists) {
-            const errResponse = (await req.db.stateful.query(
-                `SELECT status_code, response_body FROM endpoint_responses_ful WHERE endpoint_id = $1 AND name = 'ID Conflict' LIMIT 1`,
-                [ep.id]
-            )).rows[0] || { status_code: 409, response_body: { error: `Conflict: An item with id '${newItem.id}' already exists.` } };
-            
-            return res.status(errResponse.status_code).json(errResponse.response_body);
-        }
-    } else {
-        const maxId = currentData.reduce((max, item) => (item.id > max ? item.id : max), 0);
-        newItem.id = maxId + 1;
-    }
-
-
-          const newData = [...currentData, newItem];
-          // Cập nhật lại CSDL
-          await req.db.stateful.query(
-            `UPDATE endpoint_data_ful SET data_current = $1, updated_at = NOW() WHERE path = $2`,
-            [JSON.stringify(newData), ep.path]
-          );  
-
-          // TODO: Có thể tìm response "Create Success" để trả về status_code và body động
-          return res.status(201).json(newItem);
-        }
-
-        case "PUT": {
-          // TODO: Logic cho PUT (cập nhật) sẽ được thêm ở đây
-          return res
-            .status(501)
-            .json({ message: "PUT method not implemented yet." });
-        }
-
-        case "DELETE": {
-          // TODO: Logic cho DELETE (xóa) sẽ được thêm ở đây
-          return res
-            .status(501)
-            .json({ message: "DELETE method not implemented yet." });
-        }
-
-        default: {
-          return res
-            .status(405)
-            .json({
-              error: `Method ${method} not allowed for this stateful endpoint.`,
-            });
-        }
-      }
-      // ===== KẾT THÚC KHỐI LOGIC STATEFUL MỚI =====
-    }
-
-    // Logic cho stateless endpoints
+    // 3) Lấy toàn bộ responses của endpoint để có thể áp dụng điều kiện theo params/query
     const matchFn = getMatcher(ep.path);
     const matchRes = matchFn(req.path);
     const params = (matchRes && matchRes.params) || {};
     const hasParams = Object.keys(params).length > 0;
 
     const { rows: responses } = await req.db.stateless.query(
-      `SELECT id, endpoint_id, name, status_code, response_body, is_default, priority, condition, delay_ms, proxy_url, proxy_method 
-       FROM endpoint_responses WHERE endpoint_id = $1 
-       ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at DESC`,
+      `SELECT id, endpoint_id, name, status_code, response_body,
+       is_default, priority, condition, delay_ms,
+       proxy_url, proxy_method, 
+       created_at, updated_at
+   FROM endpoint_responses
+   WHERE endpoint_id = $1
+   ORDER BY is_default DESC, priority ASC NULLS LAST, updated_at DESC, created_at DESC`,
       [ep.id]
     );
 
+    // Nếu không có response nào cấu hình:
+    // - GET item (có params): trả {} (rỗng)
+    // - GET collection: trả [] (rỗng)
     if (responses.length === 0) {
+      // No configured responses for this endpoint
+      // For GET: return empty object/array (legacy behavior)
       const status = req.method.toUpperCase() === "GET" ? 200 : 501;
       const body =
         req.method.toUpperCase() === "GET"
           ? hasParams
             ? {}
             : []
-          : { error: { message: "No response configured" } };
-
-      await logSvc.insertLog(req.db.stateless, {
-        // SỬA Ở ĐÂY
-        project_id: ep.project_id || null,
-        endpoint_id: ep.id,
-        request_method: method,
-        request_path: req.path,
-        response_status_code: status,
-        response_body: body,
-        ip_address: getClientIp(req),
-        latency_ms: Date.now() - started,
-      });
-      return res.status(status).json(body);
+          : { error: { message: "No response configured for this endpoint" } };
+      const finished = Date.now();
+      if (req.method.toUpperCase() === "GET") {
+        return res.status(status).json(body);
+      } else {
+        return res.status(status).json(body);
+      }
     }
 
+    // 3.1) Áp dụng điều kiện: ưu tiên các response có condition khớp params/query
     const isPlainObject = (v) =>
       v && typeof v === "object" && !Array.isArray(v);
     const matchesCondition = (cond) => {
-      if (!isPlainObject(cond) || Object.keys(cond).length === 0) return false;
+      if (!isPlainObject(cond) || Object.keys(cond).length === 0) {
+        return false; // condition rỗng thì KHÔNG match
+      }
+
+      // Check params.id đơn giản
+      if ("id" in cond) {
+        if (String(params.id ?? "") !== String(cond.id)) return false;
+      }
+      // Check params object
       if (isPlainObject(cond.params)) {
         for (const [k, v] of Object.entries(cond.params)) {
           if (String(params[k] ?? "") !== String(v)) return false;
         }
       }
+
+      // Check query object
       if (isPlainObject(cond.query)) {
         for (const [k, v] of Object.entries(cond.query)) {
           if (String(req.query[k] ?? "") !== String(v)) return false;
         }
       }
+
+      // Check headers object
+      if (isPlainObject(cond.headers)) {
+        for (const [k, v] of Object.entries(cond.headers)) {
+          const reqVal = req.headers[k.toLowerCase()]; // headers luôn lowercase
+          if (String(reqVal ?? "") !== String(v)) return false;
+        }
+      }
+
+      // Check body object
+      if (isPlainObject(cond.body)) {
+        for (const [k, v] of Object.entries(cond.body)) {
+          if (String(req.body?.[k] ?? "") !== String(v)) return false;
+        }
+      }
+
+      // Có thể mở rộng cho cond.headers/cond.body nếu cần
       return true;
     };
 
+    // 3.2) Lọc toàn bộ response có condition khớp
     const matchedResponses = responses.filter((r) =>
       matchesCondition(r.condition)
     );
+
     let r;
     if (matchedResponses.length > 0) {
+      // Sắp xếp theo priority ASC (1 là cao nhất), rồi updated_at DESC
+      matchedResponses.sort((a, b) => {
+        const pa = a.priority ?? Number.MAX_SAFE_INTEGER;
+        const pb = b.priority ?? Number.MAX_SAFE_INTEGER;
+        if (pa !== pb) return pa - pb; // số nhỏ hơn ưu tiên hơn
+        return new Date(b.updated_at) - new Date(a.updated_at);
+      });
       r = matchedResponses[0];
     } else {
+      // Nếu không có match và cũng không có default → trả 404
       r = responses.find((rr) => rr.is_default);
       if (!r) {
         const status = 404;
         const body = { error: "No matching response found" };
-        await logSvc.insertLog(req.db.stateless, {
-          // SỬA Ở ĐÂY
-          project_id: ep.project_id || null,
-          endpoint_id: ep.id,
-          request_method: method,
-          request_path: req.path,
-          response_status_code: status,
-          response_body: body,
-          ip_address: getClientIp(req),
-          latency_ms: Date.now() - started,
-        });
+        const finished = Date.now();
         return res.status(status).json(body);
       }
     }
 
+    // 3.3) Nếu có proxy_url → gọi API ngoài (proxy) thay vì trả response_body
     if (r.proxy_url) {
-      // Khối logic proxy
-      const delay = r.delay_ms ?? 0;
-      const handleProxyRequest = async () => {
-        const finished = Date.now();
-        try {
-          const ctx = { params, query: req.query };
-          const resolvedUrl = renderTemplate(r.proxy_url, ctx);
-          const proxyResp = await axios({
-            method: r.proxy_method || req.method,
-            url: resolvedUrl,
-            data: req.body,
-            validateStatus: () => true,
-            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-          });
-          let safeResponseBody;
-          if (proxyResp.data && typeof proxyResp.data === "object") {
-            safeResponseBody = proxyResp.data;
-          } else {
-            safeResponseBody = {
-              non_json_response: true,
-              raw_body: String(proxyResp.data ?? ""),
-            };
-          }
-          await logSvc.insertLog(req.db.stateless, {
-            project_id: ep.project_id || null,
-            endpoint_id: ep.id,
-            endpoint_response_id: r.id || null,
-            request_method: method,
-            request_path: req.path,
-            request_headers: req.headers || {},
-            request_body: req.body || {},
-            response_status_code: proxyResp.status,
-            response_body: safeResponseBody,
-            ip_address: getClientIp(req),
-            latency_ms: finished - started,
-          });
-          return res
-            .status(proxyResp.status)
-            .set(proxyResp.headers)
-            .send(proxyResp.data);
-        } catch (err) {
-          return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
-        }
-      };
-      if (delay > 0) {
-        setTimeout(handleProxyRequest, delay);
-      } else {
-        await handleProxyRequest();
-      }
-    } else {
-      // Khối logic response thông thường
-      const status = r.status_code || 200;
-      let body = r.response_body ?? null;
-      const delay = r.delay_ms ?? 0;
-      const ctx = { params, query: req.query };
-      if (body && (typeof body === "object" || typeof body === "string")) {
-        body = renderTemplate(body, ctx);
-      }
-      const sendResponse = async () => {
-        const finished = Date.now();
-        await logSvc.insertLog(req.db.stateless, {
-          project_id: ep.project_id || null,
-          endpoint_id: ep.id,
-          endpoint_response_id: r.id || null,
-          request_method: method,
-          request_path: req.path,
-          request_headers: req.headers || {},
-          request_body: req.body || {},
-          response_status_code: status,
-          response_body: body,
-          ip_address: getClientIp(req),
-          latency_ms: finished - started,
+      try {
+        const ctx = { params, query: req.query };
+        const resolvedUrl = renderTemplate(r.proxy_url, ctx);
+        console.log("[Proxy] resolvedUrl =", resolvedUrl);
+
+        // Gọi API ngoài với httpsAgent để bỏ qua verify SSL
+        const proxyResp = await axios({
+          method: r.proxy_method || req.method,
+          url: resolvedUrl,
+          data: req.body,
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            Accept: "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            Referer: "https://jsonplaceholder.typicode.com/",
+          },
+          validateStatus: () => true,
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
         });
-        if (body && typeof body === "object") {
-          return res.status(status).json(body);
-        }
-        return res.status(status).send(body ?? "");
-      };
-      if (delay > 0) {
-        setTimeout(sendResponse, delay);
-      } else {
-        await sendResponse();
+        // Ghi log response từ proxy
+        const finished = Date.now();
+        return res
+          .status(proxyResp.status)
+          .set(proxyResp.headers)
+          .send(proxyResp.data);
+      } catch (err) {
+        console.error("[mock.routes] Proxy request failed:", err.message);
+        return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
       }
     }
-  } catch (err) {
-    // Sửa khối catch cuối cùng
-    try {
-      await logSvc.insertLog(req.db.stateless, {
-        project_id: null, // Không có context project_id ở đây
-        endpoint_id: null,
-        request_method: req.method?.toUpperCase?.() || "",
-        request_path: req.path || req.originalUrl || "",
-        response_status_code: 500,
-        response_body: { error: "Internal Server Error", message: err.message },
-        ip_address: getClientIp(req),
-        latency_ms: Date.now() - started,
-      });
-    } catch (logErr) {
-      console.error("CRITICAL: Failed to log an unexpected error.", logErr);
+    // Nếu không proxy thì tiếp tục trả response_body bên dưới
+    // 4) Trả về nội dung response:
+    // - Nếu response_body là object => trả JSON
+    // - Nếu là string/empty => send text/empty string
+    const status = r.status_code || 200;
+    let body = r.response_body ?? null;
+
+    // Templating: thay thế {{params.*}} và {{query.*}} trong body (string hoặc object)
+    const ctx = { params, query: req.query };
+    if (body && (typeof body === "object" || typeof body === "string")) {
+      body = renderTemplate(body, ctx);
     }
-    return next(err);
+
+    // Chuẩn hoá cho GET collection (không có params): nếu body rỗng => trả []
+    if (req.method.toUpperCase() === "GET" && !hasParams) {
+      const isEmptyObject = (v) =>
+        v &&
+        typeof v === "object" &&
+        !Array.isArray(v) &&
+        Object.keys(v).length === 0;
+      if (
+        body == null ||
+        (typeof body === "string" && body.trim() === "") ||
+        isEmptyObject(body)
+      ) {
+        body = [];
+      }
+    }
+
+    //  Áp dụng delay_ms
+    const delay = r.delay_ms ?? 0;
+
+    const sendResponse = async () => {
+      const finished = Date.now();
+
+      if (body && typeof body === "object") {
+        return res.status(status).json(body);
+      }
+      return res.status(status).send(body ?? "");
+    };
+
+    if (delay > 0) {
+      setTimeout(() => {
+        sendResponse();
+      }, delay);
+    } else {
+      await sendResponse();
+    }
+
+    // // Trả đúng response_body đã cấu hình: nếu là object => JSON, còn lại => text
+    // if (body && typeof body === "object") return res.status(status).json(body);
+    // return res.status(status).send(body ?? "");
+  } catch (err) {
+
   }
 });
 

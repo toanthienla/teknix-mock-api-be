@@ -285,10 +285,15 @@ const EndpointStatefulService = {
         response_body: { message: "Resource deleted successfully." },
       },
       {
+        name: "Delete All Success",
+        status_code: 200,
+        response_body: { message: "Resource deleted all successfully." },
+      },
+      {
         name: "Not Found",
         status_code: 404,
         response_body: { message: "Delete failed: resource not found." },
-      },
+      }
     ];
     return this.insertResponses(dbStateful, endpointId, responses);
   },
