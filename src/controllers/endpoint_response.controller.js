@@ -6,6 +6,9 @@ const svc = require('../services/endpoint_response.service');
 const endpointSvc = require('../services/endpoint.service');
 const { success, error } = require('../utils/response');
 const statefulSvc = require('../services/endpoint_responses_ful.service');
+const endpointsFulSvc = require('../services/endpoints_ful.service');
+const responsesFulSvc = require('../services/endpoint_responses_ful.service');
+
 
 // Helper lấy IP client (ưu tiên x-forwarded-for)
 function getClientIp(req) {
@@ -25,6 +28,24 @@ async function listByEndpointQuery(req, res) {
     const eid = parseInt(endpoint_id, 10);
     if (Number.isNaN(eid)) return error(res, 400, 'endpoint_id must be an integer');
 
+    // 1) Luôn kiểm tra endpoint ở DB stateless trước
+    const ep = await endpointSvc.getEndpointById(req.db.stateless, eid);
+    if (!ep) return error(res, 404, 'Endpoint not found');
+
+    // 2) Nếu endpoint đã chuyển stateful -> lấy responses ở DB stateful theo origin_id
+    if (ep.is_stateful === true) {
+      // Lấy endpoint stateful theo origin_id (KHÔNG truyền pool)
+      const statefulFull = await endpointsFulSvc.findByOriginId(eid);
+      if (!statefulFull) return success(res, []); // chưa có bản ghi stateful tương ứng
+
+      // Lấy responses stateful theo endpoint_ful.id (KHÔNG truyền pool)
+      const list = await responsesFulSvc.findByEndpointId(statefulFull.id);
+
+      // Trả kèm cờ để client phân biệt
+      return success(res, (list || []).map(r => ({ ...r, is_stateful: true })));
+    }
+
+    // 3) Ngược lại: stateless như bình thường
     const rows = await svc.getByEndpointId(req.db.stateless, eid);
     return success(res, rows);
   } catch (err) {
