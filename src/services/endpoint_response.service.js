@@ -200,7 +200,7 @@ async function update(
 async function checkIsStatefull(dbPool, dbPoolfull, responseId) {
   // Thử tìm ở stateless trước
   const { rows: r1 } = await dbPool.query(
-    `SELECT e.is_statefull
+    `SELECT e.is_stateful
      FROM endpoints e
      INNER JOIN endpoint_responses r ON e.id = r.endpoint_id
      WHERE r.id = $1`,
@@ -210,14 +210,14 @@ async function checkIsStatefull(dbPool, dbPoolfull, responseId) {
 
   // Nếu không có → thử tìm ở stateful
   const { rows: r2 } = await dbPoolfull.query(
-    `SELECT e.is_statefull
+    `SELECT e.is_stateful
      FROM endpoints e
 INNER JOIN endpoints_ful ef ON e.id = ef.origin_id
      INNER JOIN endpoint_responses_ful rf ON ef.id = rf.endpoint_id
      WHERE rf.id = $1`,
     [responseId]
   );
-  return r2[0]?.is_statefull || false;
+  return r2[0]?.is_stateful || false;
 }
 // Cập nhật danh sách priority cho nhiều response
 // Tham số: items = [{ id, endpoint_id, priority }, ...]

@@ -159,7 +159,7 @@ async function update(req, res) {
       }
     }
 
-    const row = await svc.update(req.db.stateless, rid, {
+    const row = await svc.update(req.db.stateless, req.db.stateful,  rid, {
       name: typeof name === 'undefined' ? undefined : name.trim(),
       status_code,
       response_body,
