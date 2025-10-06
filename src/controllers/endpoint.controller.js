@@ -2,6 +2,13 @@ const svc = require("../services/endpoint.service");
 const { success, error } = require("../utils/response");
 const statefulSvc = require("../services/endpoints_ful.service");
 
+// Chuẩn hoá dữ liệu stateful: id = origin_id, ẩn origin_id
+function presentStateful(row) {
+  if (!row) return row;
+  const { origin_id, ...rest } = row;
+  return { ...rest, id: origin_id, is_stateful: true };
+}
+
 // Lấy danh sách endpoints (có thể lọc theo project_id hoặc folder_id)
 async function listEndpoints(req, res) {
   try {
@@ -11,15 +18,15 @@ async function listEndpoints(req, res) {
     if (project_id) {
       const id = parseInt(project_id, 10);
       if (Number.isNaN(id)) {
-        return error(res, 400, 'project_id must be an integer');
+        return error(res, 400, "project_id must be an integer");
       }
       filters.project_id = id;
     }
-    
+
     if (folder_id) {
       const id = parseInt(folder_id, 10);
       if (Number.isNaN(id)) {
-        return error(res, 400, 'folder_id must be an integer');
+        return error(res, 400, "folder_id must be an integer");
       }
       filters.folder_id = id;
     }
@@ -30,29 +37,30 @@ async function listEndpoints(req, res) {
 
     // Bước 2: Tìm các ID của endpoint cần lấy dữ liệu stateful
     const statefulIds = endpoints
-        .filter(ep => ep.is_stateful === true)
-        .map(ep => ep.id);
+      .filter((ep) => ep.is_stateful === true)
+      .map((ep) => ep.id);
 
     // Bước 3: Nếu có, lấy tất cả dữ liệu stateful trong MỘT lần gọi
     if (statefulIds.length > 0) {
-        const { rows: statefulEndpoints } = await req.db.stateful.query(
-            `SELECT * FROM endpoints_ful WHERE origin_id = ANY($1::int[])`,
-            [statefulIds]
-        );
-        
-        // Tạo một map để tra cứu nhanh
-        const statefulMap = new Map(statefulEndpoints.map(sep => [sep.origin_id, sep]));
-        
-        // Bước 4: Hợp nhất dữ liệu
-        endpoints = endpoints.map(ep => {
-            if (ep.is_stateful === true && statefulMap.has(ep.id)) {
-                // Thay thế bản ghi stateless bằng bản ghi stateful
-                return { ...statefulMap.get(ep.id), is_stateful: true };
-            }
-            return ep;
-        });
+      const { rows: statefulEndpoints } = await req.db.stateful.query(
+        `SELECT * FROM endpoints_ful WHERE origin_id = ANY($1::int[])`,
+        [statefulIds]
+      );
+
+      // Tạo một map để tra cứu nhanh
+      const statefulMap = new Map(
+        statefulEndpoints.map((sep) => [sep.origin_id, sep])
+      );
+
+      // Bước 4: Hợp nhất dữ liệu
+      endpoints = endpoints.map((ep) => {
+        if (ep.is_stateful === true && statefulMap.has(ep.id)) {
+          return presentStateful(statefulMap.get(ep.id));
+        }
+        return ep;
+      });
     }
-    
+
     return success(res, endpoints);
   } catch (err) {
     return error(res, 500, err.message);
@@ -68,18 +76,25 @@ async function getEndpointById(req, res) {
     const statelessEndpoint = await svc.getEndpointById(req.db.stateless, id);
 
     if (!statelessEndpoint) {
-      return error(res, 404, 'Endpoint not found');
+      return error(res, 404, "Endpoint not found");
     }
 
     // Bước 2: Kiểm tra cờ is_stateful
     if (statelessEndpoint.is_stateful === true) {
       // Nếu true, tìm bản ghi stateful tương ứng bằng origin_id
-      const statefulEndpoint = await statefulSvc.findByOriginId(statelessEndpoint.id);
+      const statefulEndpoint = await statefulSvc.findByOriginId(
+        statelessEndpoint.id
+      );
       if (!statefulEndpoint) {
-          return error(res, 404, `Stateful data for endpoint ${id} not found, but it is marked as stateful.`);
+        return error(
+          res,
+          404,
+          `Stateful data for endpoint ${id} not found, but it is marked as stateful.`
+        );
       }
-      return success(res, statefulEndpoint);
-    }
+      // Trả về với id = origin_id để thống nhất với list
+      return success(res, presentStateful(statefulEndpoint));
+    }   
 
     // Bước 3: Nếu không, trả về dữ liệu stateless như bình thường
     return success(res, statelessEndpoint);
@@ -88,11 +103,10 @@ async function getEndpointById(req, res) {
   }
 }
 
-
 // Create endpoint
 async function createEndpoint(req, res) {
   try {
-    const { folder_id, name, method, path, is_active, is_stateful  } = req.body;
+    const { folder_id, name, method, path, is_active, is_stateful } = req.body;
     const errors = [];
 
     // Validate required fields
@@ -102,14 +116,13 @@ async function createEndpoint(req, res) {
       errors.push({ field: "name", message: "Endpoint name is required" });
     if (!method)
       errors.push({ field: "method", message: "HTTP method is required" });
-    if (!path)
-      errors.push({ field: "path", message: "Path is required" });
+    if (!path) errors.push({ field: "path", message: "Path is required" });
 
     if (errors.length > 0) {
       return res.status(400).json({ success: false, errors });
     }
 
-     const result = await svc.createEndpoint(req.db.stateless, req.body);
+    const result = await svc.createEndpoint(req.db.stateless, req.body);
 
     if (result.success === false) {
       return res.status(400).json(result);
@@ -124,14 +137,13 @@ async function createEndpoint(req, res) {
   }
 }
 
-
 // Update endpoint
 async function updateEndpoint(req, res) {
   try {
     const { id } = req.params;
     const { name, method, path, is_active, is_stateful } = req.body;
 
-const result = await svc.updateEndpoint(req.db.stateless, id, req.body); 
+    const result = await svc.updateEndpoint(req.db.stateless, id, req.body);
 
     if (!result) {
       return res.status(404).json({
