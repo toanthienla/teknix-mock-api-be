@@ -31,7 +31,7 @@ router.get('/endpoint_responses_ful/:id', responseController.getResponseById);
 // --- Định nghĩa routes cho Endpoint Data ---
 router.get('/endpoint_data', dataController.getDataByPath);
 router.delete('/endpoint_data', dataController.deleteDataByPath);
-//router.put("/endpoint_data", dataController.updateEndpointData);
-router.put("/endpoint_data", dataController.setDefaultEndpointData);
+router.put("/endpoint_data", dataController.updateEndpointData);
+//router.put("/endpoint_data", dataController.setDefaultEndpointData);
 
 module.exports = router;
