@@ -514,7 +514,7 @@ const EndpointStatefulService = {
       newDataDefault = data_default;
     }
 
-    // 5. Update DB
+  // 5. Update DB
     const { rows: updated } = await statefulPool.query(
       `UPDATE endpoint_data_ful
      SET schema = $1,

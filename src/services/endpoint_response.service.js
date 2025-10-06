@@ -101,7 +101,7 @@ async function create(
 // Trả về: response sau khi cập nhật hoặc null nếu không tồn tại
 async function update(
   dbPool,
-  dbPoolfull,
+  dbPoolful,
   id,
   {
     name,
@@ -115,7 +115,7 @@ async function update(
   }
 ) {
   // Xác định response thuộc stateful hay stateless
-  const isStatefull = await checkIsStatefull(dbPool, dbPoolfull, id);
+  const isStatefull = await checkIsStatefull(dbPool, dbPoolful, id);
 
   if (!isStatefull) {
     //  Nhánh Stateless 
@@ -163,7 +163,7 @@ async function update(
     //  Nhánh Stateful 
     const {
       rows: [response],
-    } = await dbPoolfull.query(
+    } = await dbPoolful.query(
       `SELECT * FROM endpoint_responses_ful WHERE id = $1`,
       [id]
     );
@@ -177,10 +177,14 @@ async function update(
       (response.name === "Get All Success" ||
         response.name === "Get Detail Success")
     ) {
-      throw new Error("This response is not editable.");
+     const err = new Error(
+        "This response cannot be edited (default GET 200 response)."
+      );
+      err.status = 403; // Forbidden
+      throw err;
     }
 
-    const { rows } = await dbPoolfull.query(
+    const { rows } = await dbPoolful.query(
       `UPDATE endpoint_responses_ful
        SET name = COALESCE($1, name),
            status_code = COALESCE($2, status_code),
@@ -197,28 +201,29 @@ async function update(
 }
 
 // Hàm check nhanh xem response thuộc endpoint stateful hay không
-async function checkIsStatefull(dbPool, dbPoolfull, responseId) {
-  // Thử tìm ở stateless trước
+async function checkIsStatefull(dbPool, dbPoolful, responseId) {
+  // 1️⃣ Kiểm tra trong DB stateless
   const { rows: r1 } = await dbPool.query(
-    `SELECT e.is_stateful
-     FROM endpoints e
-     INNER JOIN endpoint_responses r ON e.id = r.endpoint_id
+    `SELECT r.id 
+     FROM endpoint_responses r 
      WHERE r.id = $1`,
     [responseId]
   );
-  if (r1.length > 0) return r1[0].is_statefull || false;
+  if (r1.length > 0) return false;
 
-  // Nếu không có → thử tìm ở stateful
-  const { rows: r2 } = await dbPoolfull.query(
-    `SELECT e.is_stateful
-     FROM endpoints e
-INNER JOIN endpoints_ful ef ON e.id = ef.origin_id
-     INNER JOIN endpoint_responses_ful rf ON ef.id = rf.endpoint_id
+  // 2️⃣ Nếu không tìm thấy → thử trong DB stateful
+  const { rows: r2 } = await dbPoolful.query(
+    `SELECT rf.id 
+     FROM endpoint_responses_ful rf 
      WHERE rf.id = $1`,
     [responseId]
   );
-  return r2[0]?.is_stateful || false;
+  if (r2.length > 0) return true;
+
+  // 3️⃣ Nếu không có ở đâu → mặc định false
+  return false;
 }
+
 // Cập nhật danh sách priority cho nhiều response
 // Tham số: items = [{ id, endpoint_id, priority }, ...]
 // Lưu ý: không tự reorder liên tục; giá trị priority sẽ được set theo input
