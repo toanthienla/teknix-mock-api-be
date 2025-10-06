@@ -6,6 +6,56 @@ const https = require("https");
 
 const logSvc = require("../services/project_request_log.service");
 
+// === ADD: helper lấy danh sách id từ request theo thứ tự ưu tiên
+const pickIdsFromReq = (req) => {
+  const ids = [];
+
+  // query & params
+  if (req.query?.id != null) ids.push(String(req.query.id));
+  if (req.params?.id != null) ids.push(String(req.params.id));
+
+  // headers (whitelist)
+  const headerKeys = ["x-id", "x-resource-id", "x-user-id"];
+  for (const h of headerKeys) {
+    const v = req.headers?.[h];
+    if (v != null) ids.push(String(v));
+  }
+
+  // body
+  if (req.body && typeof req.body === "object") {
+    if (req.body.id != null) ids.push(String(req.body.id));
+    if (req.body.userId != null) ids.push(String(req.body.userId));
+  }
+
+  // unique theo thứ tự
+  return [...new Set(ids)];
+};
+
+// === ADD: helper lấy endpoints_ful.id từ origin_id (endpoints.id)
+async function getEndpointsFulId(statefulPool, originId) {
+  const { rows } = await statefulPool.query(
+    `SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1`,
+    [originId]
+  );
+  return rows?.[0]?.id ?? null;
+}
+
+// === ADD: helper lấy response template (Not Found / Schema Invalid / ID Conflict...)
+async function getTemplateResponse(statefulPool, epFulId, name, fallback) {
+  if (!epFulId) return fallback;
+  const { rows } = await statefulPool.query(
+    `SELECT status_code, response_body
+     FROM endpoint_responses_ful
+     WHERE endpoint_id = $1 AND name = $2
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [epFulId, name]
+  );
+  if (rows?.[0]) return rows[0];
+  return fallback;
+}
+// === END ADD
+
 const matcherCache = new Map();
 
 function getMatcher(pattern) {
@@ -13,7 +63,7 @@ function getMatcher(pattern) {
   if (!fn) {
     fn = match(pattern, {
       decode: decodeURIComponent,
-      strict: true,
+      strict: false,
       end: true,
     });
     matcherCache.set(pattern, fn);
@@ -71,14 +121,14 @@ router.use(async (req, res, next) => {
     const method = req.method.toUpperCase();
 
     const { rows: endpoints } = await req.db.stateless.query(
-      `SELECT e.id, e.method, e.path, e.folder_id, e.is_stateful, f.project_id
-       FROM endpoints e
-       JOIN folders f ON e.folder_id = f.id
-       WHERE UPPER(e.method) = $1 AND e.is_active = true`,
+      `SELECT e.id, e.method, e.path, e.folder_id, e.is_stateful, e.is_active, f.project_id
+    FROM endpoints e
+    LEFT JOIN folders f ON e.folder_id = f.id
+    WHERE UPPER(e.method) = $1`,
       [method]
     );
 
-    const ep = endpoints.find((e) => {
+    let ep = endpoints.find((e) => {
       try {
         const fn = getMatcher(e.path);
         return Boolean(fn(req.path));
@@ -87,8 +137,32 @@ router.use(async (req, res, next) => {
       }
     });
 
+    // Fallback: thử thêm/bớt dấu "/" cuối
+    if (!ep) {
+      const altPath = req.path.endsWith("/")
+        ? req.path.slice(0, -1)
+        : req.path + "/";
+      ep = endpoints.find((e) => {
+        try {
+          const fn = getMatcher(e.path);
+          return Boolean(fn(altPath));
+        } catch (_) {
+          return false;
+        }
+      });
+    }
     if (!ep) return next();
+    // Nếu endpoint vẫn stateless nhưng đã inactive ⇒ không phục vụ
+    if (!ep.is_stateful && ep.is_active === false) {
+      return next(); // rơi về 404 Express (đúng kỳ vọng vì đã chuyển stateful)
+    }
 
+    // Nếu endpoint đã stateful ⇒ chuyển qua nhánh stateful (cho dù stateless inactive)
+    if (ep.is_stateful === true) {
+      // → vào block xử lý STATEFUL (endpoints_ful + endpoint_data_ful + endpoint_responses_ful)
+    } else {
+      // → vào block xử lý STATELESS (endpoint_responses) như trước
+    }
     // Helper function để validate dữ liệu dựa trên schema
     const validateSchema = (schema, data) => {
       const errors = [];
@@ -136,7 +210,11 @@ router.use(async (req, res, next) => {
       }
 
       const statefulData = dataRows[0];
-      const currentData = statefulData.data_current || []; // Mặc định là mảng rỗng
+      const currentData = Array.isArray(statefulData.data_current)
+        ? statefulData.data_current
+        : statefulData.data_current
+        ? [statefulData.data_current]
+        : []; // Mặc định là mảng rỗng
 
       const method = req.method.toUpperCase();
       const matchFn = getMatcher(ep.path);
@@ -145,98 +223,116 @@ router.use(async (req, res, next) => {
 
       switch (method) {
         case "GET": {
-          // Lấy tất cả hoặc lấy theo ID
-          if (params.id) {
-            // Tìm item theo id trong params
-            const item = currentData.find(
-              (d) => String(d.id) === String(params.id)
+          const epFulId = await getEndpointsFulId(req.db.stateful, ep.id);
+
+          const currentData = Array.isArray(statefulData.data_current)
+            ? statefulData.data_current
+            : statefulData.data_current
+            ? [statefulData.data_current]
+            : [];
+
+          const candidates = pickIdsFromReq(req);
+          if (candidates.length) {
+            const item = currentData.find((d) =>
+              candidates.includes(String(d?.id))
             );
-            if (item) {
-              return res.status(200).json(item);
-            } else {
-              //  Có thể tìm response "Get Detail Not Found" để trả về
-              return res.status(404).json({ message: "Resource not found." });
-            }
-          } else {
-            // Trả về toàn bộ danh sách
-            return res.status(200).json(currentData);
+            if (item) return res.status(200).json(item);
+            const nf = await getTemplateResponse(
+              req.db.stateful,
+              epFulId,
+              "Get Detail Not Found",
+              {
+                status_code: 404,
+                response_body: { message: "Resource not found." },
+              }
+            );
+            return res.status(nf.status_code).json(nf.response_body);
           }
+          return res.status(200).json(currentData);
         }
 
         case "POST": {
           // Xử lý POST: Thêm mới dữ liệu
+          const epFulId = await getEndpointsFulId(req.db.stateful, ep.id);
           const newItem = req.body;
           const schema = statefulData.schema;
 
           //  BƯỚC 1: VALIDATE SCHEMA
           const validationErrors = validateSchema(schema, newItem);
           if (validationErrors.length > 0) {
-            const errResponse = (
-              await req.db.stateful.query(
-                `SELECT status_code, response_body FROM endpoint_responses_ful WHERE endpoint_id = $1 AND name = 'Schema Invalid' LIMIT 1`,
-                [ep.id]
-              )
-            ).rows[0] || {
-              status_code: 400,
-              response_body: { error: "Schema validation failed" },
-            };
-
-            return res
-              .status(errResponse.status_code)
-              .json({
-                ...errResponse.response_body,
-                details: validationErrors,
-              });
+            const errResponse = await getTemplateResponse(
+              req.db.stateful,
+              epFulId,
+              "Schema Invalid",
+              {
+                status_code: 400,
+                response_body: { error: "Schema validation failed" },
+              }
+            );
+            return res.status(errResponse.status_code).json({
+              ...errResponse.response_body,
+              details: validationErrors,
+            });
           }
 
-       // KIỂM TRA ID VÀ TẠO MỚI 
-    if (typeof newItem.id !== 'undefined') {
-        const idExists = currentData.some(item => String(item.id) === String(newItem.id));
-        if (idExists) {
-            const errResponse = (await req.db.stateful.query(
-                `SELECT status_code, response_body FROM endpoint_responses_ful WHERE endpoint_id = $1 AND name = 'ID Conflict' LIMIT 1`,
-                [ep.id]
-            )).rows[0] || { status_code: 409, response_body: { error: `Conflict: An item with id '${newItem.id}' already exists.` } };
-            
-            return res.status(errResponse.status_code).json(errResponse.response_body);
-        }
-    } else {
-        const maxId = currentData.reduce((max, item) => (item.id > max ? item.id : max), 0);
-        newItem.id = maxId + 1;
-    }
-
+          // KIỂM TRA ID VÀ TẠO MỚI
+          if (typeof newItem.id !== "undefined") {
+            const idExists = currentData.some(
+              (item) => String(item.id) === String(newItem.id)
+            );
+            if (idExists) {
+              const errResponse = await getTemplateResponse(
+                req.db.stateful,
+                epFulId,
+                "ID Conflict",
+                {
+                  status_code: 409,
+                  response_body: {
+                    error: `Conflict: An item with id '${newItem.id}' already exists.`,
+                  },
+                }
+              );
+              return res
+                .status(errResponse.status_code)
+                .json(errResponse.response_body);
+            }
+          } else {
+            const maxId = currentData.reduce(
+              (max, item) => (item.id > max ? item.id : max),
+              0
+            );
+            newItem.id = maxId + 1;
+          }
 
           const newData = [...currentData, newItem];
           // Cập nhật lại CSDL
           await req.db.stateful.query(
             `UPDATE endpoint_data_ful SET data_current = $1, updated_at = NOW() WHERE path = $2`,
             [JSON.stringify(newData), ep.path]
-          );  
+          );
 
           // Có thể tìm response "Create Success" để trả về status_code và body động
           return res.status(201).json(newItem);
         }
 
         case "PUT": {
-          //  Logic cho PUT 
+          //  Logic cho PUT
           return res
             .status(501)
             .json({ message: "PUT method not implemented yet." });
         }
 
         case "DELETE": {
-          // Logic cho DELETE 
+          // Logic cho DELETE
           return res
             .status(501)
             .json({ message: "DELETE method not implemented yet." });
         }
 
         default: {
-          return res
-            .status(405)
-            .json({
-              error: `Method ${method} not allowed for this stateful endpoint.`,
-            });
+          return res.status(405).json({
+            error: `Method ${method} not allowed for this stateful endpoint.`,
+          });
         }
       }
       //  kết thúc xử lý stateful
@@ -407,7 +503,7 @@ router.use(async (req, res, next) => {
   } catch (err) {
     try {
       await logSvc.insertLog(req.db.stateless, {
-        project_id: null, 
+        project_id: null,
         endpoint_id: null,
         request_method: req.method?.toUpperCase?.() || "",
         request_path: req.path || req.originalUrl || "",
