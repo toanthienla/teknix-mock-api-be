@@ -18,7 +18,7 @@ async function getEndpoints(dbPool, { project_id, folder_id } = {}) {
     query += ` JOIN folders f ON e.folder_id = f.id WHERE f.project_id = $${paramIndex++}`;
     params.push(project_id);
 
-  // Nếu không có project_id nhưng có folder_id, lọc trực tiếp
+    // Nếu không có project_id nhưng có folder_id, lọc trực tiếp
   } else if (folder_id) {
     query += ` WHERE e.folder_id = $${paramIndex++}`;
     params.push(folder_id);
@@ -216,7 +216,7 @@ async function deleteEndpoint(dbPool, endpointId) {
   // Logic cũ để null hóa log và xóa vẫn được giữ lại
   await logSvc.nullifyEndpointAndResponses(dbPool, endpointId);
   await dbPool.query("DELETE FROM endpoints WHERE id=$1", [endpointId]);
-  
+
   return { success: true, data: endpoint };
 }
 

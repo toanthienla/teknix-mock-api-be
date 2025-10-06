@@ -128,6 +128,13 @@ const EndpointStatefulService = {
       ]);
       if (!endpoint) throw new Error("Stateless endpoint not found");
 
+      // === 1.5) Kiểm tra xem path có route parameter hay không ===
+      if (endpoint.path.includes(":")) {
+        throw new Error(
+          "This endpoint contains route parameters and cannot be converted to stateful."
+        );
+      }
+
       // 2) Tìm stateful cũ theo origin_id
       const { rows: existing } = await clientStateful.query(
         `SELECT id, is_active, path, method FROM endpoints_ful WHERE origin_id = $1 LIMIT 1`,
@@ -225,10 +232,10 @@ const EndpointStatefulService = {
       // rollback cả hai phía nếu có lỗi
       try {
         await clientStateless.query("ROLLBACK");
-      } catch {}
+      } catch { }
       try {
         await clientStateful.query("ROLLBACK");
-      } catch {}
+      } catch { }
       // trả lỗi ra ngoài để controller trả response phù hợp
       throw err;
     } finally {
@@ -318,7 +325,7 @@ const EndpointStatefulService = {
    * @param {object} endpoint - endpoint vừa insert vào stateful
    */
   async generateDefaultResponses(statefulPool, endpoint) {
-    const { id: endpointId, method } = endpoint;
+    const { id: endpointId, method, path } = endpoint; // lấy path luôn
     const responseMap = {
       GET: this.ResponsesForGET,
       POST: this.ResponsesForPOST,
@@ -327,7 +334,7 @@ const EndpointStatefulService = {
     };
     const responseFunc = responseMap[method.toUpperCase()];
     if (responseFunc) {
-      return responseFunc.call(this, statefulPool, endpointId);
+      return responseFunc.call(this, statefulPool, endpointId, path);
     }
     return { message: `No default responses defined for method: ${method}` };
   },
@@ -355,73 +362,104 @@ const EndpointStatefulService = {
     }
   },
   // --- Các hàm tạo response mặc định cho từng Method ---
-  async ResponsesForGET(dbStateful, endpointId) {
+  async ResponsesForGET(dbStateful, endpointId, endpointPath) {
+    // Cắt path và uppercase chữ cái đầu
+    const pathSegment = endpointPath.split("/").filter(Boolean).pop() || "Resource";
+    const capitalizedPath = pathSegment.charAt(0).toUpperCase() + pathSegment.slice(1);
+
     const responses = [
       { name: "Get All Success", status_code: 200, response_body: [{}] },
       { name: "Get Detail Success", status_code: 200, response_body: {} },
       {
         name: "Get Detail Not Found",
         status_code: 404,
-        response_body: { message: "Resource not found." },
+        response_body: { message: `${capitalizedPath} with id {{params.id}} not found.` }, // template với path đúng
       },
     ];
     return this.insertResponses(dbStateful, endpointId, responses);
   },
-  async ResponsesForPOST(dbStateful, endpointId) {
+  async ResponsesForPOST(dbStateful, endpointId, endpointPath) {
+    // Cắt path và uppercase chữ cái đầu
+    const pathSegment = endpointPath.split("/").filter(Boolean).pop() || "Resource";
+    const capitalizedPath = pathSegment.charAt(0).toUpperCase() + pathSegment.slice(1);
+
     const responses = [
       {
         name: "Create Success",
         status_code: 201,
-        response_body: { message: "Created successfully!" },
+        response_body: { message: `New ${capitalizedPath} item added successfully.` }, // dynamic
       },
       {
         name: "Schema Invalid",
-        status_code: 400,
+        status_code: 403,
         response_body: {
-          message: "Creation failed: data does not follow schema.",
+          message: `Invalid data: request does not match ${capitalizedPath} object schema.`,
         },
       },
       {
         name: "ID Conflict",
         status_code: 409,
-        response_body: { message: "Creation failed: id conflicts in array." },
+        response_body: {
+          message: `${capitalizedPath} {{params.id}} conflict: {{params.id}} already exists.`,
+        },
       },
     ];
+
     return this.insertResponses(dbStateful, endpointId, responses);
   },
-  async ResponsesForPUT(dbStateful, endpointId) {
+  async ResponsesForPUT(dbStateful, endpointId, endpointPath) {
+    // Cắt path và uppercase chữ cái đầu
+    const pathSegment = endpointPath.split("/").filter(Boolean).pop() || "Resource";
+    const capitalizedPath = pathSegment.charAt(0).toUpperCase() + pathSegment.slice(1);
+
     const responses = [
       {
         name: "Update Success",
         status_code: 200,
-        response_body: { message: "Updated successfully!" },
+        response_body: { message: `${capitalizedPath} with id {{params.id}} updated successfully.` },
+      },
+      {
+        name: "Schema Invalid",
+        status_code: 403,
+        response_body: { message: `Invalid data: request does not match ${capitalizedPath} schema.` },
+      },
+      {
+        name: "ID Conflict",
+        status_code: 409,
+        response_body: { message: `Update id {{params.id}} conflict: ${capitalizedPath} id {{params.id}} in request body already exists.` },
       },
       {
         name: "Not Found",
         status_code: 404,
-        response_body: { message: "Update failed: resource not found." },
+        response_body: { message: `${capitalizedPath} with id {{params.id}} not found.` },
       },
     ];
+
     return this.insertResponses(dbStateful, endpointId, responses);
   },
-  async ResponsesForDELETE(dbStateful, endpointId) {
+  async ResponsesForDELETE(dbStateful, endpointId, endpointPath) {
+    // Cắt path và uppercase chữ cái đầu
+    const pathSegment = endpointPath.split("/").filter(Boolean).pop() || "Resource";
+    const capitalizedPath = pathSegment.charAt(0).toUpperCase() + pathSegment.slice(1);
+
     const responses = [
-      {
-        name: "Delete Success",
-        status_code: 200,
-        response_body: { message: "Resource deleted successfully." },
-      },
       {
         name: "Delete All Success",
         status_code: 200,
-        response_body: { message: "Resource deleted all successfully." },
+        response_body: { message: `Delete all data with ${capitalizedPath} successfully.` },
+      },
+      {
+        name: "Delete Success",
+        status_code: 200,
+        response_body: { message: `${capitalizedPath} with id {{params.id}} deleted successfully.` },
       },
       {
         name: "Not Found",
         status_code: 404,
-        response_body: { message: "Delete failed: resource not found." },
+        response_body: { message: `${capitalizedPath} with id {{params.id}} to delete not found.` },
       }
     ];
+
     return this.insertResponses(dbStateful, endpointId, responses);
   },
 
