@@ -161,7 +161,7 @@ const EndpointStatefulService = {
           existing[0].method ?? endpoint.method
         );
 
-        // 2.4) (tuỳ chọn) sinh lại responses mặc định nếu thiếu
+        // 2.4)  sinh lại responses mặc định nếu thiếu
         // await this.generateDefaultResponses(statefulPool, { id: statefulId, method: endpoint.method });
 
         return {
@@ -169,7 +169,7 @@ const EndpointStatefulService = {
         };
       }
 
-      // --- Convert lần đầu (chưa từng có) ---
+      //Convert lần đầu
       await clientStateless.query(
         `UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1`,
         [endpointId]
@@ -192,13 +192,13 @@ const EndpointStatefulService = {
       await clientStateful.query("COMMIT");
       await clientStateless.query("COMMIT");
 
-      // Sau COMMIT: tạo responses mặc định + endpoint_data_ful nếu thiếu
+      // tạo responses mặc định + endpoint_data_ful nếu thiếu
       const responsesResult = await this.generateDefaultResponses(
         statefulPool,
         statefulEndpoint
       );
 
-      // KHÔNG dùng lại clientStateful ở đây; dùng pool mới cho gọn
+      // KHÔNG dùng lại clientStateful ở đây; dùng pool mới 
       const { rows: existingData } = await statefulPool.query(
         `SELECT 1 FROM endpoint_data_ful WHERE path = $1 LIMIT 1`,
         [statefulEndpoint.path]
@@ -354,7 +354,7 @@ const EndpointStatefulService = {
       client.release();
     }
   },
-  // --- Các hàm tạo response mặc định cho từng Method ---
+  // Các hàm tạo response mặc định cho từng Method 
   async ResponsesForGET(dbStateful, endpointId) {
     const responses = [
       { name: "Get All Success", status_code: 200, response_body: [{}] },
@@ -503,14 +503,12 @@ const EndpointStatefulService = {
 
     // 3. Chỉ có data_default
     if (!schema && data_default) {
-      // SỬA Ở ĐÂY: Thêm "await this."
       await this.validateDataWithSchema(data_default, current.schema);
       newDataDefault = data_default;
     }
 
     // 4. Có cả schema và data_default
     if (schema && data_default) {
-      // SỬA Ở ĐÂY: Thêm "await this."
       await this.validateDataWithSchema(data_default, schema);
       newSchema = schema;
       newDataDefault = data_default;
@@ -567,32 +565,6 @@ const EndpointStatefulService = {
     }
   },
 
-  async setDefaultEndpointData(statefulPool, path) {
-    if (!statefulPool) throw new Error("Database pool is undefined");
-
-    // 1. Lấy record hiện tại
-    const { rows } = await statefulPool.query(
-      `SELECT id, data_current FROM endpoint_data_ful WHERE path = $1`,
-      [path]
-    );
-    if (rows.length === 0) {
-      throw new Error("Không tìm thấy endpoint_data với path: " + path);
-    }
-
-    const dataCurrent = rows[0].data_current;
-
-    // 2. Cập nhật data_default = data_current
-    const { rows: updated } = await statefulPool.query(
-      `UPDATE endpoint_data_ful
-     SET data_default = $1,
-         updated_at = NOW()
-     WHERE path = $2
-     RETURNING id, path, schema, data_default, data_current, created_at, updated_at`,
-      [JSON.stringify(dataCurrent), path]
-    );
-
-    return updated[0];
-  },
 };
 
 module.exports = EndpointStatefulService;

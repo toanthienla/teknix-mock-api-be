@@ -99,7 +99,6 @@ async function deleteFolderAndHandleLogs(db, folderId) {
       return { success: false, notFound: true };
     }
 
-    // Giả định bạn có hàm nullifyFolderTree để xử lý các foreign key trong bảng log
     await logSvc.nullifyFolderTree(folderId, client);
 
     await client.query('DELETE FROM folders WHERE id = $1', [folderId]);

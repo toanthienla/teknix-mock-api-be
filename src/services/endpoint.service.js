@@ -90,7 +90,7 @@ async function createEndpoint(
   );
   const endpoint = rows[0];
 
-  // --- Auto-create default endpoint_response ---
+  //  Auto-create default endpoint_response 
   await endpointResponseService.create(dbPool, {
     endpoint_id: endpoint.id,
     name: "Success",

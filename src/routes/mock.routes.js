@@ -121,7 +121,7 @@ router.use(async (req, res, next) => {
       return errors;
     };
     if (ep.is_stateful) {
-      // ===== BẮT ĐẦU KHỐI LOGIC STATEFUL MỚI =====
+      //  STATEFUL
 
       // 1. Lấy dữ liệu stateful từ CSDL
       const { rows: dataRows } = await req.db.stateful.query(
@@ -145,7 +145,7 @@ router.use(async (req, res, next) => {
 
       switch (method) {
         case "GET": {
-          // Xử lý GET: Lấy tất cả hoặc lấy theo ID
+          // Lấy tất cả hoặc lấy theo ID
           if (params.id) {
             // Tìm item theo id trong params
             const item = currentData.find(
@@ -154,7 +154,7 @@ router.use(async (req, res, next) => {
             if (item) {
               return res.status(200).json(item);
             } else {
-              // TODO: Có thể tìm response "Get Detail Not Found" để trả về
+              //  Có thể tìm response "Get Detail Not Found" để trả về
               return res.status(404).json({ message: "Resource not found." });
             }
           } else {
@@ -168,7 +168,7 @@ router.use(async (req, res, next) => {
           const newItem = req.body;
           const schema = statefulData.schema;
 
-          // ===== BƯỚC 1: VALIDATE SCHEMA (Thêm vào) =====
+          //  BƯỚC 1: VALIDATE SCHEMA
           const validationErrors = validateSchema(schema, newItem);
           if (validationErrors.length > 0) {
             const errResponse = (
@@ -189,7 +189,7 @@ router.use(async (req, res, next) => {
               });
           }
 
-       // ===== BƯỚC 2: KIỂM TRA ID VÀ TẠO MỚI =====
+       // KIỂM TRA ID VÀ TẠO MỚI 
     if (typeof newItem.id !== 'undefined') {
         const idExists = currentData.some(item => String(item.id) === String(newItem.id));
         if (idExists) {
@@ -213,19 +213,19 @@ router.use(async (req, res, next) => {
             [JSON.stringify(newData), ep.path]
           );  
 
-          // TODO: Có thể tìm response "Create Success" để trả về status_code và body động
+          // Có thể tìm response "Create Success" để trả về status_code và body động
           return res.status(201).json(newItem);
         }
 
         case "PUT": {
-          // TODO: Logic cho PUT (cập nhật) sẽ được thêm ở đây
+          //  Logic cho PUT 
           return res
             .status(501)
             .json({ message: "PUT method not implemented yet." });
         }
 
         case "DELETE": {
-          // TODO: Logic cho DELETE (xóa) sẽ được thêm ở đây
+          // Logic cho DELETE 
           return res
             .status(501)
             .json({ message: "DELETE method not implemented yet." });
@@ -239,7 +239,7 @@ router.use(async (req, res, next) => {
             });
         }
       }
-      // ===== KẾT THÚC KHỐI LOGIC STATEFUL MỚI =====
+      //  kết thúc xử lý stateful
     }
 
     // Logic cho stateless endpoints
@@ -265,7 +265,6 @@ router.use(async (req, res, next) => {
           : { error: { message: "No response configured" } };
 
       await logSvc.insertLog(req.db.stateless, {
-        // SỬA Ở ĐÂY
         project_id: ep.project_id || null,
         endpoint_id: ep.id,
         request_method: method,
@@ -307,7 +306,6 @@ router.use(async (req, res, next) => {
         const status = 404;
         const body = { error: "No matching response found" };
         await logSvc.insertLog(req.db.stateless, {
-          // SỬA Ở ĐÂY
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           request_method: method,
@@ -407,10 +405,9 @@ router.use(async (req, res, next) => {
       }
     }
   } catch (err) {
-    // Sửa khối catch cuối cùng
     try {
       await logSvc.insertLog(req.db.stateless, {
-        project_id: null, // Không có context project_id ở đây
+        project_id: null, 
         endpoint_id: null,
         request_method: req.method?.toUpperCase?.() || "",
         request_path: req.path || req.originalUrl || "",

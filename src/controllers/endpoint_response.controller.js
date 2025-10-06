@@ -67,8 +67,7 @@ async function getById(req, res) {
     const statelessResponse = await svc.getById(req.db.stateless, rid);
     if (!statelessResponse) return error(res, 404, 'Response not found');
 
-    // Bước 2: Kiểm tra cờ is_stateful (giả định bạn sẽ thêm cột này vào bảng endpoint_responses)
-    // Nếu chưa có, bạn cần thêm cột is_stateful: BOOLEAN vào bảng endpoint_responses
+    // Bước 2: Kiểm tra cờ is_stateful 
     if (statelessResponse.is_stateful === true) {
         const statefulResponse = await statefulSvc.findByOriginId(statelessResponse.id);
         if (!statefulResponse) {

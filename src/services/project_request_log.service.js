@@ -37,7 +37,6 @@ async function insertLog(dbPool, payload) {
   } = payload;
 
   // Ghi 1 dòng log request/response thực tế
-  // Lưu ý: các cột JSONB dùng $param::jsonb nên tham số phải là CHUỖI JSON HỢP LỆ
   const { rows } = await dbPool.query(
     `INSERT INTO project_request_logs (
        project_id, endpoint_id, endpoint_response_id,

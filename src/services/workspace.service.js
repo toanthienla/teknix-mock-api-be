@@ -80,7 +80,7 @@ async function deleteWorkspace(db, id) {
   return { success: true, data: rows[0] };
 }
 
-// HÀM MỚI: Xử lý nghiệp vụ xóa và log trong transaction
+// Xử lý nghiệp vụ xóa và log trong transaction
 async function deleteWorkspaceAndHandleLogs(db, workspaceId) {
   const client = await db.connect(); // Lấy client từ pool để dùng transaction
 

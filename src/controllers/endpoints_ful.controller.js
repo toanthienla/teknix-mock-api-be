@@ -80,7 +80,7 @@ async function updateEndpointResponse(req, res) {
     const response_body = req.body.response_body ?? req.body.responseBody;
     const delay = req.body.delay ?? req.body.delay_ms;
 
-    // SỬA: Truyền dbStateful vào service
+    // Truyền dbStateful vào service
     const updated = await EndpointStatefulService.updateEndpointResponse(req.db.stateful, id, { response_body, delay });
 
     return res.status(200).json({

@@ -1,12 +1,8 @@
-// src/controllers/endpoint_data_ful.controller.js
-
-// SỬA Ở ĐÂY: Đổi tên biến import cho đúng với đối tượng được export
 const EndpointStatefulService = require("../services/endpoints_ful.service");
 const DataStatefulService = require("../services/endpoint_data_ful.service");
 
 /**
  * Lấy dữ liệu stateful theo path
- * Chức năng này có vẻ chưa có trong service của bạn, bạn cần thêm hàm findByPath vào service nếu muốn dùng
  */
 exports.getDataByPath = async (req, res) => {
   try {
@@ -15,14 +11,15 @@ exports.getDataByPath = async (req, res) => {
       return res.status(400).json({ error: "Tham số 'path' là bắt buộc." });
     }
     // KÍCH HOẠT: Gọi hàm findByPath từ service
-    const data = await DataStatefulService.findByPath(path); 
+    const data = await DataStatefulService.findByPath(path);
     // XỬ LÝ KẾT QUẢ: Kiểm tra xem có dữ liệu trả về không
     if (data) {
       return res.status(200).json(data);
     } else {
-      return res.status(404).json({ error: `Không tìm thấy dữ liệu với path: '${path}'` });
+      return res
+        .status(404)
+        .json({ error: `Không tìm thấy dữ liệu với path: '${path}'` });
     }
-
   } catch (err) {
     console.error("Error in getDataByPath:", err.message);
     res.status(500).json({ error: "Lỗi máy chủ nội bộ." });
@@ -34,25 +31,25 @@ exports.getDataByPath = async (req, res) => {
  * Chức năng này cũng chưa có trong service, cần bổ sung
  */
 exports.deleteDataByPath = async (req, res) => {
-    try {
-        const { path } = req.query;
-        if (!path) {
-            return res.status(400).json({ error: "Tham số 'path' là bắt buộc." });
-        }
-        
-        // LƯU Ý: Hàm deleteByPath chưa tồn tại trong EndpointStatefulService bạn gửi.
-        // Bạn cần phải tự định nghĩa nó.
-        // const success = await EndpointStatefulService.deleteByPath(path);
-
-        // Tạm thời trả về lỗi để bạn biết cần bổ sung
-        return res.status(501).json({ error: "Chức năng 'deleteByPath' chưa được cài đặt trong service." });
-
-    } catch (err) {
-        console.error("Error in deleteDataByPath:", err.message);
-        res.status(500).json({ error: "Lỗi máy chủ nội bộ." });
+  try {
+    const { path } = req.query;
+    if (!path) {
+      return res.status(400).json({ error: "Tham số 'path' là bắt buộc." });
     }
-};
 
+    // const success = await EndpointStatefulService.deleteByPath(path);
+
+    // Tạm thời trả về lỗi để biết cần bổ sung
+    return res
+      .status(501)
+      .json({
+        error: "Chức năng 'deleteByPath' chưa được cài đặt trong service.",
+      });
+  } catch (err) {
+    console.error("Error in deleteDataByPath:", err.message);
+    res.status(500).json({ error: "Lỗi máy chủ nội bộ." });
+  }
+};
 
 /**
  * Cập nhật dữ liệu (schema và data_default) cho một endpoint
@@ -61,7 +58,7 @@ exports.updateEndpointData = async (req, res) => {
   try {
     const { path } = req.query;
     if (!path) {
-        return res.status(400).json({ error: "Tham số 'path' là bắt buộc." });
+      return res.status(400).json({ error: "Tham số 'path' là bắt buộc." });
     }
 
     if (!req.body || Object.keys(req.body).length === 0) {
@@ -77,6 +74,7 @@ exports.updateEndpointData = async (req, res) => {
       path,
       { schema, data_default }
     );
+
 
     return res.status(200).json({
       message: "Cập nhật dữ liệu endpoint thành công.",
@@ -96,23 +94,27 @@ exports.updateEndpointData = async (req, res) => {
 exports.setDefaultEndpointData = async (req, res) => {
   try {
     const { path } = req.query;
-     if (!path) {
-        return res.status(400).json({ error: "Tham số 'path' là bắt buộc." });
-    }
+    const { data_default } = req.body || {};
 
-    // SỬA Ở ĐÂY: Gọi hàm từ EndpointStatefulService
-    const result = await EndpointStatefulService.setDefaultEndpointData(
+    if (!path) return res.status(400).json({ error: "Thiếu query 'path'." });
+    if (data_default === undefined)
+      return res
+        .status(400)
+        .json({ error: "Thiếu 'data_default' trong payload." });
+
+    const result = await DataStatefulService.upsertDefaultAndCurrentByPath(
       req.db.stateful,
-      path
+      path,
+      data_default
     );
 
     return res.status(200).json({
-      message: "Thiết lập dữ liệu mặc định thành công.",
+      message: "Cập nhật data_default và đồng bộ data_current thành công.",
       data: result,
     });
   } catch (err) {
-    console.error("Error in setDefaultEndpointData:", err.message);
-    const statusCode = err.message.includes("Không tìm thấy") ? 404 : 500;
-    return res.status(statusCode).json({ error: err.message });
+    console.error("Error in setDefaultEndpointData:", err);
+    const status = /không tìm thấy/i.test(err.message) ? 404 : 500;
+    return res.status(status).json({ error: err.message });
   }
 };

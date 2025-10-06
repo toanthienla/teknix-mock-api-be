@@ -20,7 +20,6 @@ const statefulRoutes = require('./routes/stateful.routes');
 const { statelessPool, statefulPool } = require('./config/db'); 
 
 // Thêm Middleware để inject DB pools vào mỗi request
-// Đoạn code này phải nằm TRƯỚC khi bạn mount các routes
 app.use((req, res, next) => {
     req.db = {
         stateless: statelessPool,

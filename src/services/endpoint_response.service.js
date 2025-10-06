@@ -118,7 +118,7 @@ async function update(
   const isStatefull = await checkIsStatefull(dbPool, dbPoolfull, id);
 
   if (!isStatefull) {
-    // ====== Nhánh Stateless ======
+    //  Nhánh Stateless 
     let endpointId;
     if (typeof is_default !== "undefined") {
       const current = await getById(dbPool, id);
@@ -160,7 +160,7 @@ async function update(
 
     return rows[0] || null;
   } else {
-    // ====== Nhánh Stateful ======
+    //  Nhánh Stateful 
     const {
       rows: [response],
     } = await dbPoolfull.query(
@@ -226,7 +226,7 @@ INNER JOIN endpoints_ful ef ON e.id = ef.origin_id
 async function updatePriorities(dbPool, items) {
   // items: [{ id, endpoint_id, priority }]
   if (!Array.isArray(items) || items.length === 0) return [];
-  // We can optionally validate same endpoint_id; we proceed to update as provided
+  // có thể tùy chọn xác thực cùng một endpoint_id; tiến hành cập nhật theo như đã cung cấp
   const results = [];
   for (const it of items) {
     const { id, endpoint_id, priority } = it;
@@ -257,12 +257,12 @@ async function remove(dbPool, id) {
 //  - Set is_default = true cho response có id tương ứng
 // Trả về: danh sách rút gọn các response của endpoint đó: [{ id, endpoint_id, is_default }, ...]
 async function setDefault(dbPool, id) {
-  // Ensure the target response exists and get its endpoint_id
+// Đảm bảo phản hồi mục tiêu tồn tại và lấy endpoint_id của nó
   const current = await getById(dbPool, id);
   if (!current) return [];
   const endpointId = current.endpoint_id;
 
-  // Unset others, then set this one
+// Bỏ các mục khác, sau đó đặt mục này
   await dbPool.query(
     "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1",
     [endpointId]
@@ -272,7 +272,7 @@ async function setDefault(dbPool, id) {
     [id]
   );
 
-  // Return summary list for that endpoint
+ // Trả về danh sách tóm tắt cho điểm cuối đó
   const { rows } = await dbPool.query(
     "SELECT id, endpoint_id, is_default FROM endpoint_responses WHERE endpoint_id = $1 ORDER BY id ASC",
     [endpointId]
