@@ -18,10 +18,9 @@ function renderTemplateDeep(value, ctx) {
     });
   }
   if (Array.isArray(value)) return value.map((v) => renderTemplateDeep(v, ctx));
-  if (value && typeof value === "object") {
-    const out = Array.isArray(value) ? [] : {};
-    for (const [k, v] of Object.entries(value))
-      out[k] = renderTemplateDeep(v, ctx);
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = renderTemplateDeep(v, ctx);
     return out;
   }
   return value;
@@ -66,9 +65,17 @@ module.exports = async function statefulHandler(req, res, next) {
   try {
     const method = (req.method || "GET").toUpperCase();
     const basePath = req.universal?.basePath || req.endpoint?.path || req.path;
-    const idFromUrl = Number(
-      (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl)
-    );
+
+    // --- FIX id=0 khi không có id ---
+    const rawId =
+      (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl);
+    const hasId =
+      rawId !== undefined &&
+      rawId !== null &&
+      String(rawId) !== "" &&
+      /^\d+$/.test(String(rawId));
+    const idFromUrl = hasId ? Number(rawId) : undefined;
+    // --------------------------------
 
     // 1) Resolve endpointId (stateful) & preload
     const endpointId =
@@ -94,12 +101,10 @@ module.exports = async function statefulHandler(req, res, next) {
     );
     if (!dataQ.rows[0]) {
       // chưa provision đúng
-      return res
-        .status(500)
-        .json({
-          message: "endpoint_data_ful not provisioned for path",
-          path: basePath,
-        });
+      return res.status(500).json({
+        message: "endpoint_data_ful not provisioned for path",
+        path: basePath,
+      });
     }
     const schema = normalizeJsonb(dataQ.rows[0].schema) || {};
     const current = normalizeJsonb(dataQ.rows[0].data_current) || [];
@@ -110,7 +115,7 @@ module.exports = async function statefulHandler(req, res, next) {
     const payload = req.body || {};
 
     if (method === "GET") {
-      if (Number.isFinite(idFromUrl)) {
+      if (hasId) {
         const item = current.find((x) => Number(x?.id) === idFromUrl);
         if (!item) {
           return sendResponse(
@@ -181,7 +186,7 @@ module.exports = async function statefulHandler(req, res, next) {
     }
 
     if (method === "PUT") {
-      if (!Number.isFinite(idFromUrl)) {
+      if (!hasId) {
         return sendResponse(
           res,
           404,
@@ -237,7 +242,7 @@ module.exports = async function statefulHandler(req, res, next) {
     }
 
     if (method === "DELETE") {
-      if (Number.isFinite(idFromUrl)) {
+      if (hasId) {
         const idx = current.findIndex((x) => Number(x?.id) === idFromUrl);
         if (idx === -1) {
           return sendResponse(

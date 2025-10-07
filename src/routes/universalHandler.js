@@ -5,21 +5,42 @@ const router = express.Router();
 const statefulHandler = require("./statefulHandler");
 const statelessHandler = require("./mock.routes");
 
+// ---------- small LRU cache to cut repeated lookups ----------
+const CACHE = new Map();
+const CACHE_TTL_MS = 30_000;
+const CACHE_MAX = 100;
+const cacheKeyOf = (m, p) => `${m}:${p}`;
+const cacheGet = (k) => {
+  const v = CACHE.get(k);
+  if (!v) return null;
+  if (Date.now() - v.t > CACHE_TTL_MS) { CACHE.delete(k); return null; }
+  // bump LRU
+  CACHE.delete(k); CACHE.set(k, v);
+  return v.data;
+};
+const cacheSet = (k, data) => {
+  if (CACHE.size >= CACHE_MAX) {
+    const oldest = CACHE.keys().next().value;
+    CACHE.delete(oldest);
+  }
+  CACHE.set(k, { t: Date.now(), data });
+};
 
-/* ========== Helpers ========== */
+// ---------- helpers ----------
 function normalizePath(raw) {
   if (!raw) return "/";
+  // express đã loại query, nhưng cứ chắc:
   let p = raw.split("?")[0];
   try { p = decodeURIComponent(p); } catch {}
-  p = p.replace(/\/{2,}/g, "/");
-  if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+  p = p.replace(/\/{2,}/g, "/");       // nén nhiều slash
+  if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1); // bỏ slash cuối (trừ "/")
   if (!p.startsWith("/")) p = "/" + p;
   return p || "/";
 }
 
-// Trả { base, id } nếu segment cuối là số; ngược lại id = null
+// Cắt thử 1 segment cuối làm id (số). Nếu hợp lệ → trả base & id, ngược lại id=null.
 function splitBaseAndNumericId(path) {
-  const segs = (path || "").split("/").filter(Boolean);
+  const segs = path.split("/").filter(Boolean);
   if (segs.length === 0) return { base: "/", id: null };
   const last = segs[segs.length - 1];
   if (/^\d+$/.test(last)) {
@@ -30,133 +51,139 @@ function splitBaseAndNumericId(path) {
   return { base: path, id: null };
 }
 
-// Hỗ trợ cả router (có .handle) và middleware function
+// Gọi handler (router hoặc middleware hoặc object có .handle)
 function runHandler(handler, req, res, next) {
-  if (handler && typeof handler.handle === "function") return handler.handle(req, res, next);
-  if (typeof handler === "function") return handler(req, res, next);
+  if (handler && typeof handler.handle === "function") {
+    return handler.handle(req, res, next);
+  }
+  if (typeof handler === "function") {
+    return handler(req, res, next);
+  }
   throw new Error("Invalid handler export");
 }
 
-/* ========== Main ========== */
+// ---------- main ----------
 router.use(async (req, res, next) => {
   try {
     const method = (req.method || "GET").toUpperCase();
     const normPath = normalizePath(req.path || req.originalUrl || "/");
     const { base: baseCandidate, id: idCandidate } = splitBaseAndNumericId(normPath);
 
-    // Danh sách ứng viên path theo thứ tự ưu tiên: exact → base (nếu có id)
-    const exact = normPath;
-    const candidates = Array.from(
-      new Set((idCandidate !== null && baseCandidate !== normPath) ? [exact, baseCandidate] : [exact])
-    ); // luôn >=1 phần tử, không có null
+    // 1) Tìm endpoint ở DB stateless theo method + path (ưu tiên exact; nếu không, base khi có id)
+    //    => Đây là "registry" quyết định chế độ.
+    const candidates = (idCandidate !== null && baseCandidate !== normPath)
+      ? [normPath, baseCandidate]
+      : [normPath];
 
-    // 1) Truy vấn "registry" stateless để xác định endpoint + chế độ
-    const statelessQ = await req.db.stateless.query(
-      `
-      SELECT id, path, method, is_stateful, is_active
-      FROM endpoints
-      WHERE UPPER(method) = $1
-        AND path = ANY($2)
-      ORDER BY COALESCE(array_position($2, path), 999)
-      LIMIT 1
-      `,
-      [method, candidates] // $2 là text[]
+    // Cache theo path exact để các lần sau không hit DB
+    const ck = cacheKeyOf(method, normPath);
+    const cached = cacheGet(ck);
+    if (cached) {
+      req.universal = cached.meta;
+      return runHandler(cached.mode === "stateful" ? statefulHandler : statelessHandler, req, res, next);
+    }
+
+    const { rows: epRows } = await req.db.stateless.query(
+      `SELECT id, path, method, is_stateful, is_active
+         FROM endpoints
+        WHERE UPPER(method) = $1
+          AND path = ANY($2)`,
+      [method, candidates]
     );
-    const ep = (statelessQ.rows && statelessQ.rows[0]) ? statelessQ.rows[0] : null;
 
-    if (!ep) {
+    if (!epRows.length) {
+      // Không có định nghĩa endpoint trong registry → 404
       return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
     }
 
-    const matchedPath = normalizePath(ep.path || "");
-    const idInUrl = matchedPath !== normPath ? idCandidate : null;
+    // Ưu tiên exact match, fallback base
+    const matchedStateless =
+      epRows.find(r => normalizePath(r.path) === normPath) ||
+      epRows.find(r => normalizePath(r.path) === baseCandidate);
 
-    // Bảo toàn tương thích ngược cho các handler cũ:
-    // - req.endpoint: dùng path/method đã match (stateless registry)
-    // - req.params.id: chỉ set nếu chưa tồn tại
-    req.endpoint = { id: ep.id, method, path: matchedPath };
-    if (idInUrl !== null) {
-      req.params = req.params || {};
-      if (typeof req.params.id === "undefined") {
-        req.params.id = idInUrl;
-      }
+    if (!matchedStateless) {
+      return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
     }
 
-    // 2) Quyết định stateful/stateless dựa vào cờ
-    if (ep.is_stateful === true) {
-      // Xác minh tồn tại & is_active ở DB stateful (ưu tiên origin_id)
+    const matchedPath = normalizePath(matchedStateless.path);
+    const idInUrl = (matchedPath !== normPath) ? idCandidate : null;
+
+    // 2) Quyết định stateful/stateless dựa trên cờ
+    if (matchedStateless.is_stateful === true) {
+      // a) Xác minh endpoint ở DB stateful (ưu tiên theo origin_id)
       let st = await req.db.stateful.query(
         `SELECT id, is_active
            FROM endpoints_ful
           WHERE origin_id = $1
           LIMIT 1`,
-        [ep.id]
+        [matchedStateless.id]
       );
 
-      if (!st.rows || !st.rows[0]) {
-        // Fallback theo method+path (phòng khi origin_id chưa sync)
+      if (!st.rows[0]) {
+        // fallback theo method+path (phòng khi origin_id chưa sync)
         st = await req.db.stateful.query(
           `SELECT id, is_active
              FROM endpoints_ful
-            WHERE UPPER(method) = $1 AND path = $2
+            WHERE UPPER(method) = $1
+              AND path = $2
             LIMIT 1`,
           [method, matchedPath]
         );
       }
 
-      const stRow = st.rows && st.rows[0] ? st.rows[0] : null;
-      if (!stRow) {
+      if (!st.rows[0]) {
+        // Bật stateful nhưng chưa provision xong
         return res.status(500).json({
           message: "Stateful endpoint is enabled but not provisioned",
-          detail: { method, path: matchedPath, origin_id: ep.id }
+          detail: { method, path: matchedPath, origin_id: matchedStateless.id }
         });
       }
-      if (stRow.is_active === false) {
+
+      if (st.rows[0].is_active === false) {
+        // Endpoint stateful đang tắt
         return res.status(404).json({
           message: "Stateful endpoint is disabled",
           detail: { method, path: matchedPath }
         });
       }
 
-      // Meta mới (nếu handler mới dùng)
-      req.universal = {
+      const meta = {
         mode: "stateful",
         method,
         rawPath: normPath,
         basePath: matchedPath,
         idInUrl,
-        statelessId: ep.id,
-        statefulId: stRow.id
+        statelessId: matchedStateless.id,
+        statefulId: st.rows[0].id
       };
-      // Tương thích ngược: cung cấp id stateful nếu handler cũ cần
-      req.endpoint_stateful = { id: stRow.id };
-
+      req.universal = meta;
+      cacheSet(ck, { mode: "stateful", meta });
       return runHandler(statefulHandler, req, res, next);
     }
 
     // → Stateless mode
-    if (ep.is_active === false) {
+    if (matchedStateless.is_active === false) {
       return res.status(404).json({
         message: "Stateless endpoint is disabled",
         detail: { method, path: matchedPath }
       });
     }
 
-    // Meta mới (nếu handler mới dùng)
-    req.universal = {
+    const meta = {
       mode: "stateless",
       method,
       rawPath: normPath,
       basePath: matchedPath,
       idInUrl,
-      statelessId: ep.id
+      statelessId: matchedStateless.id
     };
-
+    req.universal = meta;
+    cacheSet(ck, { mode: "stateless", meta });
     return runHandler(statelessHandler, req, res, next);
 
   } catch (err) {
     console.error("❌ universalHandler error:", err);
-    return res.status(500).json({ error: "Internal Server Error", message: err.message });
+    res.status(500).json({ error: "Internal Server Error", message: err.message });
   }
 });
 

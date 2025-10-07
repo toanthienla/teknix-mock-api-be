@@ -1,8 +1,6 @@
 const express = require('express');
-const cors = require('cors');
 const app = express();
 
-app.use(cors());
 app.use(express.json());
 
 // Import routes
@@ -12,7 +10,7 @@ const endpointRoutes = require('./routes/endpoint.routes');
 const endpointResponseRoutes = require('./routes/endpoint_response.routes');
 const folderRoutes = require('./routes/folder.routes');
 // Routes xem log request/response theo project
-//const projectRequestLogRoutes = require('./routes/project_request_log.routes');
+const projectRequestLogRoutes = require('./routes/project_request_log.routes');
 const mockRoutes = require('./routes/mock.routes');
 const adminResponseLogger = require('./middlewares/adminResponseLogger');
 //stateful
@@ -42,7 +40,7 @@ app.use('/', endpointResponseRoutes);
 app.use('/', statefulRoutes);
 
 // Mount logs route TRƯỚC router mock catch-all để không bị nuốt
-//app.use('/', projectRequestLogRoutes);
+app.use('/', projectRequestLogRoutes);
 // Catch-all mock router MUST be last to avoid shadowing admin routes
 app.use('/', require("./routes/universalHandler"));
 
