@@ -1,25 +1,15 @@
+// app.js
 const express = require('express');
+const cookieParser = require('cookie-parser');
 const app = express();
 
 app.use(express.json());
-
-// Import routes
-const workspaceRoutes = require('./routes/workspace.routes');
-const projectRoutes = require('./routes/project.routes');
-const endpointRoutes = require('./routes/endpoint.routes');
-const endpointResponseRoutes = require('./routes/endpoint_response.routes');
-const folderRoutes = require('./routes/folder.routes');
-// Routes xem log request/response theo project
-const projectRequestLogRoutes = require('./routes/project_request_log.routes');
-const mockRoutes = require('./routes/mock.routes');
-const adminResponseLogger = require('./middlewares/adminResponseLogger');
-//stateful
-const statefulRoutes = require('./routes/stateful.routes'); 
+app.use(cookieParser());
 
 // Import DB pools
-const { statelessPool, statefulPool } = require('./config/db'); 
+const { statelessPool, statefulPool } = require('./config/db');
 
-// Thêm Middleware để inject DB pools vào mỗi request
+// Inject DB vào request
 app.use((req, res, next) => {
     req.db = {
         stateless: statelessPool,
@@ -28,20 +18,32 @@ app.use((req, res, next) => {
     next();
 });
 
-// Mount routes
+// ===== IMPORT ROUTES JWT =====
+const authRoutes = require('./routes/auth.routes');
+const protectedRoutes = require('./routes/protected.routes');
+
+// ===== MOUNT JWT ROUTES =====
+app.use('/auth', authRoutes);
+app.use('/protected', protectedRoutes);
+
+// ===== ROUTES CŨ TEKNIX =====
+const workspaceRoutes = require('./routes/workspace.routes');
+const projectRoutes = require('./routes/project.routes');
+const endpointRoutes = require('./routes/endpoint.routes');
+const endpointResponseRoutes = require('./routes/endpoint_response.routes');
+const folderRoutes = require('./routes/folder.routes');
+const projectRequestLogRoutes = require('./routes/project_request_log.routes');
+const mockRoutes = require('./routes/mock.routes');
+const statefulRoutes = require('./routes/stateful.routes');
+const adminResponseLogger = require('./middlewares/adminResponseLogger');
+
 app.use('/workspaces', workspaceRoutes);
 app.use('/projects', projectRoutes);
 app.use('/endpoints', endpointRoutes);
-app.use('/folders', folderRoutes); 
-
-
+app.use('/folders', folderRoutes);
 app.use('/', endpointResponseRoutes);
-// MOUNT STATEFUL ROUTES
 app.use('/', statefulRoutes);
-
-// Mount logs route TRƯỚC router mock catch-all để không bị nuốt
 app.use('/', projectRequestLogRoutes);
-// Catch-all mock router MUST be last to avoid shadowing admin routes
 app.use('/', require("./routes/universalHandler"));
 
 module.exports = app;
