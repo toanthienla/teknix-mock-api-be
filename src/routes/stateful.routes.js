@@ -15,7 +15,7 @@ router.get('/endpoints/:id', endpointController.getEndpointById);
 router.delete('/endpoints/:id', endpointController.deleteEndpointById);
 
 // Route mới để convert endpoint sang stateful
-router.post('/endpoints/:id/convert-to-stateful', endpointController.convertToStateful);
+router.post('/endpoints/:id/convert-to-stateful', asyncHandler(endpointController.convertToStateful));
 // Route mới để convert endpoint sang stateless
 router.post('/endpoints/:id/convert-to-stateless', asyncHandler(endpointController.revertToStateless));
 

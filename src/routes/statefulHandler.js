@@ -1,3 +1,4 @@
+const { getCollection } = require("../config/db");
 // Lấy giá trị theo path "a.b.c" trong object ctx
 function getByPath(obj, path) {
   if (!obj || !path) return undefined;
@@ -92,22 +93,19 @@ module.exports = async function statefulHandler(req, res, next) {
       return res.status(500).json({ message: "Stateful endpoint missing." });
     }
 
-    const dataQ = await req.db.stateful.query(
-      `SELECT schema, data_current
-         FROM endpoint_data_ful
-        WHERE path = $1
-        LIMIT 1`,
+    // Mongo: mỗi path là 1 collection
+    const col = getCollection(basePath.replace(/^\//, ""));
+    const doc = (await col.findOne({})) || { data_current: [] };
+    const current = Array.isArray(doc.data_current)
+      ? doc.data_current
+      : (doc.data_current ? [doc.data_current] : []);
+
+    // Schema ở Postgres: endpoints_ful.schema
+    const { rows: schRows } = await req.db.stateful.query(
+      "SELECT schema FROM endpoints_ful WHERE path = $1 LIMIT 1",
       [basePath]
     );
-    if (!dataQ.rows[0]) {
-      // chưa provision đúng
-      return res.status(500).json({
-        message: "endpoint_data_ful not provisioned for path",
-        path: basePath,
-      });
-    }
-    const schema = normalizeJsonb(dataQ.rows[0].schema) || {};
-    const current = normalizeJsonb(dataQ.rows[0].data_current) || [];
+    const schema = normalizeJsonb(schRows?.[0]?.schema) || {};
 
     const responsesMap = await loadResponsesMap(req.db.stateful, endpointId);
 
@@ -172,10 +170,7 @@ module.exports = async function statefulHandler(req, res, next) {
       }
       const newObj = { ...payload, id: newId };
       const updated = [...current, newObj];
-      await req.db.stateful.query(
-        `UPDATE endpoint_data_ful SET data_current = $2 WHERE path = $1`,
-        [basePath, JSON.stringify(updated)]
-      );
+      await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
       return sendResponse(
         res,
         201,
@@ -228,10 +223,7 @@ module.exports = async function statefulHandler(req, res, next) {
       const updated = current.slice();
       updated[idx] = updatedItem;
 
-      await req.db.stateful.query(
-        `UPDATE endpoint_data_ful SET data_current = $2 WHERE path = $1`,
-        [basePath, JSON.stringify(updated)]
-      );
+      await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
       return sendResponse(
         res,
         200,
@@ -255,10 +247,7 @@ module.exports = async function statefulHandler(req, res, next) {
         }
         const updated = current.slice();
         updated.splice(idx, 1);
-        await req.db.stateful.query(
-          `UPDATE endpoint_data_ful SET data_current = $2 WHERE path = $1`,
-          [basePath, JSON.stringify(updated)]
-        );
+        await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
         return sendResponse(
           res,
           200,
@@ -268,10 +257,7 @@ module.exports = async function statefulHandler(req, res, next) {
         );
       }
       // delete all
-      await req.db.stateful.query(
-        `UPDATE endpoint_data_ful SET data_current = '[]'::jsonb WHERE path = $1`,
-        [basePath]
-      );
+      await col.updateOne({}, { $set: { data_current: [] } }, { upsert: true });
       return sendResponse(
         res,
         200,

@@ -63,21 +63,18 @@ async function getById(req, res) {
     const rid = parseInt(id, 10);
     if (Number.isNaN(rid)) return error(res, 400, 'id must be an integer');
 
-    // Bước 1: Lấy dữ liệu stateless
+    // 1) Thử tìm theo STATeless id
     const statelessResponse = await svc.getById(req.db.stateless, rid);
-    if (!statelessResponse) return error(res, 404, 'Response not found');
-
-    // Bước 2: Kiểm tra cờ is_stateful 
-    if (statelessResponse.is_stateful === true) {
-        const statefulResponse = await statefulSvc.findByOriginId(statelessResponse.id);
-        if (!statefulResponse) {
-            return error(res, 404, `Stateful data for response ${rid} not found.`);
-        }
-        return success(res, { ...statefulResponse, is_stateful: true });
+    if (statelessResponse) {
+      return success(res, statelessResponse);
     }
-    
-    // Bước 3: Trả về dữ liệu stateless
-    return success(res, statelessResponse);
+    // 2) Không có ở stateless → thử tìm ở STATEful theo id
+    const statefulResponse = await statefulSvc.findById(rid);
+    if (statefulResponse) {
+      return success(res, { ...statefulResponse, is_stateful: true });
+    }
+    // 3) Cả hai đều không có
+    return error(res, 404, 'Response not found');
   } catch (err) {
     return error(res, 400, err.message);
   }
@@ -233,7 +230,7 @@ async function updatePriorities(req, res) {
           if (!Number.isNaN(eid)) {
             endpoint_id = eid;
             try {
-              const ep = await endpointSvc.getEndpointById(eid);
+              const ep = await endpointSvc.getEndpointById(req.db.stateless, eid);
               project_id = ep?.project_id ?? null;
             } catch (_) {}
           }

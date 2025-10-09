@@ -110,15 +110,15 @@ async function update(
     condition,
     is_default,
     delay_ms,
-    proxy_url,
-    proxy_method,
+    proxy_url = null,
+    proxy_method = null,
   }
 ) {
   // Xác định response thuộc stateful hay stateless
   const isStatefull = await checkIsStatefull(dbPool, dbPoolfull, id);
 
   if (!isStatefull) {
-    //  Nhánh Stateless 
+    //  Nhánh Stateless
     let endpointId;
     if (typeof is_default !== "undefined") {
       const current = await getById(dbPool, id);
@@ -160,7 +160,7 @@ async function update(
 
     return rows[0] || null;
   } else {
-    //  Nhánh Stateful 
+    //  Nhánh Stateful
     const {
       rows: [response],
     } = await dbPoolfull.query(
@@ -206,7 +206,7 @@ async function checkIsStatefull(dbPool, dbPoolfull, responseId) {
      WHERE r.id = $1`,
     [responseId]
   );
-  if (r1.length > 0) return r1[0].is_statefull || false;
+  if (r1.length > 0) return r1[0].is_stateful || false;
 
   // Nếu không có → thử tìm ở stateful
   const { rows: r2 } = await dbPoolfull.query(
@@ -257,12 +257,12 @@ async function remove(dbPool, id) {
 //  - Set is_default = true cho response có id tương ứng
 // Trả về: danh sách rút gọn các response của endpoint đó: [{ id, endpoint_id, is_default }, ...]
 async function setDefault(dbPool, id) {
-// Đảm bảo phản hồi mục tiêu tồn tại và lấy endpoint_id của nó
+  // Đảm bảo phản hồi mục tiêu tồn tại và lấy endpoint_id của nó
   const current = await getById(dbPool, id);
   if (!current) return [];
   const endpointId = current.endpoint_id;
 
-// Bỏ các mục khác, sau đó đặt mục này
+  // Bỏ các mục khác, sau đó đặt mục này
   await dbPool.query(
     "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1",
     [endpointId]
@@ -272,7 +272,7 @@ async function setDefault(dbPool, id) {
     [id]
   );
 
- // Trả về danh sách tóm tắt cho điểm cuối đó
+  // Trả về danh sách tóm tắt cho điểm cuối đó
   const { rows } = await dbPool.query(
     "SELECT id, endpoint_id, is_default FROM endpoint_responses WHERE endpoint_id = $1 ORDER BY id ASC",
     [endpointId]

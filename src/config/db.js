@@ -32,22 +32,27 @@ const statefulPool = new Pool({
 
 let mongoClient;
 let mongoDB;
-let endpointDataCollection;
 
 const connectMongo = async () => {
+  if (mongoDB) return mongoDB;                 // tránh reconnect
   try {
     mongoClient = new MongoClient(process.env.MONGO_URI);
     await mongoClient.connect();
     mongoDB = mongoClient.db(process.env.MONGO_DB_NAME);
-
-    // Collection mặc định cho dữ liệu stateful
-    endpointDataCollection = mongoDB.collection('endpoint_data_ful');
-
-    console.log('✅ Kết nối đến MongoDB (stateful) thành công!');
+    console.log('✅ Kết nối MongoDB thành công!');
+    return mongoDB;
   } catch (err) {
     console.error('❌ Lỗi khi kết nối MongoDB:', err);
     throw err;
   }
+};
+
+// Trả về collection theo tên (ví dụ: "users", "cars")
+// name có thể lấy từ endpoint path: "/users" -> "users"
+const getCollection = (name) => {
+  if (!mongoDB) throw new Error('MongoDB chưa được kết nối. Hãy gọi connectMongo() trước.');
+  const clean = name.replace(/^\//, ''); // bỏ dấu "/" đầu
+  return mongoDB.collection(clean);
 };
 
 // =====================
@@ -63,7 +68,6 @@ const checkConnections = async () => {
 
     await connectMongo();
 
-
   } catch (error) {
     console.error('❌ Lỗi khi kiểm tra kết nối database:', error);
     throw error;
@@ -78,7 +82,7 @@ module.exports = {
   statefulPool,
   mongoClient,
   mongoDB,
-  endpointDataCollection,
+  getCollection,
   connectMongo,
   checkConnections
 };

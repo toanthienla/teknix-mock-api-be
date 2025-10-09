@@ -13,7 +13,7 @@ async function listEndpoints(req, res) {
   const result = endpoints.map((ep) => ({ ...ep, is_stateful: true }));
 
   res.status(200).json(result);
-};
+}
 
 async function getEndpointById(req, res) {
   const { id } = req.params;
@@ -24,7 +24,7 @@ async function getEndpointById(req, res) {
   }
 
   res.status(200).json(endpointDetail);
-};
+}
 
 async function deleteEndpointById(req, res) {
   try {
@@ -32,20 +32,24 @@ async function deleteEndpointById(req, res) {
     const result = await EndpointStatefulService.deleteById(parseInt(id, 10));
 
     if (result.notFound) {
-      return res.status(404).json({ error: 'Không tìm thấy stateful endpoint.' });
+      return res
+        .status(404)
+        .json({ error: "Không tìm thấy stateful endpoint." });
     }
 
-    res.status(204).send(); 
+    res.status(204).send();
   } catch (err) {
-    res.status(500).json({ error: 'Lỗi máy chủ nội bộ.' });
+    res.status(500).json({ error: "Lỗi máy chủ nội bộ." });
   }
-};
+}
 
 async function convertToStateful(req, res) {
   const { id } = req.params;
   try {
     // Dòng này bây giờ đã ĐÚNG vì service đã được cấu trúc lại
-    const result = await EndpointStatefulService.convertToStateful(req.db.stateless, req.db.stateful, id);
+    const result = await EndpointStatefulService.convertToStateful(
+      parseInt(id, 10)
+    );
     return res.status(200).json({
       message: "Endpoint converted to stateful successfully",
       data: result,
@@ -54,14 +58,12 @@ async function convertToStateful(req, res) {
     console.error("Error convertToStateful:", err.message);
     return res.status(500).json({ error: err.message });
   }
-};
+}
 
 async function revertToStateless(req, res) {
   const { id } = req.params;
   try {
     const result = await EndpointStatefulService.revertToStateless(
-      req.db.stateless,
-      req.db.stateful,
       parseInt(id, 10)
     );
     return res.status(200).json({
@@ -70,9 +72,11 @@ async function revertToStateless(req, res) {
     });
   } catch (err) {
     console.error("Error revertToStateless:", err);
-    return res.status(500).json({ error: err.message || "Revert to stateless failed" });
+    return res
+      .status(500)
+      .json({ error: err.message || "Revert to stateless failed" });
   }
-};
+}
 
 async function updateEndpointResponse(req, res) {
   try {
@@ -81,7 +85,10 @@ async function updateEndpointResponse(req, res) {
     const delay = req.body.delay ?? req.body.delay_ms;
 
     // Truyền dbStateful vào service
-    const updated = await EndpointStatefulService.updateEndpointResponse(req.db.stateful, id, { response_body, delay });
+    const updated = await EndpointStatefulService.updateEndpointResponse(
+      parseInt(id, 10),
+      { response_body, delay }
+    );
 
     return res.status(200).json({
       message: "Response updated successfully",
@@ -90,9 +97,7 @@ async function updateEndpointResponse(req, res) {
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
-
-  
-};
+}
 
 // --- Export tất cả các hàm ra ngoài tại một nơi duy nhất ---
 
