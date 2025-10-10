@@ -27,6 +27,8 @@ router.delete('/endpoint_responses/:id', responseController.deleteResponseById);
 
 //Định nghĩa routes cho Endpoint Responses ful
 router.get('/endpoint_responses_ful/:id', responseController.getResponseById);
+router.get('/endpoint_responses_ful/:id', asyncHandler(responseController.getById));
+router.put('/endpoint_responses_ful/:id', asyncHandler(responseController.updateById));
 
 // --- Định nghĩa routes cho Endpoint Data ---
 router.get('/endpoint_data', dataController.getDataByPath);

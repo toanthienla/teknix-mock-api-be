@@ -1,4 +1,5 @@
 const ResponseStatefulService = require("../services/endpoint_responses_ful.service");
+const ResponseSvc = require('../services/endpoint_response.service');
 
 exports.listResponsesForEndpoint = async (req, res) => {
   const { endpoint_id } = req.query;
@@ -23,6 +24,28 @@ exports.getResponseById = async (req, res) => {
 
   const result = { ...response, is_stateful: true };
   res.status(200).json(result);
+};
+
+// PUT /endpoint_responses_ful/:id
+exports.updateById = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id))
+      return res.status(400).json({ error: "id must be an integer" });
+
+    const { name, response_body, delay_ms } = req.body ?? {};
+    const updated = await ResponseSvc.update(
+      req.db.stateless, // pool stateless
+      req.db.stateful, // pool stateful
+      id,
+      { name, response_body, delay_ms }
+    );
+
+    if (!updated) return res.status(404).json({ error: "Response not found" });
+    return res.status(200).json(updated);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
 };
 
 // HÀM MỚI: Xóa một stateful response

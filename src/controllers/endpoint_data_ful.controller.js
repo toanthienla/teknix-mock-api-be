@@ -1,5 +1,6 @@
 const EndpointStatefulService = require("../services/endpoints_ful.service");
 const DataStatefulService = require("../services/endpoint_data_ful.service");
+const ResponseSvc = require('../services/endpoint_response.service');
 
 /**
  * Lấy dữ liệu stateful theo path
