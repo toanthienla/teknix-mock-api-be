@@ -163,8 +163,8 @@ async function convertToStateful(endpointId) {
 
     const { rows: [statefulEndpoint] } = await clientStateful.query(
       `INSERT INTO endpoints_ful (folder_id, name, method, path, is_active, origin_id, schema)
-   VALUES ($1, $2, $3, $4, TRUE, $5, $6::jsonb)
-   RETURNING *`,
+       VALUES ($1, $2, $3, $4, TRUE, $5, $6::jsonb)
+       RETURNING *`,
       [
         endpoint.folder_id,
         endpoint.name,
@@ -176,6 +176,31 @@ async function convertToStateful(endpointId) {
         }),
       ]
     );
+
+    // 🔹 [NEW] Sau khi tạo endpoints_ful, đảm bảo folder có base_schema mặc định nếu đang null
+    const { rows: [folder] } = await clientStateless.query(
+      `SELECT f.id, f.base_schema
+   FROM folders f
+   INNER JOIN endpoints e ON e.folder_id = f.id
+   WHERE e.id = $1
+   LIMIT 1`,
+      [endpointId]
+    );
+
+    if (folder && folder.base_schema === null) {
+      await clientStateless.query(
+        `UPDATE folders
+     SET base_schema = $1
+     WHERE id = $2`,
+        [
+          JSON.stringify({
+            id: { type: "number", required: false },
+          }),
+          folder.id,
+        ]
+      );
+    }
+
 
     await clientStateful.query("COMMIT");
     await clientStateless.query("COMMIT");
@@ -194,6 +219,7 @@ async function convertToStateful(endpointId) {
     clientStateful.release();
   }
 }
+
 
 async function revertToStateless(endpointId) {
   const clientStateless = await statelessPool.connect();
@@ -535,6 +561,73 @@ async function findByPathPG(path) {
   return rows[0] || null;
 }
 
+// Lấy schema của endpoint stateful thông qua origin_id (id bên stateless)
+async function getEndpointSchema(statefulPool, originId) {
+  try {
+    // Truy vấn endpoint theo origin_id
+    const { rows } = await statefulPool.query(
+      `SELECT schema, method 
+       FROM endpoints_ful 
+       WHERE origin_id = $1 
+       LIMIT 1`,
+      [originId]
+    );
+
+    // Không tìm thấy endpoint
+    if (rows.length === 0) {
+      return { success: false, message: "Endpoint not found" };
+    }
+
+    const { schema, method } = rows[0];
+
+    // Nếu là DELETE hoặc schema rỗng thì trả về object rỗng
+    if (method === "DELETE" || !schema) {
+      return { success: true, data: {} };
+    }
+
+    // Trả về schema (đảm bảo là object JSON)
+    let parsedSchema;
+    try {
+      parsedSchema = typeof schema === "string" ? JSON.parse(schema) : schema;
+    } catch {
+      parsedSchema = schema; // fallback nếu schema đã là object
+    }
+
+    return { success: true, data: parsedSchema };
+  } catch (error) {
+    console.error("Error in getEndpointSchema:", error);
+    return { success: false, message: error.message };
+  }
+}
+
+// Lấy base_schema thông qua id của endpoint (stateless)
+async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
+  // 1) Lấy folder_id từ bảng endpoints
+  const { rows: endpointRows } = await statelessPool.query(
+    `SELECT folder_id FROM endpoints WHERE id = $1 LIMIT 1`,
+    [endpointId]
+  );
+
+  if (endpointRows.length === 0) {
+    throw new Error("Endpoint not found");
+  }
+
+  const folderId = endpointRows[0].folder_id;
+
+  // 2) Lấy base_schema từ bảng folders
+  const { rows: folderRows } = await statelessPool.query(
+    `SELECT base_schema FROM folders WHERE id = $1 LIMIT 1`,
+    [folderId]
+  );
+
+  if (folderRows.length === 0) {
+    throw new Error("Folder not found");
+  }
+
+  // 3) Trả về base_schema hoặc null nếu chưa có
+  return { base_schema: folderRows[0].base_schema || null };
+}
+
 // ------------------------
 // Exports (function-based)
 // ------------------------
@@ -555,4 +648,6 @@ module.exports = {
   ResponsesForDELETE,
   updateEndpointResponse,
   updateEndpointData,
+  getEndpointSchema,
+  getBaseSchemaByEndpointId,
 };

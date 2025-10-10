@@ -36,4 +36,11 @@ router.delete('/endpoint_data', dataController.deleteDataByPath);
 router.put("/endpoint_data", dataController.updateEndpointData);
 //router.put("/endpoint_data", dataController.setDefaultEndpointData);
 
+// GET /endpoints/schema_get/:id
+router.get("/schema_get/:id", endpointController.getEndpointSchema);
+
+// dùng để lấy base_schema giúp người dùng ở phần select edit schema.
+router.get("/base_schema/:id", endpointController.getBaseSchemaByEndpoint);
+
+
 module.exports = router;

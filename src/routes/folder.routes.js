@@ -20,10 +20,16 @@ router.post('/', auth, validateFolder, asyncHandler(ctrl.createFolder));
 
 // Update folder
 // PUT /folder/:id
-router.put('/:id', validateFolder, asyncHandler(ctrl.updateFolder)); // Gắn middleware
+router.put('/:id', auth, validateFolder, asyncHandler(ctrl.updateFolder)); // Gắn middleware
 
 // Delete folder
 // DELETE /folder/:id
-router.delete('/:id', asyncHandler(ctrl.deleteFolder));
+router.delete('/:id', auth, asyncHandler(ctrl.deleteFolder));
+
+// ✅ Route mới để lấy thông tin chủ folder
+router.get("/getOwner/:id", ctrl.getFolderOwner);
+
+// ✅ Check owner of folder
+router.get("/checkOwner/:id", ctrl.checkFolderOwner);
 
 module.exports = router;

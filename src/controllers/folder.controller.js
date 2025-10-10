@@ -159,6 +159,60 @@ async function deleteFolder(req, res) {
   }
 }
 
+async function getFolderOwner(req, res) {
+  try {
+    const { id } = req.params;
+    const result = await svc.getFolderOwnerById(req.db.stateless, id);
+
+    if (result.success === false) {
+      return res.status(404).json(result);
+    }
+
+    return success(res, result.data);
+  } catch (err) {
+    console.error("Error fetching folder owner:", err);
+    return res.status(500).json({
+      success: false,
+      errors: [{ field: "general", message: "Internal server error" }],
+    });
+  }
+}
+
+// GET /folders/checkOwner/:id
+async function checkFolderOwner(req, res) {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.user_id; // Lấy user_id từ JWT middleware
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: Missing user info from token",
+      });
+    }
+
+    const result = await svc.checkFolderOwner(req.db.stateless, id, userId);
+
+    // Nếu folder không tồn tại hoặc user không phải chủ
+    if (!result.success) {
+      return res.status(200).json({
+        success: false,
+        message: result.message,
+      });
+    }
+
+    // Nếu đúng là chủ
+    return res.status(200).json({
+      success: true,
+      message: result.message,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
 
 module.exports = {
   listFolders,
@@ -166,4 +220,6 @@ module.exports = {
   createFolder,
   updateFolder,
   deleteFolder,
+  getFolderOwner,
+  checkFolderOwner,
 };

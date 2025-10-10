@@ -99,6 +99,52 @@ async function updateEndpointResponse(req, res) {
   }
 }
 
+// GET /endpoints/schema_get/:id
+async function getEndpointSchema(req, res) {
+  try {
+    const { id } = req.params;
+
+    // Gọi service để lấy schema từ DB stateful
+    const result = await svc.getEndpointSchema(req.db.stateful, id);
+
+    // Không tìm thấy endpoint
+    if (!result.success) {
+      return res.status(404).json({
+        success: false,
+        errors: [{ field: "id", message: result.message }],
+      });
+    }
+
+    // Thành công
+    return res.status(200).json({
+      success: true,
+      schema: result.data,
+    });
+  } catch (err) {
+    console.error("Error in controller getEndpointSchema:", err);
+    return res.status(500).json({
+      success: false,
+      errors: [{ field: "general", message: err.message }],
+    });
+  }
+}
+
+// GET /endpoints/base_schema/:id
+async function getBaseSchemaByEndpoint(req, res) {
+  try {
+    const { id } = req.params;
+
+    const result = await svc.getBaseSchemaByEndpointId(req.db.stateless, id);
+
+    return res.status(200).json(result);
+  } catch (err) {
+    return res.status(404).json({
+      success: false,
+      errors: [{ field: "id", message: err.message }],
+    });
+  }
+}
+
 // --- Export tất cả các hàm ra ngoài tại một nơi duy nhất ---
 
 module.exports = {
@@ -108,4 +154,6 @@ module.exports = {
   convertToStateful,
   revertToStateless,
   updateEndpointResponse,
+  getEndpointSchema,
+  getBaseSchemaByEndpoint,
 };

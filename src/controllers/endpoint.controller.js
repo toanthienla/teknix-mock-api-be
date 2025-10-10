@@ -141,10 +141,16 @@ async function createEndpoint(req, res) {
 async function updateEndpoint(req, res) {
   try {
     const { id } = req.params;
-    const { name, method, path, is_active, is_stateful } = req.body;
 
-    const result = await svc.updateEndpoint(req.db.stateless, id, req.body);
+    // gọi service với cả 2 pool: stateless + stateful
+    const result = await svc.updateEndpoint(
+      req.db.stateless,
+      req.db.stateful,
+      id,
+      req.body
+    );
 
+    // Không tìm thấy endpoint
     if (!result) {
       return res.status(404).json({
         success: false,
@@ -152,11 +158,13 @@ async function updateEndpoint(req, res) {
       });
     }
 
+    // Lỗi validate hoặc business logic
     if (result.success === false) {
       return res.status(400).json(result);
     }
 
-    return success(res, result.data); // plain object
+    // Thành công
+    return success(res, result.data);
   } catch (err) {
     return res.status(400).json({
       success: false,
@@ -164,6 +172,7 @@ async function updateEndpoint(req, res) {
     });
   }
 }
+
 
 // Delete endpoint (giữ log: NULL hoá FK trước, rồi ghi log DELETE)
 // Bước 1: NULL hoá endpoint_id và endpoint_response_id thuộc endpoint trong bảng log

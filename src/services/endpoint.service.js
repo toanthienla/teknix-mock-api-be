@@ -104,97 +104,178 @@ async function createEndpoint(
   return { success: true, data: endpoint };
 }
 
-// Update endpoint
+// Update endpoint (Stateless + Stateful)
 async function updateEndpoint(
-  dbPool,
+  clientStateless,
+  clientStateful,
   endpointId,
-  { name, method, path, is_active, is_stateful }
+  { name, method, path, is_active, is_stateful, schema }
 ) {
   const errors = [];
 
-  // Lấy endpoint hiện tại
-  const { rows: currentRows } = await dbPool.query(
+  // 1️⃣ Lấy endpoint hiện tại từ DB stateless
+  const { rows: currentRows } = await clientStateless.query(
     "SELECT * FROM endpoints WHERE id=$1",
     [endpointId]
   );
   const current = currentRows[0];
-  if (!current) return null;
+  if (!current) return { success: false, message: "Endpoint not found" };
 
-  const newName = name ?? current.name;
-  const newMethod = method ?? current.method;
-  const newPath = path ?? current.path;
-  let finalIsActive = is_active ?? current.is_active;
-  let finalIsStateful = is_stateful ?? current.is_stateful;
+  // -----------------------------------------------------
+  // 🔹 PHẦN 1: Logic cũ cho Stateless (is_stateful = false)
+  // -----------------------------------------------------
+  if (!current.is_stateful) {
+    const newName = name ?? current.name;
+    const newMethod = method ?? current.method;
+    const newPath = path ?? current.path;
+    let finalIsActive = is_active ?? current.is_active;
+    let finalIsStateful = is_stateful ?? current.is_stateful;
 
-  // Chỉ áp dụng quy tắc khi `is_stateful` được cung cấp trong request body
-  // QUY TẮC 1 (Ưu tiên cao nhất): Nếu trạng thái cuối cùng là stateful,
-  // thì active BẮT BUỘC phải là false.
-  if (finalIsStateful === true) {
-    finalIsActive = false;
-  }
-  // QUY TẮC 2: Nếu stateful vừa được TẮT đi (từ true -> false),
-  // thì active sẽ mặc định là true, trừ khi người dùng chỉ định khác.
-  else if (is_stateful === false && current.is_stateful === true) {
-    finalIsActive = is_active ?? true;
-  }
-  // Nếu `newIsStateful` là false, `finalIsActive` có thể là true/false tùy ý.
+    // QUY TẮC 1: Nếu stateful -> active = false
+    if (finalIsStateful === true) {
+      finalIsActive = false;
+    }
+    // QUY TẮC 2: Nếu vừa tắt stateful -> active = true
+    else if (is_stateful === false && current.is_stateful === true) {
+      finalIsActive = is_active ?? true;
+    }
 
-  // Nếu dữ liệu không thay đổi => trả về object hiện tại
-  if (
-    newName === current.name &&
-    newMethod === current.method &&
-    newPath === current.path &&
-    finalIsActive === current.is_active &&
-    finalIsStateful === current.is_stateful
-  ) {
-    return { success: true, data: current };
-  }
-  // Check duplicate name (ignore case)
-  if (newName.toLowerCase() !== current.name.toLowerCase()) {
-    const { rows: nameRows } = await dbPool.query(
-      "SELECT id FROM endpoints WHERE id<>$1 AND folder_id=$2 AND LOWER(name)=LOWER($3)",
-      [endpointId, current.folder_id, newName]
+    // Nếu dữ liệu không thay đổi
+    if (
+      newName === current.name &&
+      newMethod === current.method &&
+      newPath === current.path &&
+      finalIsActive === current.is_active &&
+      finalIsStateful === current.is_stateful
+    ) {
+      return { success: true, data: current };
+    }
+
+    // Kiểm tra trùng name
+    if (newName.toLowerCase() !== current.name.toLowerCase()) {
+      const { rows: nameRows } = await clientStateless.query(
+        "SELECT id FROM endpoints WHERE id<>$1 AND folder_id=$2 AND LOWER(name)=LOWER($3)",
+        [endpointId, current.folder_id, newName]
+      );
+      if (nameRows.length > 0) {
+        errors.push({
+          field: "name",
+          message: "Name already exists in this folder",
+        });
+      }
+    }
+
+    // Kiểm tra path + method
+    if (
+      newPath !== current.path ||
+      newMethod.toUpperCase() !== current.method.toUpperCase()
+    ) {
+      const { rows: samePathRows } = await clientStateless.query(
+        "SELECT method FROM endpoints WHERE id<>$1 AND folder_id=$2 AND path=$3",
+        [endpointId, current.folder_id, newPath]
+      );
+
+      const usedMethods = samePathRows.map((r) => r.method.toUpperCase());
+      const newMethodUpper = newMethod.toUpperCase();
+
+      if (usedMethods.includes(newMethodUpper)) {
+        errors.push({
+          field: "method",
+          message: "Method already exists for this path",
+        });
+      }
+      if (!usedMethods.includes(newMethodUpper) && usedMethods.length >= 4) {
+        errors.push({ field: "path", message: "Path already has all 4 methods" });
+      }
+    }
+
+    if (errors.length > 0) return { success: false, errors };
+
+    const { rows: updatedRows } = await clientStateless.query(
+      `UPDATE endpoints 
+       SET name=$1, method=$2, path=$3, is_active=$4, is_stateful=$5, updated_at=NOW() 
+       WHERE id=$6 RETURNING *`,
+      [newName, newMethod, newPath, finalIsActive, finalIsStateful, endpointId]
     );
-    if (nameRows.length > 0) {
-      errors.push({
-        field: "name",
-        message: "Name already exists in this folder",
-      });
-    }
+
+    return { success: true, data: updatedRows[0] };
   }
 
-  // Check path + method constraints (case-sensitive path)
-  if (
-    newPath !== current.path ||
-    newMethod.toUpperCase() !== current.method.toUpperCase()
-  ) {
-    const { rows: samePathRows } = await dbPool.query(
-      "SELECT method FROM endpoints WHERE id<>$1 AND folder_id=$2 AND path=$3",
-      [endpointId, current.folder_id, newPath]
-    );
+  // -----------------------------------------------------
+  // 🔹 PHẦN 2: Logic mới cho Stateful (is_stateful = true)
+  // -----------------------------------------------------
+  // Chỉ cho phép update khi endpoint stateful và inactive
+  if (current.is_stateful && !current.is_active) {
+    const updateParts = [];
+    const values = [];
+    let idx = 1;
 
-    const usedMethods = samePathRows.map((r) => r.method.toUpperCase());
-    const newMethodUpper = newMethod.toUpperCase();
+    if (name !== undefined) {
+      updateParts.push(`name = $${idx++}`);
+      values.push(name);
+    }
 
-    if (usedMethods.includes(newMethodUpper)) {
-      errors.push({
-        field: "method",
-        message: "Method already exists for this path",
-      });
+    if (schema !== undefined) {
+      updateParts.push(`schema = $${idx++}::jsonb`);
+      values.push(JSON.stringify(schema));
     }
-    if (!usedMethods.includes(newMethodUpper) && usedMethods.length >= 4) {
-      errors.push({ field: "path", message: "Path already has all 4 methods" });
+
+    if (updateParts.length === 0) {
+      return { success: false, message: "No valid fields to update" };
     }
+
+    values.push(endpointId);
+
+    const updateQuery = `
+      UPDATE endpoints_ful
+      SET ${updateParts.join(", ")}, updated_at = NOW()
+      WHERE origin_id = $${idx}
+      RETURNING *;
+    `;
+
+    const { rows: updatedRows } = await clientStateful.query(updateQuery, values);
+    const updated = updatedRows[0];
+
+    // ---------------------------------------------
+    // Nếu có schema mới → cập nhật base_schema
+    // ---------------------------------------------
+    if (schema) {
+      const { rows: folderRows } = await clientStateless.query(
+        "SELECT base_schema FROM folders WHERE id = $1",
+        [current.folder_id]
+      );
+      let baseSchema = folderRows[0]?.base_schema || {};
+      let baseChanged = false;
+
+      // Chỉ thêm field mới, không ghi đè field cũ
+      for (const [key, field] of Object.entries(schema)) {
+        if (!baseSchema[key]) {
+          baseSchema[key] = {
+            type: field.type,
+            required: field.required ?? true,
+          };
+          baseChanged = true;
+        }
+      }
+
+      if (baseChanged) {
+        await clientStateless.query(
+          "UPDATE folders SET base_schema = $1::jsonb WHERE id = $2",
+          [JSON.stringify(baseSchema), current.folder_id]
+        );
+      }
+    }
+
+    return { success: true, data: updated };
   }
 
-  if (errors.length > 0) return { success: false, errors };
-
-  const { rows: updatedRows } = await dbPool.query(
-    "UPDATE endpoints SET name=$1, method=$2, path=$3, is_active=$4, is_stateful=$5, updated_at=NOW() WHERE id=$6 RETURNING *",
-    [newName, newMethod, newPath, finalIsActive, finalIsStateful, endpointId]
-  );
-
-  return { success: true, data: updatedRows[0] };
+  // -----------------------------------------------------
+  // 🔹 PHẦN 3: Các trường hợp không đủ điều kiện update
+  // -----------------------------------------------------
+  return {
+    success: false,
+    message: "Endpoint cannot be updated (must be stateful and inactive)",
+  };
 }
 
 // Delete endpoint
