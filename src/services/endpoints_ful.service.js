@@ -162,10 +162,19 @@ async function convertToStateful(endpointId) {
     );
 
     const { rows: [statefulEndpoint] } = await clientStateful.query(
-      `INSERT INTO endpoints_ful (folder_id, name, method, path, is_active, origin_id)
-       VALUES ($1, $2, $3, $4, TRUE, $5)
-       RETURNING *`,
-      [endpoint.folder_id, endpoint.name, endpoint.method, endpoint.path, endpoint.id]
+      `INSERT INTO endpoints_ful (folder_id, name, method, path, is_active, origin_id, schema)
+   VALUES ($1, $2, $3, $4, TRUE, $5, $6::jsonb)
+   RETURNING *`,
+      [
+        endpoint.folder_id,
+        endpoint.name,
+        endpoint.method,
+        endpoint.path,
+        endpoint.id,
+        JSON.stringify({
+          id: { type: "number", required: false },
+        }),
+      ]
     );
 
     await clientStateful.query("COMMIT");
@@ -177,8 +186,8 @@ async function convertToStateful(endpointId) {
 
     return { stateless: endpoint, stateful: statefulEndpoint, responses: responsesResult };
   } catch (e) {
-    try { await clientStateless.query("ROLLBACK"); } catch {}
-    try { await clientStateful.query("ROLLBACK"); } catch {}
+    try { await clientStateless.query("ROLLBACK"); } catch { }
+    try { await clientStateful.query("ROLLBACK"); } catch { }
     throw e;
   } finally {
     clientStateless.release();

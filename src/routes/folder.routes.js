@@ -4,7 +4,7 @@ const router = express.Router();
 const ctrl = require('../controllers/folder.controller');
 const asyncHandler = require('../middlewares/asyncHandler');
 const validateFolder = require('../middlewares/validateFolder'); // Import middleware mới
-
+const auth = require('../middlewares/authMiddleware');
 
 // Get all folders (filter by project_id nếu có query param)
 // GET /folders?project_id=123 HOẶC GET /folders
@@ -16,7 +16,7 @@ router.get('/:id', asyncHandler(ctrl.getFolderById));
 
 // Create folder
 // POST /folder
-router.post('/', validateFolder, asyncHandler(ctrl.createFolder)); // Gắn middleware
+router.post('/', auth, validateFolder, asyncHandler(ctrl.createFolder));
 
 // Update folder
 // PUT /folder/:id

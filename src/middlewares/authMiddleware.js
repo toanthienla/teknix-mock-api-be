@@ -22,8 +22,15 @@ function authMiddleware(req, res, next) {
       return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
     }
 
+    req.user = {
+      id: decoded.user_id,
+      username: decoded.username,
+    };
+
     // 3️⃣ Gắn thông tin user vào request để các route khác có thể dùng
     req.user = decoded;
+
+    console.log('🟢 Auth OK:', decoded);
     next();
   } catch (err) {
     console.error('Auth middleware error:', err);
