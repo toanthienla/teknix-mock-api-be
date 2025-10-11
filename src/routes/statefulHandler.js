@@ -162,40 +162,40 @@ module.exports = async function statefulHandler(req, res, next) {
             { params: { id: idFromUrl } },
             { message: "Not found." }
           );
-          await logSvc.insertLog(req.db.stateless, {
-            project_id: projectId,
-            endpoint_id: originId,
-            request_method: method,
-            request_path: req.path,
-            response_status_code: 404,
-            response_body: rendered,
-            ip_address: getClientIp(req),
-            latency_ms: Date.now() - started,
-          });
+          // await logSvc.insertLog(req.db.stateless, {
+          //   project_id: projectId,
+          //   endpoint_id: originId,
+          //   request_method: method,
+          //   request_path: req.path,
+          //   response_status_code: 404,
+          //   response_body: rendered,
+          //   ip_address: getClientIp(req),
+          //   latency_ms: Date.now() - started,
+          // });
           return res.status(404).json(rendered);
         }
-        await logSvc.insertLog(req.db.stateless, {
-          project_id: projectId,
-          endpoint_id: originId,
-          request_method: method,
-          request_path: req.path,
-          response_status_code: 200,
-          response_body: item,
-          ip_address: getClientIp(req),
-          latency_ms: Date.now() - started,
-        });
+        // await logSvc.insertLog(req.db.stateless, {
+        //   project_id: projectId,
+        //   endpoint_id: originId,
+        //   request_method: method,
+        //   request_path: req.path,
+        //   response_status_code: 200,
+        //   response_body: item,
+        //   ip_address: getClientIp(req),
+        //   latency_ms: Date.now() - started,
+        // });
         return res.status(200).json(item); // by-id trả trực tiếp item
       }
-      await logSvc.insertLog(req.db.stateless, {
-        project_id: projectId,
-        endpoint_id: originId,
-        request_method: method,
-        request_path: req.path,
-        response_status_code: 200,
-        response_body: current,
-        ip_address: getClientIp(req),
-        latency_ms: Date.now() - started,
-      });
+      // await logSvc.insertLog(req.db.stateless, {
+      //   project_id: projectId,
+      //   endpoint_id: originId,
+      //   request_method: method,
+      //   request_path: req.path,
+      //   response_status_code: 200,
+      //   response_body: current,
+      //   ip_address: getClientIp(req),
+      //   latency_ms: Date.now() - started,
+      // });
       return res.status(200).json(current); // get-all
     }
 
@@ -252,18 +252,18 @@ module.exports = async function statefulHandler(req, res, next) {
         { params: { id: newId } },
         { message: "Created." }
       );
-      await logSvc.insertLog(req.db.stateless, {
-        project_id: projectId,
-        endpoint_id: originId,
-        request_method: method,
-        request_path: req.path,
-        request_headers: req.headers || {},
-        request_body: payload || {},
-        response_status_code: 201,
-        response_body: rendered,
-        ip_address: getClientIp(req),
-        latency_ms: Date.now() - started,
-      });
+      // await logSvc.insertLog(req.db.stateless, {
+      //   project_id: projectId,
+      //   endpoint_id: originId,
+      //   request_method: method,
+      //   request_path: req.path,
+      //   request_headers: req.headers || {},
+      //   request_body: payload || {},
+      //   response_status_code: 201,
+      //   response_body: rendered,
+      //   ip_address: getClientIp(req),
+      //   latency_ms: Date.now() - started,
+      // });
       return res.status(201).json(rendered);
     }
 
@@ -321,18 +321,18 @@ module.exports = async function statefulHandler(req, res, next) {
         { params: { id: idFromUrl } },
         { message: "Updated." }
       );
-      await logSvc.insertLog(req.db.stateless, {
-        project_id: projectId,
-        endpoint_id: originId,
-        request_method: method,
-        request_path: req.path,
-        request_headers: req.headers || {},
-        request_body: payload || {},
-        response_status_code: 200,
-        response_body: rendered,
-        ip_address: getClientIp(req),
-        latency_ms: Date.now() - started,
-      });
+      // await logSvc.insertLog(req.db.stateless, {
+      //   project_id: projectId,
+      //   endpoint_id: originId,
+      //   request_method: method,
+      //   request_path: req.path,
+      //   request_headers: req.headers || {},
+      //   request_body: payload || {},
+      //   response_status_code: 200,
+      //   response_body: rendered,
+      //   ip_address: getClientIp(req),
+      //   latency_ms: Date.now() - started,
+      // });
       return res.status(200).json(rendered);
     }
 
@@ -361,16 +361,16 @@ module.exports = async function statefulHandler(req, res, next) {
           { params: { id: idFromUrl } },
           { message: "Deleted." }
         );
-        await logSvc.insertLog(req.db.stateless, {
-          project_id: projectId,
-          endpoint_id: originId,
-          request_method: method,
-          request_path: req.path,
-          response_status_code: 200,
-          response_body: rendered,
-          ip_address: getClientIp(req),
-          latency_ms: Date.now() - started,
-        });
+        // await logSvc.insertLog(req.db.stateless, {
+        //   project_id: projectId,
+        //   endpoint_id: originId,
+        //   request_method: method,
+        //   request_path: req.path,
+        //   response_status_code: 200,
+        //   response_body: rendered,
+        //   ip_address: getClientIp(req),
+        //   latency_ms: Date.now() - started,
+        // });
         return res.status(200).json(rendered);
       }
       // delete all
@@ -381,16 +381,16 @@ module.exports = async function statefulHandler(req, res, next) {
         {},
         { message: "Deleted all." }
       );
-      await logSvc.insertLog(req.db.stateless, {
-        project_id: projectId,
-        endpoint_id: originId,
-        request_method: method,
-        request_path: req.path,
-        response_status_code: 200,
-        response_body: rendered,
-        ip_address: getClientIp(req),
-        latency_ms: Date.now() - started,
-      });
+      // await logSvc.insertLog(req.db.stateless, {
+      //   project_id: projectId,
+      //   endpoint_id: originId,
+      //   request_method: method,
+      //   request_path: req.path,
+      //   response_status_code: 200,
+      //   response_body: rendered,
+      //   ip_address: getClientIp(req),
+      //   latency_ms: Date.now() - started,
+      // });
       return res.status(200).json(rendered);
     }
 
