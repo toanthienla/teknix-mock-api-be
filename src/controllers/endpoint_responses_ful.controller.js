@@ -1,5 +1,5 @@
 const ResponseStatefulService = require("../services/endpoint_responses_ful.service");
-const ResponseSvc = require('../services/endpoint_response.service');
+const ResponseSvc = require("../services/endpoint_response.service");
 
 exports.listResponsesForEndpoint = async (req, res) => {
   const { endpoint_id } = req.query;
@@ -30,15 +30,35 @@ exports.getResponseById = async (req, res) => {
 exports.updateById = async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id))
+    if (Number.isNaN(id)) {
       return res.status(400).json({ error: "id must be an integer" });
+    }
 
-    const { name, response_body, delay_ms } = req.body ?? {};
+    // --- NORMALIZE: payload ngắn gọn -> đầy đủ ---
+    const normalized = { ...req.body };
+    if (typeof normalized.message === "string" && typeof normalized.response_body === "undefined") {
+      normalized.response_body = { message: normalized.message };
+    }
+    if (typeof normalized.delay !== "undefined" && typeof normalized.delay_ms === "undefined") {
+      const n = parseInt(normalized.delay, 10);
+      if (!Number.isNaN(n)) normalized.delay_ms = n;
+    }
+    if (typeof normalized.body === "object" && normalized.body && typeof normalized.response_body === "undefined") {
+      normalized.response_body = normalized.body;
+    }
+    if (typeof normalized.name === "string") {
+      normalized.name = normalized.name.trim();
+    }
+
     const updated = await ResponseSvc.update(
-      req.db.stateless, // pool stateless
-      req.db.stateful, // pool stateful
+      req.db.stateless,   // pool stateless
+      req.db.stateful,    // pool stateful
       id,
-      { name, response_body, delay_ms }
+      {
+        name: normalized.name,
+        response_body: normalized.response_body,
+        delay_ms: normalized.delay_ms,
+      }
     );
 
     if (!updated) return res.status(404).json({ error: "Response not found" });
@@ -48,7 +68,8 @@ exports.updateById = async (req, res) => {
   }
 };
 
-// HÀM MỚI: Xóa một stateful response
+
+//  Xóa một stateful response
 exports.deleteResponseById = async (req, res) => {
   try {
     const { id } = req.params;

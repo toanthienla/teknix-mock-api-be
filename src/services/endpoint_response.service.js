@@ -226,7 +226,21 @@ async function update(
 
 // Hàm check nhanh xem response thuộc endpoint stateful hay không
 async function checkIsStatefull(dbPool, dbPoolfull, responseId) {
-  // Thử tìm ở stateless trước
+  // 1️⃣ Kiểm tra xem response có trong DB stateful không
+  const { rows: r2 } = await dbPoolfull.query(
+    `SELECT ef.is_active
+     FROM endpoints_ful ef
+     INNER JOIN endpoint_responses_ful rf ON ef.id = rf.endpoint_id
+     WHERE rf.id = $1`,
+    [responseId]
+  );
+
+  if (r2.length > 0) {
+    // Nếu endpoint_ful đang active → là stateful
+    return r2[0].is_active === true;
+  }
+
+  // 2️⃣ Nếu không thấy trong DB stateful → tìm trong DB stateless
   const { rows: r1 } = await dbPool.query(
     `SELECT e.is_stateful
      FROM endpoints e
@@ -234,18 +248,9 @@ async function checkIsStatefull(dbPool, dbPoolfull, responseId) {
      WHERE r.id = $1`,
     [responseId]
   );
-  if (r1.length > 0) return r1[0].is_stateful || false;
 
-  // Nếu không có → thử tìm ở stateful
-  const { rows: r2 } = await dbPoolfull.query(
-    `SELECT e.is_stateful
-     FROM endpoints e
-INNER JOIN endpoints_ful ef ON e.id = ef.origin_id
-     INNER JOIN endpoint_responses_ful rf ON ef.id = rf.endpoint_id
-     WHERE rf.id = $1`,
-    [responseId]
-  );
-  return r2[0]?.is_stateful || false;
+  // Nếu không có kết quả, mặc định là stateless
+  return r1[0]?.is_stateful || false;
 }
 // Cập nhật danh sách priority cho nhiều response
 // Tham số: items = [{ id, endpoint_id, priority }, ...]
