@@ -1,5 +1,5 @@
 {
-  "name": "texnik-mock_api",
+  "name": "teknix-mock_api",
   "version": "1.0.0",
   "description": "Simple API quản lý workspace và project",
   "main": "src/server.js",
