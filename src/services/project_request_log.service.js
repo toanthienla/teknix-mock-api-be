@@ -110,22 +110,23 @@ async function nullifyEndpointAndResponses(dbPool, endpointId) {
 
 // NULL hoá toàn bộ tham chiếu thuộc một workspace: folder_id,, endpoint_id, endpoint_response_id
 // Mục tiêu: xoá workspace mà không đụng schema, vẫn giữ dữ liệu log lịch sử
+// project_request_log.service.js (sửa nullifyWorkspaceTree)
 async function nullifyWorkspaceTree(dbPool, workspaceId) {
   const wid = Number(workspaceId);
   if (!Number.isInteger(wid))
     return { clearedProjects: 0, clearedEndpoints: 0, clearedResponses: 0 };
 
-  // 1) Bỏ tham chiếu folder_id, của các project thuộc workspace
+  // 1) Bỏ tham chiếu project_id của các project thuộc workspace
   const p = await dbPool.query(
     `UPDATE project_request_logs
-     SET folder_id = NULL
+     SET project_id = NULL
      WHERE project_id IN (
        SELECT p.id FROM projects p WHERE p.workspace_id = $1
      )`,
     [wid]
   );
 
-  // 2) Bỏ tham chiếu endpoint_id của các endpoint thuộc các project trong workspace
+  // 2) Bỏ tham chiếu endpoint_id cho endpoints thuộc các project trong workspace
   const e = await dbPool.query(
     `UPDATE project_request_logs
      SET endpoint_id = NULL
@@ -137,7 +138,7 @@ async function nullifyWorkspaceTree(dbPool, workspaceId) {
     [wid]
   );
 
-  // 3) Bỏ tham chiếu endpoint_response_id của các response thuộc các endpoint trong workspace
+  // 3) Bỏ tham chiếu endpoint_response_id tương ứng
   const r = await dbPool.query(
     `UPDATE project_request_logs
      SET endpoint_response_id = NULL

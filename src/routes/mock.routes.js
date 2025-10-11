@@ -5,6 +5,7 @@ const axios = require("axios");
 const https = require("https");
 
 const logSvc = require("../services/project_request_log.service");
+const { getCollection } = require("../config/db");
 
 // === ADD: helper lấy danh sách id từ request theo thứ tự ưu tiên
 const pickIdsFromReq = (req) => {
@@ -197,24 +198,27 @@ router.use(async (req, res, next) => {
     if (ep.is_stateful) {
       //  STATEFUL
 
-      // 1. Lấy dữ liệu stateful từ CSDL
-      const { rows: dataRows } = await req.db.stateful.query(
-        "SELECT id, data_current, schema FROM endpoint_data_ful WHERE path = $1 LIMIT 1",
+      // 1. Lấy dữ liệu stateful từ Mongo
+      const colName = ep.path.replace(/^\//, "");
+      const col = getCollection(colName);
+      const doc = (await col.findOne({})) || {
+        data_current: [],
+        data_default: [],
+      };
+
+      // Chuẩn hoá currentData thành mảng
+      const currentData = Array.isArray(doc.data_current)
+        ? doc.data_current
+        : doc.data_current
+        ? [doc.data_current]
+        : [];
+
+      // Lấy schema ở PG (đúng với thiết kế endpoints_ful.schema)
+      const { rows: schRows } = await req.db.stateful.query(
+        "SELECT schema FROM endpoints_ful WHERE path = $1 LIMIT 1",
         [ep.path]
       );
-
-      if (dataRows.length === 0) {
-        return res
-          .status(404)
-          .json({ error: `Stateful data for path '${ep.path}' not found.` });
-      }
-
-      const statefulData = dataRows[0];
-      const currentData = Array.isArray(statefulData.data_current)
-        ? statefulData.data_current
-        : statefulData.data_current
-        ? [statefulData.data_current]
-        : []; // Mặc định là mảng rỗng
+      const schema = schRows?.[0]?.schema || null;
 
       const method = req.method.toUpperCase();
       const matchFn = getMatcher(ep.path);
@@ -224,12 +228,6 @@ router.use(async (req, res, next) => {
       switch (method) {
         case "GET": {
           const epFulId = await getEndpointsFulId(req.db.stateful, ep.id);
-
-          const currentData = Array.isArray(statefulData.data_current)
-            ? statefulData.data_current
-            : statefulData.data_current
-            ? [statefulData.data_current]
-            : [];
 
           const candidates = pickIdsFromReq(req);
           if (candidates.length) {
@@ -254,8 +252,7 @@ router.use(async (req, res, next) => {
         case "POST": {
           // Xử lý POST: Thêm mới dữ liệu
           const epFulId = await getEndpointsFulId(req.db.stateful, ep.id);
-          const newItem = req.body;
-          const schema = statefulData.schema;
+          const newItem = req.body; // schema đã có ở trên từ PG
 
           //  BƯỚC 1: VALIDATE SCHEMA
           const validationErrors = validateSchema(schema, newItem);
@@ -305,13 +302,12 @@ router.use(async (req, res, next) => {
           }
 
           const newData = [...currentData, newItem];
-          // Cập nhật lại CSDL
-          await req.db.stateful.query(
-            `UPDATE endpoint_data_ful SET data_current = $1, updated_at = NOW() WHERE path = $2`,
-            [JSON.stringify(newData), ep.path]
+          // Cập nhật lại Mongo
+          await col.updateOne(
+            {},
+            { $set: { data_current: newData } },
+            { upsert: true }
           );
-
-          // Có thể tìm response "Create Success" để trả về status_code và body động
           return res.status(201).json(newItem);
         }
 
@@ -360,16 +356,16 @@ router.use(async (req, res, next) => {
             : []
           : { error: { message: "No response configured" } };
 
-      await logSvc.insertLog(req.db.stateless, {
-        project_id: ep.project_id || null,
-        endpoint_id: ep.id,
-        request_method: method,
-        request_path: req.path,
-        response_status_code: status,
-        response_body: body,
-        ip_address: getClientIp(req),
-        latency_ms: Date.now() - started,
-      });
+      // await logSvc.insertLog(req.db.stateless, {
+      //   project_id: ep.project_id || null,
+      //   endpoint_id: ep.id,
+      //   request_method: method,
+      //   request_path: req.path,
+      //   response_status_code: status,
+      //   response_body: body,
+      //   ip_address: getClientIp(req),
+      //   latency_ms: Date.now() - started,
+      // });
       return res.status(status).json(body);
     }
 
@@ -401,16 +397,16 @@ router.use(async (req, res, next) => {
       if (!r) {
         const status = 404;
         const body = { error: "No matching response found" };
-        await logSvc.insertLog(req.db.stateless, {
-          project_id: ep.project_id || null,
-          endpoint_id: ep.id,
-          request_method: method,
-          request_path: req.path,
-          response_status_code: status,
-          response_body: body,
-          ip_address: getClientIp(req),
-          latency_ms: Date.now() - started,
-        });
+        // await logSvc.insertLog(req.db.stateless, {
+        //   project_id: ep.project_id || null,
+        //   endpoint_id: ep.id,
+        //   request_method: method,
+        //   request_path: req.path,
+        //   response_status_code: status,
+        //   response_body: body,
+        //   ip_address: getClientIp(req),
+        //   latency_ms: Date.now() - started,
+        // });
         return res.status(status).json(body);
       }
     }
@@ -439,19 +435,19 @@ router.use(async (req, res, next) => {
               raw_body: String(proxyResp.data ?? ""),
             };
           }
-          await logSvc.insertLog(req.db.stateless, {
-            project_id: ep.project_id || null,
-            endpoint_id: ep.id,
-            endpoint_response_id: r.id || null,
-            request_method: method,
-            request_path: req.path,
-            request_headers: req.headers || {},
-            request_body: req.body || {},
-            response_status_code: proxyResp.status,
-            response_body: safeResponseBody,
-            ip_address: getClientIp(req),
-            latency_ms: finished - started,
-          });
+          // await logSvc.insertLog(req.db.stateless, {
+          //   project_id: ep.project_id || null,
+          //   endpoint_id: ep.id,
+          //   endpoint_response_id: r.id || null,
+          //   request_method: method,
+          //   request_path: req.path,
+          //   request_headers: req.headers || {},
+          //   request_body: req.body || {},
+          //   response_status_code: proxyResp.status,
+          //   response_body: safeResponseBody,
+          //   ip_address: getClientIp(req),
+          //   latency_ms: finished - started,
+          // });
           return res
             .status(proxyResp.status)
             .set(proxyResp.headers)
@@ -476,19 +472,19 @@ router.use(async (req, res, next) => {
       }
       const sendResponse = async () => {
         const finished = Date.now();
-        await logSvc.insertLog(req.db.stateless, {
-          project_id: ep.project_id || null,
-          endpoint_id: ep.id,
-          endpoint_response_id: r.id || null,
-          request_method: method,
-          request_path: req.path,
-          request_headers: req.headers || {},
-          request_body: req.body || {},
-          response_status_code: status,
-          response_body: body,
-          ip_address: getClientIp(req),
-          latency_ms: finished - started,
-        });
+        // await logSvc.insertLog(req.db.stateless, {
+        //   project_id: ep.project_id || null,
+        //   endpoint_id: ep.id,
+        //   endpoint_response_id: r.id || null,
+        //   request_method: method,
+        //   request_path: req.path,
+        //   request_headers: req.headers || {},
+        //   request_body: req.body || {},
+        //   response_status_code: status,
+        //   response_body: body,
+        //   ip_address: getClientIp(req),
+        //   latency_ms: finished - started,
+        // });
         if (body && typeof body === "object") {
           return res.status(status).json(body);
         }
@@ -502,16 +498,16 @@ router.use(async (req, res, next) => {
     }
   } catch (err) {
     try {
-      await logSvc.insertLog(req.db.stateless, {
-        project_id: null,
-        endpoint_id: null,
-        request_method: req.method?.toUpperCase?.() || "",
-        request_path: req.path || req.originalUrl || "",
-        response_status_code: 500,
-        response_body: { error: "Internal Server Error", message: err.message },
-        ip_address: getClientIp(req),
-        latency_ms: Date.now() - started,
-      });
+      // await logSvc.insertLog(req.db.stateless, {
+      //   project_id: null,
+      //   endpoint_id: null,
+      //   request_method: req.method?.toUpperCase?.() || "",
+      //   request_path: req.path || req.originalUrl || "",
+      //   response_status_code: 500,
+      //   response_body: { error: "Internal Server Error", message: err.message },
+      //   ip_address: getClientIp(req),
+      //   latency_ms: Date.now() - started,
+      // });
     } catch (logErr) {
       console.error("CRITICAL: Failed to log an unexpected error.", logErr);
     }

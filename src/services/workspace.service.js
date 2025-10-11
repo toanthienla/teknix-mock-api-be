@@ -96,7 +96,7 @@ async function deleteWorkspaceAndHandleLogs(db, workspaceId) {
 
     // Bước 2: NULL hóa các tham chiếu trong bảng log
     // Giả định hàm này đã được cập nhật để nhận client
-    await logSvc.nullifyWorkspaceTree(workspaceId, client);
+    await logSvc.nullifyWorkspaceTree(client, workspaceId);
 
     // Bước 3: Xóa workspace
     await client.query('DELETE FROM workspaces WHERE id = $1', [workspaceId]);

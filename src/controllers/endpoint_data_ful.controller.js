@@ -1,5 +1,6 @@
 const EndpointStatefulService = require("../services/endpoints_ful.service");
 const DataStatefulService = require("../services/endpoint_data_ful.service");
+const ResponseSvc = require('../services/endpoint_response.service');
 
 /**
  * Lấy dữ liệu stateful theo path
@@ -37,14 +38,12 @@ exports.deleteDataByPath = async (req, res) => {
       return res.status(400).json({ error: "Tham số 'path' là bắt buộc." });
     }
 
-    // const success = await EndpointStatefulService.deleteByPath(path);
-
-    // Tạm thời trả về lỗi để biết cần bổ sung
-    return res
-      .status(501)
-      .json({
-        error: "Chức năng 'deleteByPath' chưa được cài đặt trong service.",
-      });
+    const ok = await DataStatefulService.deleteByPath(path);
+    if (!ok)
+      return res
+        .status(404)
+        .json({ error: `Không tìm thấy dữ liệu với path: '${path}'` });
+    return res.status(204).send();
   } catch (err) {
     console.error("Error in deleteDataByPath:", err.message);
     res.status(500).json({ error: "Lỗi máy chủ nội bộ." });
@@ -69,12 +68,10 @@ exports.updateEndpointData = async (req, res) => {
 
     const { schema, data_default } = req.body;
 
-    const result = await EndpointStatefulService.updateEndpointData(
-      req.db.stateful,
-      path,
-      { schema, data_default }
-    );
-
+    const result = await EndpointStatefulService.updateEndpointData(path, {
+      schema,
+      data_default,
+    });
 
     return res.status(200).json({
       message: "Cập nhật dữ liệu endpoint thành công.",
@@ -103,7 +100,6 @@ exports.setDefaultEndpointData = async (req, res) => {
         .json({ error: "Thiếu 'data_default' trong payload." });
 
     const result = await DataStatefulService.upsertDefaultAndCurrentByPath(
-      req.db.stateful,
       path,
       data_default
     );

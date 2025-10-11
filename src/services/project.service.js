@@ -92,7 +92,7 @@ async function deleteProjectAndHandleLogs(db, projectId) {
       return { success: false, notFound: true };
     }
 
-    await logSvc.nullifyProjectTree(projectId, client);
+    await logSvc.nullifyProjectTree(client, projectId);
 
     await client.query('DELETE FROM projects WHERE id = $1', [projectId]);
 

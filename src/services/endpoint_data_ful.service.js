@@ -1,104 +1,136 @@
-const { statefulPool } = require("../config/db");
-const ResponseStatefulService = require("./endpoint_responses_ful.service");
+// services/endpoint_data_ful.service.js
+// Quản lý dữ liệu stateful lưu ở MongoDB, mỗi endpoint path ↔ 1 collection
+// Ví dụ: "/users" -> collection "users"
 
-const DataStatefulService = {
-  async findByPath(path) {
-    const query = "SELECT * FROM endpoint_data_ful WHERE path = $1;";
-    const { rows } = await statefulPool.query(query, [path]);
-    return rows[0] || null;
-  },
+const { getCollection } = require("../config/db");
 
-  /**
-   * Xóa dữ liệu theo path
-   * @param {string} path - Path của dữ liệu cần xóa
-   * @returns {boolean} - Trả về true nếu xóa thành công, false nếu không tìm thấy
-   */
-  async deleteByPath(path) {
-    const query = "DELETE FROM endpoint_data_ful WHERE path = $1;";
-    const result = await statefulPool.query(query, [path]);
-    return result.rowCount > 0;
-  },
-
-  async upsertDefaultAndCurrentByPath(pool, path, dataDefault) {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-
-      // Tạo/ghi đè theo path (cần unique index trên endpoint_data_ful(path))
-      const sql = `
-        INSERT INTO endpoint_data_ful (path, data_default, data_current, updated_at)
-        VALUES ($1, $2::jsonb, $2::jsonb, NOW())
-        ON CONFLICT (path)
-        DO UPDATE SET
-          data_default = EXCLUDED.data_default,
-          data_current = EXCLUDED.data_current,
-          updated_at = NOW()
-        RETURNING id, path, schema, data_default, data_current, created_at, updated_at
-      `;
-
-      const payload =
-        typeof dataDefault === "string"
-          ? dataDefault
-          : JSON.stringify(dataDefault ?? null); // tránh undefined
-      const {
-        rows: [row],
-      } = await client.query(sql, [path, payload]);
-
-      await client.query("COMMIT");
-      return row;
-    } catch (e) {
-      await client.query("ROLLBACK");
-      throw e;
-    } finally {
-      client.release();
-    }
-  },
-
-  async upsertDefaultAndCurrentByPath(pool, path, dataDefault) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-
-    // Chuẩn hoá input thành chuỗi JSON hợp lệ (tránh invalid input syntax for type json)
-    const payload =
-      typeof dataDefault === "string"
-        ? dataDefault
-        : JSON.stringify(dataDefault ?? null);
-
-    // 1) UPDATE trước
-    const up = await client.query(
-      `UPDATE endpoint_data_ful
-         SET data_default = $2::jsonb,
-             data_current = $2::jsonb,
-             updated_at   = NOW()
-       WHERE path = $1
-       RETURNING id, path, schema, data_default, data_current, created_at, updated_at`,
-      [path, payload]
-    );
-
-    let row = up.rows[0];
-
-    // 2) Nếu chưa có hàng nào, INSERT
-    if (!row) {
-      const ins = await client.query(
-        `INSERT INTO endpoint_data_ful (path, data_default, data_current, updated_at)
-         VALUES ($1, $2::jsonb, $2::jsonb, NOW())
-         RETURNING id, path, schema, data_default, data_current, created_at, updated_at`,
-        [path, payload]
-      );
-      row = ins.rows[0];
-    }
-
-    await client.query("COMMIT");
-    return row;
-  } catch (e) {
-    await client.query("ROLLBACK");
-    throw e;
-  } finally {
-    client.release();
+/**
+ * Chuẩn hoá path -> tên collection
+ * "/users"  -> "users"
+ * "cars"    -> "cars"
+ */
+function toCollectionName(path) {
+  if (typeof path !== "string" || path.trim().length === 0) {
+    throw new Error("Invalid path for Mongo collection.");
   }
+  return path.replace(/^\//, "").trim();
 }
 
-};
+/**
+ * Lấy 1 document duy nhất của collection (mô hình: 1 collection ~ 1 document)
+ * @param {string} path
+ * @returns {Promise<object|null>}
+ */
+async function findByPath(path) {
+  const colName = toCollectionName(path);
+  const col = getCollection(colName);
+  return await col.findOne({});
+}
 
-module.exports = DataStatefulService;
+/**
+ * Xoá toàn bộ dữ liệu (document) của collection theo path
+ * @param {string} path
+ * @returns {Promise<boolean>} true nếu có xoá dữ liệu
+ */
+async function deleteByPath(path) {
+  const colName = toCollectionName(path);
+  const col = getCollection(colName);
+  // Dọn rỗng collection (vẫn giữ collection để tái sử dụng)
+  const result = await col.deleteMany({});
+  return result.deletedCount > 0;
+}
+
+/**
+ * Upsert: ghi đè data_default và data_current theo path
+ * - Nếu chưa có document nào: insert { data_default, data_current }
+ * - Nếu đã có: set lại cả 2 mảng
+ * @param {string} path
+ * @param {Array|Object} dataDefault
+ * @returns {Promise<object>} tài liệu sau cập nhật
+ */
+async function upsertDefaultAndCurrentByPath(path, dataDefault = []) {
+  const colName = toCollectionName(path);
+  const col = getCollection(colName);
+
+  // Ép kiểu về array nếu dev truyền object lẻ
+  const payload =
+    Array.isArray(dataDefault) ? dataDefault : [dataDefault];
+
+  await col.updateOne(
+    {},
+    { $set: { data_default: payload, data_current: payload } },
+    { upsert: true }
+  );
+
+  return await col.findOne({});
+}
+
+/**
+ * Lấy danh sách hiện tại (data_current) theo path
+ * @param {string} path
+ * @returns {Promise<Array>}
+ */
+async function getCurrentList(path) {
+  const doc = await findByPath(path);
+  return doc?.data_current || [];
+}
+
+/**
+ * Thêm 1 item vào data_current
+ * @param {string} path
+ * @param {object} item
+ * @returns {Promise<object>} tài liệu sau khi thêm
+ */
+async function pushToCurrent(path, item) {
+  const colName = toCollectionName(path);
+  const col = getCollection(colName);
+  await col.updateOne({}, { $push: { data_current: item } }, { upsert: true });
+  return await col.findOne({});
+}
+
+/**
+ * Cập nhật 1 item trong data_current theo predicate (ví dụ theo id)
+ * @param {string} path
+ * @param {(it: object)=>boolean} matchFn - hàm xác định item cần sửa
+ * @param {(it: object)=>object} updateFn - hàm trả về item đã cập nhật
+ * @returns {Promise<object>} tài liệu sau khi cập nhật
+ */
+async function updateInCurrent(path, matchFn, updateFn) {
+  const colName = toCollectionName(path);
+  const col = getCollection(colName);
+  const doc = await col.findOne({}) || { data_current: [] };
+
+  const updated = Array.from(doc.data_current || []).map((it) =>
+    matchFn(it) ? updateFn({ ...it }) : it
+  );
+
+  await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
+  return await col.findOne({});
+}
+
+/**
+ * Xoá 1 item trong data_current theo predicate (ví dụ theo id)
+ * @param {string} path
+ * @param {(it: object)=>boolean} matchFn
+ * @returns {Promise<object>} tài liệu sau khi xoá
+ */
+async function removeFromCurrent(path, matchFn) {
+  const colName = toCollectionName(path);
+  const col = getCollection(colName);
+  const doc = await col.findOne({}) || { data_current: [] };
+
+  const filtered = Array.from(doc.data_current || []).filter((it) => !matchFn(it));
+
+  await col.updateOne({}, { $set: { data_current: filtered } }, { upsert: true });
+  return await col.findOne({});
+}
+
+module.exports = {
+  findByPath,
+  deleteByPath,
+  upsertDefaultAndCurrentByPath,
+  getCurrentList,
+  pushToCurrent,
+  updateInCurrent,
+  removeFromCurrent,
+};

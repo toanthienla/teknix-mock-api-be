@@ -19,7 +19,7 @@
 async function logRequest(dbPool, log) {
   const query = `
     INSERT INTO project_request_logs (
-      folder_id, endpoint_id, endpoint_response_id,
+      project_id, endpoint_id, endpoint_response_id,
       request_method, request_path, request_headers, request_body,
       response_status_code, response_body, ip_address, latency_ms
     ) VALUES (
@@ -29,9 +29,8 @@ async function logRequest(dbPool, log) {
     )
     RETURNING id;
   `;
-
   const values = [
-    log.folderId || null,
+    log.projectId || null,
     log.endpointId || null,
     log.endpointResponseId || null,
     log.method,
@@ -43,14 +42,8 @@ async function logRequest(dbPool, log) {
     log.ip || null,
     log.latencyMs || 0,
   ];
-
-  try {
-    const result = await dbPool.query(query, values);
-    return result.rows[0].id;
-  } catch (err) {
-    console.error("❌ Error inserting request log:", err.message);
-    throw err;
-  }
+  const { rows } = await dbPool.query(query, values);
+  return rows[0].id;
 }
 
 module.exports = {

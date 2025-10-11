@@ -110,15 +110,15 @@ async function update(
     condition,
     is_default,
     delay_ms,
-    proxy_url,
-    proxy_method,
+    proxy_url = null,
+    proxy_method = null,
   }
 ) {
   // Xác định response thuộc stateful hay stateless
   const isStatefull = await checkIsStatefull(dbPool, dbPoolfull, id);
 
   if (!isStatefull) {
-    //  Nhánh Stateless 
+    //  Nhánh Stateless
     let endpointId;
     if (typeof is_default !== "undefined") {
       const current = await getById(dbPool, id);
@@ -160,39 +160,67 @@ async function update(
 
     return rows[0] || null;
   } else {
-    //  Nhánh Stateful 
+    //  Nhánh Stateful — áp dụng rule mới:
+    //  1) Nếu endpoint.method = 'GET' và response.status_code = 200:
+    //     - CHO phép sửa: name, delay_ms
+    //     - KHÔNG cho sửa: response_body
+    //  2) Các response stateful khác: cho sửa name, response_body, delay_ms
+    //  3) status_code: luôn cố định (không bao giờ update)
+
+    // Lấy response + method endpoint kèm theo
     const {
-      rows: [response],
+     rows: [row],
     } = await dbPoolfull.query(
-      `SELECT * FROM endpoint_responses_ful WHERE id = $1`,
+      `SELECT rf.id, rf.name, rf.status_code, rf.response_body, rf.delay_ms,
+              ef.method
+         FROM endpoint_responses_ful rf
+         JOIN endpoints_ful ef ON rf.endpoint_id = ef.id
+        WHERE rf.id = $1`,
       [id]
     );
-    if (!response) {
-      throw new Error("Response not found in stateful DB");
-    }
+    if (!row) throw new Error("Response not found in stateful DB");
 
-    // Rule: cấm chỉnh GET 200 - Get All / Get Detail
-    if (
-      response.status_code === 200 &&
-      (response.name === "Get All Success" ||
-        response.name === "Get Detail Success")
-    ) {
-      throw new Error("This response is not editable.");
-    }
+    const isGet200 = String(row.method).toUpperCase() === "GET" && Number(row.status_code) === 200;
 
-    const { rows } = await dbPoolfull.query(
-      `UPDATE endpoint_responses_ful
-       SET name = COALESCE($1, name),
-           status_code = COALESCE($2, status_code),
-           response_body = COALESCE($3, response_body),
-           delay_ms = COALESCE($4, delay_ms),
-           updated_at = NOW()
-       WHERE id = $5
-       RETURNING *`,
-      [name, status_code, response_body, delay_ms, id]
-    );
+    // status_code là immutable: bỏ qua bất kỳ giá trị client gửi lên
+    const nextName  = typeof name      !== "undefined" ? name      : row.name;
+    const nextDelay = typeof delay_ms  !== "undefined" ? delay_ms  : row.delay_ms;
 
-    return rows[0] || null;
+    // Chuẩn bị field cập nhật theo rule
+    const sets = [`name = $1`, `delay_ms = $2`, `updated_at = NOW()`];
+    const vals = [nextName, nextDelay];
+
+    if (!isGet200) {
+      // Cho phép sửa body ở các response stateful khác
+      const nextBody = typeof response_body !== "undefined" ? response_body : row.response_body;
+      sets.splice(1, 0, `response_body = $3`); // chèn trước delay_ms
+      vals.splice(2, 0, nextBody);
+      // Lúc này order params: $1 name, $2 (tạm), $3 body, ... — ta sẽ bind đúng ở query dưới
+      // Để tránh nhầm index, làm query tách theo nhánh:
+      const { rows: up } = await dbPoolfull.query(
+        `UPDATE endpoint_responses_ful
+            SET name = $1,
+                response_body = $2,
+                delay_ms = $3,
+                updated_at = NOW()
+          WHERE id = $4
+          RETURNING *`,
+        [nextName, nextBody, nextDelay, id]
+      );
+      return up[0] || null;
+    } else {
+      // GET 200: không cho sửa body
+      const { rows: up } = await dbPoolfull.query(
+        `UPDATE endpoint_responses_ful
+            SET name = $1,
+                delay_ms = $2,
+                updated_at = NOW()
+          WHERE id = $3
+          RETURNING *`,
+        [nextName, nextDelay, id]
+      );
+      return up[0] || null;
+}
   }
 }
 
@@ -206,7 +234,7 @@ async function checkIsStatefull(dbPool, dbPoolfull, responseId) {
      WHERE r.id = $1`,
     [responseId]
   );
-  if (r1.length > 0) return r1[0].is_statefull || false;
+  if (r1.length > 0) return r1[0].is_stateful || false;
 
   // Nếu không có → thử tìm ở stateful
   const { rows: r2 } = await dbPoolfull.query(
@@ -257,12 +285,12 @@ async function remove(dbPool, id) {
 //  - Set is_default = true cho response có id tương ứng
 // Trả về: danh sách rút gọn các response của endpoint đó: [{ id, endpoint_id, is_default }, ...]
 async function setDefault(dbPool, id) {
-// Đảm bảo phản hồi mục tiêu tồn tại và lấy endpoint_id của nó
+  // Đảm bảo phản hồi mục tiêu tồn tại và lấy endpoint_id của nó
   const current = await getById(dbPool, id);
   if (!current) return [];
   const endpointId = current.endpoint_id;
 
-// Bỏ các mục khác, sau đó đặt mục này
+  // Bỏ các mục khác, sau đó đặt mục này
   await dbPool.query(
     "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1",
     [endpointId]
@@ -272,7 +300,7 @@ async function setDefault(dbPool, id) {
     [id]
   );
 
- // Trả về danh sách tóm tắt cho điểm cuối đó
+  // Trả về danh sách tóm tắt cho điểm cuối đó
   const { rows } = await dbPool.query(
     "SELECT id, endpoint_id, is_default FROM endpoint_responses WHERE endpoint_id = $1 ORDER BY id ASC",
     [endpointId]

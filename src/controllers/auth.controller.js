@@ -14,11 +14,19 @@ exports.register = async (req, res) => {
     const db = req.db.stateless;
     const { username, password } = req.body;
 
+    // Kiểm tra có username/password không
     if (!username || !password)
       return res.status(400).json({ error: 'Username and password required' });
 
+    // ✅ Kiểm tra độ dài password tối thiểu 8 ký tự
+    if (password.length < 8)
+      return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+
     // Kiểm tra username đã tồn tại chưa
-    const existingUser = await db.query('SELECT * FROM users WHERE username = $1', [username]);
+    const existingUser = await db.query(
+      'SELECT * FROM users WHERE username = $1',
+      [username]
+    );
     if (existingUser.rows.length > 0)
       return res.status(400).json({ error: 'Username already exists' });
 
@@ -52,6 +60,7 @@ exports.register = async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 ngày
     });
 
+    // Trả kết quả
     res.status(201).json({
       message: 'Registration successful',
       user: { id: user.id, username: user.username },
@@ -62,6 +71,7 @@ exports.register = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
+
 
 /**
  * Đăng nhập
