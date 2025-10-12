@@ -105,7 +105,7 @@ async function getEndpointSchema(req, res) {
     const { id } = req.params;
 
     // Gọi service để lấy schema từ DB stateful
-    const result = await svc.getEndpointSchema(req.db.stateful, id);
+    const result = await EndpointStatefulService.getEndpointSchema(req.db.stateful, id);
 
     // Không tìm thấy endpoint
     if (!result.success) {
@@ -134,7 +134,7 @@ async function getBaseSchemaByEndpoint(req, res) {
   try {
     const { id } = req.params;
 
-    const result = await svc.getBaseSchemaByEndpointId(req.db.stateless, id);
+    const result = await EndpointStatefulService.getBaseSchemaByEndpointId(req.db.stateless, id);
 
     return res.status(200).json(result);
   } catch (err) {

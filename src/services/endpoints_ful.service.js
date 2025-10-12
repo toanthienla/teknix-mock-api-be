@@ -624,9 +624,21 @@ async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
     throw new Error("Folder not found");
   }
 
-  // 3) Trả về base_schema hoặc null nếu chưa có
-  return { base_schema: folderRows[0].base_schema || null };
+  const baseSchema = folderRows[0].base_schema || null;
+
+  if (!baseSchema) {
+    return { fields: [] };
+  }
+
+  // ✅ Chuyển object -> array
+  const fields = Object.entries(baseSchema).map(([key, value]) => ({
+    name: key,
+    type: value.type === "number" ? "integer" : value.type, // đổi "number" -> "integer" nếu cần
+  }));
+
+  return { fields };
 }
+
 
 // ------------------------
 // Exports (function-based)
