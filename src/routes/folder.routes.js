@@ -30,6 +30,6 @@ router.delete('/:id', auth, asyncHandler(ctrl.deleteFolder));
 router.get("/getOwner/:id", ctrl.getFolderOwner);
 
 // ✅ Check owner of folder
-router.get("/checkOwner/:id", ctrl.checkFolderOwner);
+router.get("/checkOwner/:id", auth, asyncHandler(ctrl.checkFolderOwner));
 
 module.exports = router;

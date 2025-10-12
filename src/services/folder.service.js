@@ -23,7 +23,7 @@ async function getFolders(db, project_id) {
 // Get folder by id
 async function getFolderById(db, id) {
   const { rows } = await db.query(
-    `SELECT id, project_id, name, description, created_at, updated_at
+    `SELECT id, project_id, name, description, created_at, updated_at, is_public
      FROM folders
      WHERE id = $1`,
     [id]
