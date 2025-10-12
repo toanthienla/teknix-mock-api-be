@@ -153,6 +153,15 @@ module.exports = async function statefulHandler(req, res, next) {
     const payload = req.body || {};
 
     if (method === "GET") {
+          // áp dụng filter theo schema.fields (id luôn được giữ)
+   const applyGetFields = (obj) => {
+      const list = Array.isArray(schema?.fields) ? schema.fields : null;
+      if (!obj || typeof obj !== "object" || !list) return obj;
+      const set = new Set(["id", ...list.filter((f) => f !== "id")]);
+      const out = {};
+      for (const k of set) if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
+      return out;
+    };
       if (hasId) {
         const item = current.find((x) => Number(x?.id) === idFromUrl);
         if (!item) {
@@ -184,7 +193,7 @@ module.exports = async function statefulHandler(req, res, next) {
         //   ip_address: getClientIp(req),
         //   latency_ms: Date.now() - started,
         // });
-        return res.status(200).json(item); // by-id trả trực tiếp item
+        return res.status(200).json(applyGetFields(item)); // filter fields
       }
       // await logSvc.insertLog(req.db.stateless, {
       //   project_id: projectId,
@@ -196,7 +205,7 @@ module.exports = async function statefulHandler(req, res, next) {
       //   ip_address: getClientIp(req),
       //   latency_ms: Date.now() - started,
       // });
-      return res.status(200).json(current); // get-all
+      return res.status(200).json(current.map(applyGetFields)); // filter fields
     }
 
     if (method === "POST") {
