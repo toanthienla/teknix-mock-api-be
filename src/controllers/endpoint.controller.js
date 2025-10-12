@@ -2,11 +2,32 @@ const svc = require("../services/endpoint.service");
 const { success, error } = require("../utils/response");
 const statefulSvc = require("../services/endpoints_ful.service");
 
-// Chuẩn hoá dữ liệu stateful: id = origin_id, ẩn origin_id
+// Helper: dựng lại schema theo __order và strip __order khỏi response
+function orderAndStripSchema(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+  const order = Array.isArray(schema.__order) ? schema.__order : null;
+  if (!order) return schema;
+  const out = {};
+  for (const k of order) {
+    if (Object.prototype.hasOwnProperty.call(schema, k)) {
+      out[k] = schema[k];
+    }
+  }
+  // thêm các key còn lại (nếu có), bỏ qua __order
+  for (const k of Object.keys(schema)) {
+    if (k !== "__order" && !Object.prototype.hasOwnProperty.call(out, k)) {
+      out[k] = schema[k];
+    }
+  }
+  return out;
+}
+
+// Chuẩn hoá dữ liệu stateful: id = origin_id, ẩn origin_id và ẩn __order trong schema
 function presentStateful(row) {
   if (!row) return row;
-  const { origin_id, ...rest } = row;
-  return { ...rest, id: origin_id, is_stateful: true };
+  const { origin_id, schema, ...rest } = row;
+  const schemaOut = orderAndStripSchema(schema);
+  return { ...rest, schema: schemaOut, id: origin_id, is_stateful: true };
 }
 
 // Lấy danh sách endpoints (có thể lọc theo project_id hoặc folder_id)
@@ -170,7 +191,19 @@ async function updateEndpoint(req, res) {
     }
 
     // Thành công
-    return success(res, result.data);
+        // Thành công — nếu client có gửi schema, trả về theo đúng thứ tự keys của payload
+    let data = result.data;
+    if (payload && payload.schema && typeof payload.schema === 'object' && !Array.isArray(payload.schema)) {
+      const order = Object.keys(payload.schema);
+     const src = data?.schema && typeof data.schema === 'object' ? data.schema : {};
+      const reordered = {};
+      // bám theo thứ tự payload
+      for (const k of order) if (Object.prototype.hasOwnProperty.call(src, k)) reordered[k] = src[k];
+      // thêm các key còn lại (nếu vì lý do nào đó driver trả dư)
+      for (const k of Object.keys(src)) if (!Object.prototype.hasOwnProperty.call(reordered, k)) reordered[k] = src[k];
+      data = { ...data, schema: reordered };
+    }
+    return success(res, data);
   } catch (err) {
     return res.status(400).json({
       success: false,
