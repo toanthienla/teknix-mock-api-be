@@ -90,7 +90,7 @@ async function createEndpoint(
   );
   const endpoint = rows[0];
 
-  //  Auto-create default endpoint_response 
+  //  Auto-create default endpoint_response
   await endpointResponseService.create(dbPool, {
     endpoint_id: endpoint.id,
     name: "Success",
@@ -185,7 +185,10 @@ async function updateEndpoint(
         });
       }
       if (!usedMethods.includes(newMethodUpper) && usedMethods.length >= 4) {
-        errors.push({ field: "path", message: "Path already has all 4 methods" });
+        errors.push({
+          field: "path",
+          message: "Path already has all 4 methods",
+        });
       }
     }
 
@@ -204,8 +207,51 @@ async function updateEndpoint(
   // -----------------------------------------------------
   // 🔹 PHẦN 2: Logic mới cho Stateful (is_stateful = true)
   // -----------------------------------------------------
-  // Chỉ cho phép update khi endpoint stateful và inactive
-  if (current.is_stateful && !current.is_active) {
+  // Cho phép update khi endpoint đang stateful (kể cả active)
+  if (current.is_stateful) {
+    // ---  phân loại "shape" của schema ---
+    let isGetSchema = false;
+    let isRulesSchema = false;
+    if (schema !== undefined && schema !== null && typeof schema === "object") {
+      // GET schema: chỉ có { fields: [...] }
+      const hasFields = Array.isArray(schema.fields);
+      const keys = Object.keys(schema);
+      isGetSchema = hasFields && keys.length === 1;
+      // Rules schema: có ít nhất 1 value là object có 'type' hoặc 'required'
+      isRulesSchema = Object.values(schema).some(
+        (v) => v && typeof v === "object" && ("type" in v || "required" in v)
+      );
+      if (isGetSchema && isRulesSchema) {
+        return {
+          success: false,
+          message:
+            "Schema is ambiguous: use either {fields:[...]} for GET or a rules map for POST/PUT.",
+        };
+      }
+
+      // ✅ RÀNG BUỘC THEO METHOD
+      const m = String(current.method || "").toUpperCase();
+      if (m === "GET" && !isGetSchema) {
+        return {
+          success: false,
+          message: "For GET endpoints, schema must be {fields:[...]}.",
+        };
+      }
+      if ((m === "POST" || m === "PUT") && !isRulesSchema) {
+        return {
+          success: false,
+          message:
+            "For POST/PUT endpoints, schema must be a rules map (with type/required).",
+        };
+      }
+      // Các method khác (DELETE, PATCH, ...) → hiện không cho cập nhật schema
+      if (!["GET", "POST", "PUT"].includes(m)) {
+        return {
+          success: false,
+          message: `Updating schema is not supported for ${m} endpoints.`,
+        };
+      }
+    }
     const updateParts = [];
     const values = [];
     let idx = 1;
@@ -233,13 +279,16 @@ async function updateEndpoint(
       RETURNING *;
     `;
 
-    const { rows: updatedRows } = await clientStateful.query(updateQuery, values);
+    const { rows: updatedRows } = await clientStateful.query(
+      updateQuery,
+      values
+    );
     const updated = updatedRows[0];
 
     // ---------------------------------------------
-    // Nếu có schema mới → cập nhật base_schema
+    // Nếu có schema mới → cập nhật base_schema (CHỈ với rules schema POST/PUT)
     // ---------------------------------------------
-    if (schema) {
+    if (schema && isRulesSchema) {
       const { rows: folderRows } = await clientStateless.query(
         "SELECT base_schema FROM folders WHERE id = $1",
         [current.folder_id]
@@ -250,10 +299,10 @@ async function updateEndpoint(
       // Chỉ thêm field mới, không ghi đè field cũ
       for (const [key, field] of Object.entries(schema)) {
         if (!baseSchema[key]) {
-          baseSchema[key] = {
-            type: field.type,
-            required: field.required ?? true,
-          };
+          const t = field?.type ?? "string";
+          const r =
+            typeof field?.required === "boolean" ? field.required : true;
+          baseSchema[key] = { type: t, required: r };
           baseChanged = true;
         }
       }
@@ -272,10 +321,7 @@ async function updateEndpoint(
   // -----------------------------------------------------
   // 🔹 PHẦN 3: Các trường hợp không đủ điều kiện update
   // -----------------------------------------------------
-  return {
-    success: false,
-    message: "Endpoint cannot be updated (must be stateful and inactive)",
-  };
+  return { success: false, message: "No valid fields to update" };
 }
 
 // Delete endpoint
@@ -287,7 +333,9 @@ async function deleteEndpoint(dbPool, endpointId) {
   // Nếu là stateful, gọi service xóa của stateful
   if (endpoint.is_stateful === true) {
     // Tìm stateful endpoint bằng origin_id
-    const statefulEndpoint = await statefulEndpointSvc.findByOriginId(endpoint.id);
+    const statefulEndpoint = await statefulEndpointSvc.findByOriginId(
+      endpoint.id
+    );
     if (statefulEndpoint) {
       await statefulEndpointSvc.deleteById(statefulEndpoint.id);
     }

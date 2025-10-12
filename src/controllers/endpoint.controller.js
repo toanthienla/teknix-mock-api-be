@@ -142,12 +142,18 @@ async function updateEndpoint(req, res) {
   try {
     const { id } = req.params;
 
-    // gọi service với cả 2 pool: stateless + stateful
+    // --- NEW: Cho phép payload chỉ có { schema } ---
+    const payload = { ...req.body };
+    // Nếu chỉ cập nhật schema, đừng yêu cầu name/method/path
+    // (service sẽ tự xử lý đẩy sang endpoints_ful khi endpoint đang stateful)
+    if (payload && typeof payload.schema !== "undefined") {
+      // để nguyên; không ép buộc field khác
+    }
     const result = await svc.updateEndpoint(
       req.db.stateless,
       req.db.stateful,
       id,
-      req.body
+      payload
     );
 
     // Không tìm thấy endpoint
