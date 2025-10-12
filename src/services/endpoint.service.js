@@ -251,6 +251,8 @@ async function updateEndpoint(
           message: `Updating schema is not supported for ${m} endpoints.`,
         };
       }
+      // KHÔNG thêm __order vào schema để lưu DB (JSONB không bảo toàn thứ tự)
+      // -> ta xử lý thứ tự ở bước "trả về" sau khi update (xem Controller)
     }
     const updateParts = [];
     const values = [];
@@ -288,21 +290,27 @@ async function updateEndpoint(
     // ---------------------------------------------
     // Nếu có schema mới → cập nhật base_schema (CHỈ với rules schema POST/PUT)
     // ---------------------------------------------
+    // Nếu là rules schema (POST/PUT) → merge vào folders.base_schema:
+    // - CHỈ THÊM field CHƯA CÓ
+    // - KHÔNG XOÁ, KHÔNG GHI ĐÈ
     if (schema && isRulesSchema) {
       const { rows: folderRows } = await clientStateless.query(
         "SELECT base_schema FROM folders WHERE id = $1",
         [current.folder_id]
       );
+      // base_schema có thể null → mặc định {}
       let baseSchema = folderRows[0]?.base_schema || {};
       let baseChanged = false;
 
-      // Chỉ thêm field mới, không ghi đè field cũ
-      for (const [key, field] of Object.entries(schema)) {
-        if (!baseSchema[key]) {
-          const t = field?.type ?? "string";
-          const r =
-            typeof field?.required === "boolean" ? field.required : true;
-          baseSchema[key] = { type: t, required: r };
+      // Thêm các field chưa có vào base_schema (không đụng field đã có)
+     for (const [name, rule] of Object.entries(schema)) {
+        // Không có __order nữa, nhưng vẫn phòng ngừa:
+        if (name === "__order") continue;
+        if (!Object.prototype.hasOwnProperty.call(baseSchema, name)) {
+          const type = rule?.type ?? "string";
+          const required =
+            typeof rule?.required === "boolean" ? rule.required : true;
+          baseSchema[name] = { type, required };
           baseChanged = true;
         }
       }
