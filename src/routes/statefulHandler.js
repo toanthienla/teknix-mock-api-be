@@ -96,14 +96,6 @@ function isTypeOK(expected, value) {
   if (expected === "array") return Array.isArray(value);
   return true;
 }
-
-/**
- * Validate payload theo schema:
- * - Bắt buộc tất cả field có rule.required === true phải có trong payload (POST/PUT).
- * - Type phải khớp nếu có `type`.
- * - Không cho phép field lạ ngoài schema (rejectUnknown = true).
- * - Trả { ok, errors, sanitized } với sanitized chỉ gồm field thuộc schema (và id nếu có rule).
- */
 function validateAndSanitizePayload(schema, payload, {
   allowMissingRequired = false,
   rejectUnknown = true,
@@ -112,14 +104,11 @@ function validateAndSanitizePayload(schema, payload, {
   const sanitized = {};
   const schemaFields = Object.keys(schema || {});
 
-  // Unknown fields?
   if (rejectUnknown) {
     const unknownKeys = Object.keys(payload || {}).filter(
-      (k) => !schemaFields.includes(k) && k !== "user_id" // user_id không được phép trong payload
+      (k) => !schemaFields.includes(k) && k !== "user_id"
     );
-    if (unknownKeys.length) {
-      errors.push(`Unknown fields: ${unknownKeys.join(", ")}`);
-    }
+    if (unknownKeys.length) errors.push(`Unknown fields: ${unknownKeys.join(", ")}`);
   }
 
   for (const key of schemaFields) {
@@ -139,12 +128,9 @@ function validateAndSanitizePayload(schema, payload, {
       sanitized[key] = val;
     }
   }
-
-  // Nếu schema có id, giữ lại id từ payload khi có
   if (schemaFields.includes("id") && payload.id !== undefined) {
     sanitized.id = payload.id;
   }
-
   return { ok: errors.length === 0, errors, sanitized };
 }
 
@@ -213,11 +199,25 @@ module.exports = async function statefulHandler(req, res, next) {
 
     // =================== GET ===================
     if (method === "GET") {
-      // Chỉ trả các field thuộc keys của schema, ẩn user_id; không xét required.
+      // Ưu tiên định dạng mới: schema.fields = ["id", "name", ...]
       const pickForGET = (obj) => {
+        const fieldsArray = Array.isArray(schema?.fields) ? schema.fields : null;
+
+        // Nếu có fieldsArray → dùng nó làm whitelist
+        if (fieldsArray && fieldsArray.length > 0) {
+          const set = new Set(fieldsArray);
+          const out = {};
+          for (const k of set) {
+            if (k === "user_id") continue;       // luôn ẩn
+            if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
+          }
+          return out;
+        }
+
+        // Fallback: schema là object các field → dùng keys
         const keys = Object.keys(schema || {});
         if (keys.length === 0) {
-          const { user_id, ...rest } = obj; // không có schema → trả mọi thứ trừ user_id
+          const { user_id, ...rest } = obj;      // không có schema → trả mọi thứ trừ user_id
           return rest;
         }
         const set = new Set(keys);
@@ -226,7 +226,7 @@ module.exports = async function statefulHandler(req, res, next) {
           if (k === "user_id") continue;
           if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
         }
-        // nếu object có id nhưng schema không khai báo id, vẫn giữ lại id
+        // nếu object có id nhưng schema không khai báo id, vẫn giữ id
         if (!set.has("user_id") && Object.prototype.hasOwnProperty.call(obj, "id")) {
           out.id = obj.id;
         }
@@ -264,14 +264,12 @@ module.exports = async function statefulHandler(req, res, next) {
       const payload = req.body || {};
       const idRule = schema?.id || {};
 
-      // id.required === true → bắt buộc gửi id
       if (idRule?.required === true && (payload.id === undefined || payload.id === null)) {
         return sendResponse(res, 403, responsesBucket, {}, {
           fallback: { message: "Invalid schema." },
         });
       }
 
-      // Validate nghiêm ngặt: required + type + không field lạ
       const { ok, errors, sanitized } = validateAndSanitizePayload(schema, payload, {
         allowMissingRequired: false,
         rejectUnknown: true,
@@ -282,21 +280,17 @@ module.exports = async function statefulHandler(req, res, next) {
         });
       }
 
-      // Auto-increment id nếu optional & không gửi
       let newId = sanitized.id;
       if (idRule?.required === false && (newId === undefined || newId === null)) {
         const maxId = current.reduce((m, x) => Math.max(m, Number(x?.id) || 0), 0);
         newId = maxId + 1;
       }
-
-      // Conflict id
       if (newId !== undefined && current.some((x) => Number(x?.id) === Number(newId))) {
         return sendResponse(res, 409, responsesBucket, { params: { id: newId } }, {
           fallback: { message: "Conflict." },
         });
       }
 
-      // Lưu: chỉ field theo schema + id + user_id
       const newObj = { ...sanitized, id: newId, user_id: Number(userId) };
       const updated = [...current, newObj];
       await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
@@ -322,7 +316,6 @@ module.exports = async function statefulHandler(req, res, next) {
         });
       }
 
-      // Chỉ chủ sở hữu
       const ownerId = Number(current[idx]?.user_id);
       if (ownerId !== Number(userId)) {
         return res.status(403).json({ error: "Forbidden" });
@@ -331,7 +324,6 @@ module.exports = async function statefulHandler(req, res, next) {
       const payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
-      // Nếu đổi id → kiểm tra trùng
       const targetId = payload.id;
       if (targetId !== undefined && Number(targetId) !== idFromUrl) {
         const exists = current.some((x) => Number(x?.id) === Number(targetId));
@@ -346,7 +338,6 @@ module.exports = async function statefulHandler(req, res, next) {
         }
       }
 
-      // Validate nghiêm ngặt: required + type + không field lạ (PUT yêu cầu có đủ các field required)
       const { ok, errors, sanitized } = validateAndSanitizePayload(schema, payload, {
         allowMissingRequired: false,
         rejectUnknown: true,
@@ -358,7 +349,7 @@ module.exports = async function statefulHandler(req, res, next) {
         );
       }
 
-      // Merge như "git": chỉ cập nhật các field hợp lệ từ payload, không đụng các field khác đang có.
+      // Merge chỉ các field thuộc schema (các field khác vẫn giữ nguyên)
       const updatedItem = { ...current[idx], ...sanitized, user_id: ownerId };
 
       const updated = current.slice();
@@ -382,7 +373,6 @@ module.exports = async function statefulHandler(req, res, next) {
             fallback: { message: "Not found." },
           });
         }
-        // Only owner
         const ownerId = Number(current[idx]?.user_id);
         if (ownerId !== Number(userId)) {
           return res.status(403).json({ error: "Forbidden" });
@@ -398,7 +388,6 @@ module.exports = async function statefulHandler(req, res, next) {
         );
       }
 
-      // Xoá all: chỉ xoá của user hiện tại
       const keep = current.filter((x) => Number(x?.user_id) !== Number(userId));
       await col.updateOne({}, { $set: { data_current: keep } }, { upsert: true });
 
