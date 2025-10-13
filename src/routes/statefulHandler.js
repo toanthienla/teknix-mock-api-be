@@ -96,6 +96,13 @@ function isTypeOK(expected, value) {
   if (expected === "array") return Array.isArray(value);
   return true;
 }
+
+/**
+ * Validate payload theo schema (POST/PUT nghiêm ngặt):
+ * - required true phải có
+ * - type đúng
+ * - không field lạ ngoài schema
+ */
 function validateAndSanitizePayload(schema, payload, {
   allowMissingRequired = false,
   rejectUnknown = true,
@@ -180,12 +187,15 @@ module.exports = async function statefulHandler(req, res, next) {
       }
     }
 
-    // Mongo: data_current
+    // Mongo: data_current + data_default
     const col = getCollection(basePath.replace(/^\//, ""));
-    const doc = (await col.findOne({})) || { data_current: [] };
+    const doc = (await col.findOne({})) || { data_current: [], data_default: [] };
     const current = Array.isArray(doc.data_current)
       ? doc.data_current
       : doc.data_current ? [doc.data_current] : [];
+    const defaults = Array.isArray(doc.data_default)
+      ? doc.data_default
+      : doc.data_default ? [doc.data_default] : [];
 
     // Schema theo endpointId
     const { rows: schRows } = await req.db.stateful.query(
@@ -199,25 +209,24 @@ module.exports = async function statefulHandler(req, res, next) {
 
     // =================== GET ===================
     if (method === "GET") {
-      // Ưu tiên định dạng mới: schema.fields = ["id", "name", ...]
+      // Ưu tiên định dạng mới cho GET: schema.fields = ["id", "name", ...]
       const pickForGET = (obj) => {
         const fieldsArray = Array.isArray(schema?.fields) ? schema.fields : null;
 
-        // Nếu có fieldsArray → dùng nó làm whitelist
         if (fieldsArray && fieldsArray.length > 0) {
           const set = new Set(fieldsArray);
           const out = {};
           for (const k of set) {
-            if (k === "user_id") continue;       // luôn ẩn
+            if (k === "user_id") continue; // ẩn user_id
             if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
           }
           return out;
         }
 
-        // Fallback: schema là object các field → dùng keys
+        // Fallback: schema là object keys
         const keys = Object.keys(schema || {});
         if (keys.length === 0) {
-          const { user_id, ...rest } = obj;      // không có schema → trả mọi thứ trừ user_id
+          const { user_id, ...rest } = obj;
           return rest;
         }
         const set = new Set(keys);
@@ -226,34 +235,41 @@ module.exports = async function statefulHandler(req, res, next) {
           if (k === "user_id") continue;
           if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
         }
-        // nếu object có id nhưng schema không khai báo id, vẫn giữ id
         if (!set.has("user_id") && Object.prototype.hasOwnProperty.call(obj, "id")) {
           out.id = obj.id;
         }
         return out;
       };
 
+      // 1) Chuẩn bị mảng defaultsOut (KHÔNG lọc theo is_public / user)
+      const defaultsOut = defaults.map(pickForGET);
+
+      // 2) Chuẩn bị mảng currentOut (áp quyền: public → all; private → chỉ của user; không login → rỗng)
       const userIdMaybe = req.user?.id ?? req.user?.user_id;
-      if (!isPublic && userIdMaybe == null) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-      const visible = isPublic
+      const currentScoped = isPublic
         ? current
-        : current.filter((x) => Number(x?.user_id) === Number(userIdMaybe));
+        : (userIdMaybe == null ? [] : current.filter((x) => Number(x?.user_id) === Number(userIdMaybe)));
+      const currentOut = currentScoped.map(pickForGET);
 
       if (hasId) {
-        const item = (isPublic ? current : visible).find((x) => Number(x?.id) === idFromUrl);
-        if (!item) {
-          const rendered = renderBody(
-            404, responsesBucket, { params: { id: idFromUrl } },
-            { fallback: { message: "Not found." } }
-          );
-          return res.status(404).json(rendered);
-        }
-        return res.status(200).json(pickForGET(item));
+        // Tìm theo id: ưu tiên currentOut, rồi defaultsOut
+        const foundCurrent = currentScoped.find((x) => Number(x?.id) === idFromUrl);
+        if (foundCurrent) return res.status(200).json(pickForGET(foundCurrent));
+
+        const foundDefault = defaults.find((x) => Number(x?.id) === idFromUrl);
+        if (foundDefault) return res.status(200).json(pickForGET(foundDefault));
+
+        // Không tìm thấy → 404 theo endpoint_responses_ful
+        const rendered = renderBody(
+          404, responsesBucket, { params: { id: idFromUrl } },
+          { fallback: { message: "Not found." } }
+        );
+        return res.status(404).json(rendered);
       }
 
-      return res.status(200).json(visible.map(pickForGET));
+      // GET collection: gộp chung vào 1 mảng (ưu tiên trả defaults trước để luôn hiển thị)
+      const combined = [...defaultsOut, ...currentOut];
+      return res.status(200).json(combined);
     }
 
     // =================== POST ===================
@@ -305,6 +321,11 @@ module.exports = async function statefulHandler(req, res, next) {
       const userId = requireAuth(req, res);
       if (userId == null) return;
 
+      const rawId =
+        (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl);
+      const hasId = rawId !== undefined && rawId !== null && String(rawId) !== "" && /^\d+$/.test(String(rawId));
+      const idFromUrl = hasId ? Number(rawId) : undefined;
+
       if (!hasId) {
         return sendResponse(res, 404, responsesBucket, {}, { fallback: { message: "Not found." } });
       }
@@ -349,7 +370,7 @@ module.exports = async function statefulHandler(req, res, next) {
         );
       }
 
-      // Merge chỉ các field thuộc schema (các field khác vẫn giữ nguyên)
+      // Merge chỉ các field thuộc schema (field khác giữ nguyên)
       const updatedItem = { ...current[idx], ...sanitized, user_id: ownerId };
 
       const updated = current.slice();
@@ -365,6 +386,11 @@ module.exports = async function statefulHandler(req, res, next) {
     if (method === "DELETE") {
       const userId = requireAuth(req, res);
       if (userId == null) return;
+
+      const rawId =
+        (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl);
+      const hasId = rawId !== undefined && rawId !== null && String(rawId) !== "" && /^\d+$/.test(String(rawId));
+      const idFromUrl = hasId ? Number(rawId) : undefined;
 
       if (hasId) {
         const idx = current.findIndex((x) => Number(x?.id) === idFromUrl);
@@ -388,6 +414,7 @@ module.exports = async function statefulHandler(req, res, next) {
         );
       }
 
+      // Xoá all: chỉ xoá của user hiện tại
       const keep = current.filter((x) => Number(x?.user_id) !== Number(userId));
       await col.updateOne({}, { $set: { data_current: keep } }, { upsert: true });
 
