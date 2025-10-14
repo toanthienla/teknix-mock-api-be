@@ -1,4 +1,5 @@
 const logSvc = require('./project_request_log.service');
+const { connectMongo } = require("../config/db");
 
 // Get all folders (optionally filter by project_id)
 async function getFolders(db, project_id) {
@@ -109,7 +110,7 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
       // ⚙️ Nếu có endpoint stateful → gọi reset Mongo collections
       if (used.length > 0) {
         try {
-          await resetMongoCollectionsByFolder(id, base_schema);
+          await resetMongoCollectionsByFolder(id, dbStateless);
         } catch (err) {
           console.error("Error resetting Mongo collections:", err);
         }
@@ -146,6 +147,75 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
 
   return { success: true, data: rows[0] };
 }
+
+/**
+ * Reset lại data_default và data_current trong MongoDB
+ * cho toàn bộ collection thuộc folder chỉ định.
+ */
+async function resetMongoCollectionsByFolder(folderId, dbStateless) {
+  const mongo = await connectMongo();
+
+  const endpoints = await dbStateless.query(
+    `SELECT 
+       e.path, 
+       w.name AS workspace_name, 
+       p.name AS project_name, 
+       f.base_schema
+     FROM endpoints e
+     JOIN folders f ON e.folder_id = f.id
+     JOIN projects p ON f.project_id = p.id
+     JOIN workspaces w ON p.workspace_id = w.id
+     WHERE e.folder_id = $1`,
+    [folderId]
+  );
+
+  if (endpoints.rows.length === 0) {
+    console.log("⚠️ Folder không chứa endpoint nào, bỏ qua reset Mongo.");
+    return;
+  }
+
+  for (const ep of endpoints.rows) {
+    const cleanPath = ep.path.replace(/^\//, '').replace(/[^\w\-]/g, '_');
+    const collectionName = `${cleanPath}.${ep.workspace_name}.${ep.project_name}`;
+    const col = mongo.collection(collectionName);
+
+    let fields = [];
+    try {
+      const schema = typeof ep.base_schema === 'string'
+        ? JSON.parse(ep.base_schema)
+        : ep.base_schema;
+
+      if (schema && typeof schema === 'object') {
+        // trường hợp schema có "properties" hoặc không
+        const base = schema.properties || schema;
+        fields = Object.keys(base);
+      }
+    } catch (err) {
+      console.warn(`⚠️ Base schema không hợp lệ cho endpoint ${ep.path}`);
+      continue;
+    }
+
+    // 4️⃣ Tạo document mẫu có tất cả field = null
+    const baseDoc = {};
+    for (const f of fields) {
+      baseDoc[f] = null;
+    }
+
+    // đảm bảo id luôn là 1
+    baseDoc.id = 1;
+
+    // 5️⃣ Ghi vào Mongo (upsert)
+    await col.updateOne(
+      {},
+      { $set: { data_default: [baseDoc], data_current: [baseDoc] } },
+      { upsert: true }
+    );
+
+    console.log(`✅ Reset collection "${collectionName}" thành công`);
+  }
+}
+
+
 
 // Delete folder and handle related logs inside a transaction
 async function deleteFolderAndHandleLogs(db, folderId) {

@@ -49,11 +49,15 @@ const connectMongo = async () => {
 
 // Trả về collection theo tên (ví dụ: "users", "cars")
 // name có thể lấy từ endpoint path: "/users" -> "users"
-const getCollection = (name) => {
+const getCollection = (path, workspaceName, projectName) => {
   if (!mongoDB) throw new Error('MongoDB chưa được kết nối. Hãy gọi connectMongo() trước.');
-  const clean = name.replace(/^\//, ''); // bỏ dấu "/" đầu
-  return mongoDB.collection(clean);
+
+  const cleanPath = path.replace(/^\//, '').replace(/[^\w\-]/g, '_');
+  const collectionName = `${cleanPath}.${workspaceName}.${projectName}`;
+
+  return mongoDB.collection(collectionName);
 };
+
 
 // =====================
 //  Kiểm tra tất cả kết nối
