@@ -324,7 +324,7 @@ async function ResponsesForPOST(endpointId, endpointPath) {
   const R = capitalizeFromPath(endpointPath);
   const responses = [
     { name: "Create Success", status_code: 201, response_body: { message: `New ${R} item added successfully.` } },
-    { name: "Schema Invalid", status_code: 403, response_body: { message: `Invalid data: request does not match ${R} object schema.` } },
+    { name: "Schema Invalid", status_code: 400, response_body: { message: `Invalid data: request does not match ${R} object schema.` } },
     { name: "ID Conflict", status_code: 409, response_body: { message: `${R} {{params.id}} conflict: {{params.id}} already exists.` } },
   ];
   return insertResponses(endpointId, responses);
@@ -334,7 +334,7 @@ async function ResponsesForPUT(endpointId, endpointPath) {
   const R = capitalizeFromPath(endpointPath);
   const responses = [
     { name: "Update Success", status_code: 200, response_body: { message: `${R} with id {{params.id}} updated successfully.` } },
-    { name: "Schema Invalid", status_code: 403, response_body: { message: `Invalid data: request does not match ${R} schema.` } },
+    { name: "Schema Invalid", status_code: 400, response_body: { message: `Invalid data: request does not match ${R} schema.` } },
     { name: "ID Conflict", status_code: 409, response_body: { message: `Update id {{params.id}} conflict: ${R} id {{params.id}} in request body already exists.` } },
     { name: "Not Found", status_code: 404, response_body: { message: `${R} with id {{params.id}} not found.` } },
   ];

@@ -26,10 +26,10 @@ router.put('/:id', auth, validateFolder, asyncHandler(ctrl.updateFolder)); // G�
 // DELETE /folder/:id
 router.delete('/:id', auth, asyncHandler(ctrl.deleteFolder));
 
-// ✅ Route mới để lấy thông tin chủ folder
-router.get("/getOwner/:id", ctrl.getFolderOwner);
+// // ✅ Route mới để lấy thông tin chủ folder
+// router.get("/getOwner/:id", ctrl.getFolderOwner);
 
 // ✅ Check owner of folder
-router.get("/checkOwner/:id", auth, asyncHandler(ctrl.checkFolderOwner));
+// router.get("/checkOwner/:id", auth, asyncHandler(ctrl.checkFolderOwner));
 
 module.exports = router;
