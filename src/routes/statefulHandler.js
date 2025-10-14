@@ -1,7 +1,16 @@
 // statefulHandler.js
 const { getCollection } = require("../config/db");
+const logSvc = require("../services/project_request_log.service");
 
 // ============ Generic helpers ============
+function getClientIp(req) {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.connection?.remoteAddress ||
+    req.ip ||
+    null
+  );
+}
 function getByPath(obj, path) {
   if (!obj || !path) return undefined;
   return path.split(".").reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
@@ -29,53 +38,49 @@ function normalizeJsonb(x) {
   return x;
 }
 
-// ============ endpoint_responses_ful bucket ============
+// ============ endpoint_responses_ful bucket (có ID) ============
 async function loadResponsesBucket(db, endpointId) {
   const { rows } = await db.query(
-    `SELECT status_code, response_body
+    `SELECT id, status_code, response_body
        FROM endpoint_responses_ful
       WHERE endpoint_id = $1
       ORDER BY id ASC`,
     [endpointId]
   );
-  const bucket = new Map(); // status_code -> Array<body>
+  const bucket = new Map(); // status_code -> Array<{id, body}>
   for (const r of rows) {
     const body = normalizeJsonb(r.response_body);
     const key = Number(r.status_code);
     if (!bucket.has(key)) bucket.set(key, []);
-    bucket.get(key).push(body);
+    bucket.get(key).push({ id: Number(r.id), body });
   }
   return bucket;
 }
-function pickResponseBody(bucket, status, { requireParamId = null } = {}) {
+
+// Chọn đúng response entry theo ngữ cảnh
+function pickResponseEntry(bucket, status, { requireParamId = null } = {}) {
   const arr = bucket.get(status) || [];
   if (arr.length === 0) return undefined;
   if (requireParamId === null) return arr[0];
 
-  const hasParamToken = (obj) => {
-    const s = typeof obj === "string" ? obj : JSON.stringify(obj);
+  const hasParamToken = (entry) => {
+    const s = typeof entry.body === "string" ? entry.body : JSON.stringify(entry.body);
     return s.includes("{{params.id}}");
   };
   const withParam = arr.find(hasParamToken);
   const withoutParam = arr.find((x) => !hasParamToken(x));
+
   return requireParamId
     ? (withParam ?? withoutParam ?? arr[0])
     : (withoutParam ?? withParam ?? arr[0]);
 }
-function renderTemplate(value, ctx) {
-  const v = normalizeJsonb(value ?? { message: `HTTP ${ctx?.status ?? ""}` });
-  return renderTemplateDeep(v, ctx || {});
-}
-function sendResponse(res, status, bucket, ctx, { fallback, requireParamId } = {}) {
-  const picked = pickResponseBody(bucket, status, { requireParamId });
-  const body = picked ?? fallback ?? { message: `HTTP ${status}` };
-  const rendered = renderTemplate(body, { ...(ctx || {}), status });
-  return res.status(status).json(rendered);
-}
-function renderBody(status, bucket, ctx, { fallback, requireParamId } = {}) {
-  const picked = pickResponseBody(bucket, status, { requireParamId });
-  const body = picked ?? fallback ?? { message: `HTTP ${status}` };
-  return renderTemplate(body, { ...(ctx || {}), status });
+
+// Render theo entry đã chọn, trả cả responseId để log
+function selectAndRenderResponse(bucket, status, ctx, { fallback, requireParamId } = {}) {
+  const entry = pickResponseEntry(bucket, status, { requireParamId });
+  const body = entry?.body ?? fallback ?? { message: `HTTP ${status}` };
+  const rendered = renderTemplateDeep(normalizeJsonb(body), { ...(ctx || {}), status });
+  return { rendered, responseId: entry?.id ?? null };
 }
 
 // ============ Auth & Schema ============
@@ -141,22 +146,56 @@ function validateAndSanitizePayload(schema, payload, {
   return { ok: errors.length === 0, errors, sanitized };
 }
 
+// ============ Logging util ============
+async function insertLogSafely(req, {
+  projectId,
+  originId,
+  method,
+  path,
+  status,
+  responseBody,
+  endpointResponseId = null,
+  started,
+  payload,
+}) {
+  try {
+    await logSvc.insertLog(req.db.stateless, {
+      project_id: projectId ?? null,
+      endpoint_id: originId ?? null,
+      request_method: method,
+      request_path: path,
+      request_headers: req.headers || {},
+      request_body: payload || {},
+      response_status_code: status,
+      response_body: responseBody,
+      endpoint_response_id: endpointResponseId, // <-- thêm ID response template
+      ip_address: getClientIp(req),
+      latency_ms: Date.now() - started,
+    });
+  } catch (e) {
+    console.error("[statefulHandler] log error:", e?.message || e);
+  }
+}
+
 // ============ Handler ============
 module.exports = async function statefulHandler(req, res, next) {
+  const started = Date.now();
+  const method = (req.method || "GET").toUpperCase();
+  const basePath = req.universal?.basePath || req.endpoint?.path || req.path;
+
+  const rawId =
+    (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl);
+  const hasId =
+    rawId !== undefined &&
+    rawId !== null &&
+    String(rawId) !== "" &&
+    /^\d+$/.test(String(rawId));
+  const idFromUrl = hasId ? Number(rawId) : undefined;
+
+  let projectId = null, originId = null;
+
   try {
-    const method = (req.method || "GET").toUpperCase();
-    const basePath = req.universal?.basePath || req.endpoint?.path || req.path;
-
-    const rawId =
-      (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl);
-    const hasId =
-      rawId !== undefined &&
-      rawId !== null &&
-      String(rawId) !== "" &&
-      /^\d+$/.test(String(rawId));
-    const idFromUrl = hasId ? Number(rawId) : undefined;
-
-    // Endpoint theo (method, path)
+    // Endpoint (method, path)
     const endpointId =
       req.endpoint_stateful?.id ||
       (await (async () => {
@@ -167,22 +206,32 @@ module.exports = async function statefulHandler(req, res, next) {
         return q.rows[0]?.id;
       })());
     if (!endpointId) {
-      return res.status(500).json({ message: "Stateful endpoint missing." });
+      const status = 500;
+      const body = { message: "Stateful endpoint missing." };
+      await insertLogSafely(req, {
+        projectId, originId, method, path: req.path, status,
+        responseBody: body, started, payload: req.body,
+      });
+      return res.status(status).json(body);
     }
 
-    // Folder & is_public
+    // origin_id + folder + is_public
     let folderId = null, isPublic = false;
     {
       const efRow = await req.db.stateful.query(
-        "SELECT folder_id FROM endpoints_ful WHERE id = $1 LIMIT 1",
+        "SELECT origin_id, folder_id FROM endpoints_ful WHERE id = $1 LIMIT 1",
         [endpointId]
       );
-      if (efRow.rows[0]) folderId = efRow.rows[0].folder_id || null;
+      if (efRow.rows[0]) {
+        originId = efRow.rows[0].origin_id || null;
+        folderId = efRow.rows[0].folder_id || null;
+      }
       if (folderId) {
         const prj = await req.db.stateless.query(
-          "SELECT is_public FROM folders WHERE id = $1 LIMIT 1",
+          "SELECT project_id, is_public FROM folders WHERE id = $1 LIMIT 1",
           [folderId]
         );
+        projectId = prj.rows[0]?.project_id ?? null;
         isPublic = Boolean(prj.rows[0]?.is_public);
       }
     }
@@ -204,12 +253,12 @@ module.exports = async function statefulHandler(req, res, next) {
     );
     const schema = normalizeJsonb(schRows?.[0]?.schema) || {};
 
-    // Response templates
+    // Response templates bucket
     const responsesBucket = await loadResponsesBucket(req.db.stateful, endpointId);
 
     // =================== GET ===================
     if (method === "GET") {
-      // Ưu tiên định dạng mới cho GET: schema.fields = ["id", "name", ...]
+      // Ưu tiên schema GET dạng { fields: [...] }
       const pickForGET = (obj) => {
         const fieldsArray = Array.isArray(schema?.fields) ? schema.fields : null;
 
@@ -217,13 +266,12 @@ module.exports = async function statefulHandler(req, res, next) {
           const set = new Set(fieldsArray);
           const out = {};
           for (const k of set) {
-            if (k === "user_id") continue; // ẩn user_id
+            if (k === "user_id") continue;
             if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k];
           }
           return out;
         }
 
-        // Fallback: schema là object keys
         const keys = Object.keys(schema || {});
         if (keys.length === 0) {
           const { user_id, ...rest } = obj;
@@ -241,10 +289,10 @@ module.exports = async function statefulHandler(req, res, next) {
         return out;
       };
 
-      // 1) Chuẩn bị mảng defaultsOut (KHÔNG lọc theo is_public / user)
+      // defaults: luôn trả (không phụ thuộc public/private)
       const defaultsOut = defaults.map(pickForGET);
 
-      // 2) Chuẩn bị mảng currentOut (áp quyền: public → all; private → chỉ của user; không login → rỗng)
+      // current: phụ thuộc is_public + user
       const userIdMaybe = req.user?.id ?? req.user?.user_id;
       const currentScoped = isPublic
         ? current
@@ -252,48 +300,88 @@ module.exports = async function statefulHandler(req, res, next) {
       const currentOut = currentScoped.map(pickForGET);
 
       if (hasId) {
-        // Tìm theo id: ưu tiên currentOut, rồi defaultsOut
         const foundCurrent = currentScoped.find((x) => Number(x?.id) === idFromUrl);
-        if (foundCurrent) return res.status(200).json(pickForGET(foundCurrent));
-
+        if (foundCurrent) {
+          const body = pickForGET(foundCurrent);
+          await insertLogSafely(req, {
+            projectId, originId, method, path: req.path, status: 200,
+            responseBody: body, endpointResponseId: null, started, payload: req.body,
+          });
+          return res.status(200).json(body);
+        }
         const foundDefault = defaults.find((x) => Number(x?.id) === idFromUrl);
-        if (foundDefault) return res.status(200).json(pickForGET(foundDefault));
+        if (foundDefault) {
+          const body = pickForGET(foundDefault);
+          await insertLogSafely(req, {
+            projectId, originId, method, path: req.path, status: 200,
+            responseBody: body, endpointResponseId: null, started, payload: req.body,
+          });
+          return res.status(200).json(body);
+        }
 
-        // Không tìm thấy → 404 theo endpoint_responses_ful
-        const rendered = renderBody(
-          404, responsesBucket, { params: { id: idFromUrl } },
+        // 404 theo template + log kèm endpoint_response_id
+        const status = 404;
+        const { rendered, responseId } = selectAndRenderResponse(
+          responsesBucket, status, { params: { id: idFromUrl } },
           { fallback: { message: "Not found." } }
         );
-        return res.status(404).json(rendered);
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status,
+          responseBody: rendered, endpointResponseId: responseId, started, payload: req.body,
+        });
+        return res.status(status).json(rendered);
       }
 
-      // GET collection: gộp chung vào 1 mảng (ưu tiên trả defaults trước để luôn hiển thị)
+      // GET collection: gộp defaults + current
       const combined = [...defaultsOut, ...currentOut];
+      await insertLogSafely(req, {
+        projectId, originId, method, path: req.path, status: 200,
+        responseBody: combined, endpointResponseId: null, started, payload: req.body,
+      });
       return res.status(200).json(combined);
     }
 
     // =================== POST ===================
     if (method === "POST") {
       const userId = requireAuth(req, res);
-      if (userId == null) return;
+      if (userId == null) {
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status: 401,
+          responseBody: { error: "Unauthorized" }, endpointResponseId: null, started, payload: req.body,
+        });
+        return;
+      }
 
       const payload = req.body || {};
       const idRule = schema?.id || {};
 
       if (idRule?.required === true && (payload.id === undefined || payload.id === null)) {
-        return sendResponse(res, 403, responsesBucket, {}, {
-          fallback: { message: "Invalid schema." },
+        const status = 403;
+        const { rendered, responseId } = selectAndRenderResponse(
+          responsesBucket, status, {},
+          { fallback: { message: "Invalid schema." } }
+        );
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status,
+          responseBody: rendered, endpointResponseId: responseId, started, payload
         });
+        return res.status(status).json(rendered);
       }
 
       const { ok, errors, sanitized } = validateAndSanitizePayload(schema, payload, {
-        allowMissingRequired: false,
-        rejectUnknown: true,
+        allowMissingRequired: false, rejectUnknown: true,
       });
       if (!ok) {
-        return sendResponse(res, 403, responsesBucket, {}, {
-          fallback: { message: "Invalid data: request does not match object schema." },
+        const status = 403;
+        const { rendered, responseId } = selectAndRenderResponse(
+          responsesBucket, status, {},
+          { fallback: { message: "Invalid data: request does not match object schema." } }
+        );
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status,
+          responseBody: rendered, endpointResponseId: responseId, started, payload
         });
+        return res.status(status).json(rendered);
       }
 
       let newId = sanitized.id;
@@ -302,44 +390,81 @@ module.exports = async function statefulHandler(req, res, next) {
         newId = maxId + 1;
       }
       if (newId !== undefined && current.some((x) => Number(x?.id) === Number(newId))) {
-        return sendResponse(res, 409, responsesBucket, { params: { id: newId } }, {
-          fallback: { message: "Conflict." },
+        const status = 409;
+        const { rendered, responseId } = selectAndRenderResponse(
+          responsesBucket, status, { params: { id: newId } },
+          { fallback: { message: "Conflict." } }
+        );
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status,
+          responseBody: rendered, endpointResponseId: responseId, started, payload
         });
+        return res.status(status).json(rendered);
       }
 
       const newObj = { ...sanitized, id: newId, user_id: Number(userId) };
       const updated = [...current, newObj];
       await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
 
-      return sendResponse(res, 201, responsesBucket, { params: { id: newId } }, {
-        fallback: { message: "Created." },
+      const status = 201;
+      const { rendered, responseId } = selectAndRenderResponse(
+        responsesBucket, status, { params: { id: newId } },
+        { fallback: { message: "Created." } }
+      );
+      await insertLogSafely(req, {
+        projectId, originId, method, path: req.path, status,
+        responseBody: rendered, endpointResponseId: responseId, started, payload
       });
+      return res.status(status).json(rendered);
     }
 
     // =================== PUT ===================
     if (method === "PUT") {
       const userId = requireAuth(req, res);
-      if (userId == null) return;
-
-      const rawId =
-        (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl);
-      const hasId = rawId !== undefined && rawId !== null && String(rawId) !== "" && /^\d+$/.test(String(rawId));
-      const idFromUrl = hasId ? Number(rawId) : undefined;
+      if (userId == null) {
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status: 401,
+          responseBody: { error: "Unauthorized" }, endpointResponseId: null, started, payload: req.body,
+        });
+        return;
+      }
 
       if (!hasId) {
-        return sendResponse(res, 404, responsesBucket, {}, { fallback: { message: "Not found." } });
+        const status = 404;
+        const { rendered, responseId } = selectAndRenderResponse(
+          responsesBucket, status, {},
+          { fallback: { message: "Not found." } }
+        );
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status,
+          responseBody: rendered, endpointResponseId: responseId, started, payload: req.body
+        });
+        return res.status(status).json(rendered);
       }
 
       const idx = current.findIndex((x) => Number(x?.id) === idFromUrl);
       if (idx === -1) {
-        return sendResponse(res, 404, responsesBucket, { params: { id: idFromUrl } }, {
-          fallback: { message: "Not found." },
+        const status = 404;
+        const { rendered, responseId } = selectAndRenderResponse(
+          responsesBucket, status, { params: { id: idFromUrl } },
+          { fallback: { message: "Not found." } }
+        );
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status,
+          responseBody: rendered, endpointResponseId: responseId, started, payload: req.body
         });
+        return res.status(status).json(rendered);
       }
 
       const ownerId = Number(current[idx]?.user_id);
       if (ownerId !== Number(userId)) {
-        return res.status(403).json({ error: "Forbidden" });
+        const status = 403;
+        const body = { error: "Forbidden" };
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status,
+          responseBody: body, endpointResponseId: null, started, payload: req.body
+        });
+        return res.status(status).json(body);
       }
 
       const payload = req.body || {};
@@ -349,84 +474,145 @@ module.exports = async function statefulHandler(req, res, next) {
       if (targetId !== undefined && Number(targetId) !== idFromUrl) {
         const exists = current.some((x) => Number(x?.id) === Number(targetId));
         if (exists) {
-          return sendResponse(
-            res,
-            409,
-            responsesBucket,
-            { params: { id: idFromUrl, id_conflict: Number(targetId) } },
+          const status = 409;
+          const { rendered, responseId } = selectAndRenderResponse(
+            responsesBucket, status, { params: { id: idFromUrl, id_conflict: Number(targetId) } },
             { fallback: { message: "Conflict." } }
           );
+          await insertLogSafely(req, {
+            projectId, originId, method, path: req.path, status,
+            responseBody: rendered, endpointResponseId: responseId, started, payload
+          });
+          return res.status(status).json(rendered);
         }
       }
 
       const { ok, errors, sanitized } = validateAndSanitizePayload(schema, payload, {
-        allowMissingRequired: false,
-        rejectUnknown: true,
+        allowMissingRequired: false, rejectUnknown: true,
       });
       if (!ok) {
-        return sendResponse(
-          res, 403, responsesBucket, {},
+        const status = 403;
+        const { rendered, responseId } = selectAndRenderResponse(
+          responsesBucket, status, {},
           { fallback: { message: "Invalid data: request does not match object schema." } }
         );
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status,
+          responseBody: rendered, endpointResponseId: responseId, started, payload
+        });
+        return res.status(status).json(rendered);
       }
 
-      // Merge chỉ các field thuộc schema (field khác giữ nguyên)
       const updatedItem = { ...current[idx], ...sanitized, user_id: ownerId };
-
       const updated = current.slice();
       updated[idx] = updatedItem;
       await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
 
-      return sendResponse(res, 200, responsesBucket, { params: { id: idFromUrl } }, {
-        fallback: { message: "Updated." },
+      const status = 200;
+      const { rendered, responseId } = selectAndRenderResponse(
+        responsesBucket, status, { params: { id: idFromUrl } },
+        { fallback: { message: "Updated." } }
+      );
+      await insertLogSafely(req, {
+        projectId, originId, method, path: req.path, status,
+        responseBody: rendered, endpointResponseId: responseId, started, payload
       });
+      return res.status(status).json(rendered);
     }
 
     // =================== DELETE ===================
     if (method === "DELETE") {
       const userId = requireAuth(req, res);
-      if (userId == null) return;
-
-      const rawId =
-        (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl);
-      const hasId = rawId !== undefined && rawId !== null && String(rawId) !== "" && /^\d+$/.test(String(rawId));
-      const idFromUrl = hasId ? Number(rawId) : undefined;
+      if (userId == null) {
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status: 401,
+          responseBody: { error: "Unauthorized" }, endpointResponseId: null, started, payload: req.body,
+        });
+        return;
+      }
 
       if (hasId) {
         const idx = current.findIndex((x) => Number(x?.id) === idFromUrl);
         if (idx === -1) {
-          return sendResponse(res, 404, responsesBucket, { params: { id: idFromUrl } }, {
-            fallback: { message: "Not found." },
+          const status = 404;
+          const { rendered, responseId } = selectAndRenderResponse(
+            responsesBucket, status, { params: { id: idFromUrl } },
+            { fallback: { message: "Not found." } }
+          );
+          await insertLogSafely(req, {
+            projectId, originId, method, path: req.path, status,
+            responseBody: rendered, endpointResponseId: responseId, started, payload: req.body
           });
+          return res.status(status).json(rendered);
         }
         const ownerId = Number(current[idx]?.user_id);
         if (ownerId !== Number(userId)) {
-          return res.status(403).json({ error: "Forbidden" });
+          const status = 403;
+          const body = { error: "Forbidden" };
+          await insertLogSafely(req, {
+            projectId, originId, method, path: req.path, status,
+            responseBody: body, endpointResponseId: null, started, payload: req.body
+          });
+          return res.status(status).json(body);
         }
 
         const updated = current.slice();
         updated.splice(idx, 1);
         await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
 
-        return sendResponse(
-          res, 200, responsesBucket, { params: { id: idFromUrl } },
+        const status = 200;
+        const { rendered, responseId } = selectAndRenderResponse(
+          responsesBucket, status, { params: { id: idFromUrl } },
           { fallback: { message: "Deleted." }, requireParamId: true }
         );
+        await insertLogSafely(req, {
+          projectId, originId, method, path: req.path, status,
+          responseBody: rendered, endpointResponseId: responseId, started, payload: req.body
+        });
+        return res.status(status).json(rendered);
       }
 
       // Xoá all: chỉ xoá của user hiện tại
       const keep = current.filter((x) => Number(x?.user_id) !== Number(userId));
       await col.updateOne({}, { $set: { data_current: keep } }, { upsert: true });
 
-      return sendResponse(
-        res, 200, responsesBucket, {},
+      const status = 200;
+      const { rendered, responseId } = selectAndRenderResponse(
+        responsesBucket, status, {},
         { fallback: { message: "Deleted all." }, requireParamId: false }
       );
+      await insertLogSafely(req, {
+        projectId, originId, method, path: req.path, status,
+        responseBody: rendered, endpointResponseId: responseId, started, payload: req.body
+      });
+      return res.status(status).json(rendered);
     }
 
-    return res.status(405).json({ message: "Method Not Allowed" });
+    // =================== Method khác ===================
+    {
+      const status = 405;
+      const body = { message: "Method Not Allowed" };
+      await insertLogSafely(req, {
+        projectId, originId, method, path: req.path, status,
+        responseBody: body, endpointResponseId: null, started, payload: req.body
+      });
+      return res.status(status).json(body);
+    }
   } catch (err) {
     console.error("[statefulHandler] error:", err);
-    return res.status(500).json({ message: "Internal Server Error", error: err.message });
+    const status = 500;
+    const body = { message: "Internal Server Error", error: err.message };
+    await insertLogSafely(req, {
+      projectId: null,
+      originId: null,
+      method: (req.method || "GET").toUpperCase(),
+      path: req.path,
+      status,
+      responseBody: body,
+      endpointResponseId: null,
+      started,
+      payload: req.body,
+    });
+    return res.status(status).json(body);
   }
 };
