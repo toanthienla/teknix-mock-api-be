@@ -111,12 +111,13 @@ async function nullifyEndpointAndResponses(dbPool, endpointId) {
 // NULL hoá toàn bộ tham chiếu thuộc một workspace: folder_id,, endpoint_id, endpoint_response_id
 // Mục tiêu: xoá workspace mà không đụng schema, vẫn giữ dữ liệu log lịch sử
 // project_request_log.service.js (sửa nullifyWorkspaceTree)
+// ✅ SỬA: nullify toàn bộ tham chiếu theo workspace (qua folders → projects)
 async function nullifyWorkspaceTree(dbPool, workspaceId) {
   const wid = Number(workspaceId);
   if (!Number.isInteger(wid))
     return { clearedProjects: 0, clearedEndpoints: 0, clearedResponses: 0 };
 
-  // 1) Bỏ tham chiếu project_id của các project thuộc workspace
+  // 1) Bỏ tham chiếu project_id
   const p = await dbPool.query(
     `UPDATE project_request_logs
      SET project_id = NULL
@@ -126,26 +127,30 @@ async function nullifyWorkspaceTree(dbPool, workspaceId) {
     [wid]
   );
 
-  // 2) Bỏ tham chiếu endpoint_id cho endpoints thuộc các project trong workspace
+  // 2) Bỏ tham chiếu endpoint_id (endpoints -> folders -> projects -> workspace)
   const e = await dbPool.query(
     `UPDATE project_request_logs
      SET endpoint_id = NULL
      WHERE endpoint_id IN (
-       SELECT e.id FROM endpoints e
-       JOIN projects p ON p.id = e.project_id
+       SELECT e.id
+       FROM endpoints e
+       JOIN folders f ON f.id = e.folder_id
+       JOIN projects p ON p.id = f.project_id
        WHERE p.workspace_id = $1
      )`,
     [wid]
   );
 
-  // 3) Bỏ tham chiếu endpoint_response_id tương ứng
+  // 3) Bỏ tham chiếu endpoint_response_id (đi qua cùng chuỗi join)
   const r = await dbPool.query(
     `UPDATE project_request_logs
      SET endpoint_response_id = NULL
      WHERE endpoint_response_id IN (
-       SELECT er.id FROM endpoint_responses er
+       SELECT er.id
+       FROM endpoint_responses er
        JOIN endpoints e ON e.id = er.endpoint_id
-       JOIN projects p ON p.id = e.project_id
+       JOIN folders f ON f.id = e.folder_id
+       JOIN projects p ON p.id = f.project_id
        WHERE p.workspace_id = $1
      )`,
     [wid]
@@ -158,8 +163,7 @@ async function nullifyWorkspaceTree(dbPool, workspaceId) {
   };
 }
 
-// NULL hoá toàn bộ tham chiếu thuộc một project: project_id, endpoint_id, endpoint_response_id
-// Dùng khi xoá project để không vi phạm FK và VẪN GIỮ dữ liệu log
+// ✅ SỬA: nullify toàn bộ tham chiếu theo project
 async function nullifyProjectTree(dbPool, projectId) {
   const pid = Number(projectId);
   if (!Number.isInteger(pid))
@@ -173,30 +177,70 @@ async function nullifyProjectTree(dbPool, projectId) {
     [pid]
   );
 
-  // 2) Bỏ tham chiếu endpoint_id của các endpoint thuộc project này
+  // 2) Bỏ tham chiếu endpoint_id (endpoints -> folders(project_id))
   const e = await dbPool.query(
     `UPDATE project_request_logs
      SET endpoint_id = NULL
      WHERE endpoint_id IN (
-       SELECT e.id FROM endpoints e WHERE e.project_id = $1
+       SELECT e.id
+       FROM endpoints e
+       JOIN folders f ON f.id = e.folder_id
+       WHERE f.project_id = $1
      )`,
     [pid]
   );
 
-  // 3) Bỏ tham chiếu endpoint_response_id của các response thuộc các endpoint của project này
+  // 3) Bỏ tham chiếu endpoint_response_id theo project
   const r = await dbPool.query(
     `UPDATE project_request_logs
      SET endpoint_response_id = NULL
      WHERE endpoint_response_id IN (
-       SELECT er.id FROM endpoint_responses er
+       SELECT er.id
+       FROM endpoint_responses er
        JOIN endpoints e ON e.id = er.endpoint_id
-       WHERE e.project_id = $1
+       JOIN folders f ON f.id = e.folder_id
+       WHERE f.project_id = $1
      )`,
     [pid]
   );
 
   return {
     clearedProject: p.rowCount || 0,
+    clearedEndpoints: e.rowCount || 0,
+    clearedResponses: r.rowCount || 0,
+  };
+}
+
+// ✅ MỚI: nullify theo folder (để xoá folder không vướng FK)
+async function nullifyFolderTree(dbPool, folderId) {
+  const fid = Number(folderId);
+  if (!Number.isInteger(fid))
+    return { clearedEndpoints: 0, clearedResponses: 0 };
+
+  // Bỏ tham chiếu endpoint_id cho toàn bộ endpoint trong folder
+  const e = await dbPool.query(
+    `UPDATE project_request_logs
+     SET endpoint_id = NULL
+     WHERE endpoint_id IN (
+       SELECT e.id FROM endpoints e WHERE e.folder_id = $1
+     )`,
+    [fid]
+  );
+
+  // Bỏ tham chiếu endpoint_response_id cho các response thuộc các endpoint trong folder
+  const r = await dbPool.query(
+    `UPDATE project_request_logs
+     SET endpoint_response_id = NULL
+     WHERE endpoint_response_id IN (
+       SELECT er.id
+       FROM endpoint_responses er
+       JOIN endpoints e ON e.id = er.endpoint_id
+       WHERE e.folder_id = $1
+     )`,
+    [fid]
+  );
+
+  return {
     clearedEndpoints: e.rowCount || 0,
     clearedResponses: r.rowCount || 0,
   };
@@ -302,6 +346,7 @@ module.exports = {
   nullifyEndpointAndResponses,
   nullifyWorkspaceTree,
   nullifyProjectTree,
+  nullifyFolderTree, 
   listLogs,
   getLogById,
 };
