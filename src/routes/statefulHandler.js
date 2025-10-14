@@ -181,7 +181,12 @@ async function insertLogSafely(req, {
 module.exports = async function statefulHandler(req, res, next) {
   const started = Date.now();
   const method = (req.method || "GET").toUpperCase();
-  const basePath = req.universal?.basePath || req.endpoint?.path || req.path;
+  // URL: /{workspaceName}/{projectName}/{path...}
+  const segs = (req.path || "").split("/").filter(Boolean);
+  const workspaceName = segs[0];
+  const projectName   = segs[1];
+  const restPath = segs.slice(2).join("/");
+  const basePath = "/" + restPath; // đây là path lưu trong PG (endpoints_ful.path)
 
   const rawId =
     (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl);
@@ -206,8 +211,8 @@ module.exports = async function statefulHandler(req, res, next) {
         return q.rows[0]?.id;
       })());
     if (!endpointId) {
-      const status = 500;
-      const body = { message: "Stateful endpoint missing." };
+      const status = 404;
+      const body = { message: "Endpoint not found", detail: { method, path: req.path } };
       await insertLogSafely(req, {
         projectId, originId, method, path: req.path, status,
         responseBody: body, started, payload: req.body,
@@ -237,7 +242,15 @@ module.exports = async function statefulHandler(req, res, next) {
     }
 
     // Mongo: data_current + data_default
-    const col = getCollection(basePath.replace(/^\//, ""));
+    const collectionName = (function () {
+      // Giữ nguyên tên (kể cả dấu cách). Chỉ bỏ ký tự NUL và chấm ở đầu/cuối cho an toàn.
+      const sanitize = (s) =>
+        String(s ?? "")
+          .replace(/\u0000/g, "")      // bỏ NUL (MongoDB cấm)
+          .replace(/^\.+|\.+$/g, "");  // bỏ dấu '.' ở đầu/cuối
+      return `${sanitize(restPath)}.${sanitize(workspaceName)}.${sanitize(projectName)}`;
+    })();
+    const col = getCollection(collectionName);
     const doc = (await col.findOne({})) || { data_current: [], data_default: [] };
     const current = Array.isArray(doc.data_current)
       ? doc.data_current
