@@ -34,7 +34,7 @@ let mongoClient;
 let mongoDB;
 
 const connectMongo = async () => {
-  if (mongoDB) return mongoDB;                 // tránh reconnect
+  if (mongoDB) return mongoDB; // tránh reconnect
   try {
     mongoClient = new MongoClient(process.env.MONGO_URI);
     await mongoClient.connect();
@@ -48,16 +48,24 @@ const connectMongo = async () => {
 };
 
 // Trả về collection theo tên (ví dụ: "users", "cars")
-// name có thể lấy từ endpoint path: "/users" -> "users"
-const getCollection = (path, workspaceName, projectName) => {
+
+// ⚙️ Hàm cũ — vẫn giữ nguyên cho các phần code legacy
+const getCollection = (name) => {
   if (!mongoDB) throw new Error('MongoDB chưa được kết nối. Hãy gọi connectMongo() trước.');
-
-  const cleanPath = path.replace(/^\//, '').replace(/[^\w\-]/g, '_');
-  const collectionName = `${cleanPath}.${workspaceName}.${projectName}`;
-
-  return mongoDB.collection(collectionName);
+  const clean = name.replace(/^\//, ''); // bỏ dấu "/" đầu
+  return mongoDB.collection(clean);
 };
 
+// ⚙️ Hàm mới — dành cho resetMongoCollectionsByFolder và các logic nâng cao
+const getCollection2 = (path, workspaceName, projectName) => {
+  if (!mongoDB) throw new Error('MongoDB chưa được kết nối. Hãy gọi connectMongo() trước.');
+
+  // Chuẩn hóa tên collection (Mongo không cho phép dấu /, dấu cách, ...)
+  const cleanPath = path.replace(/^\//, '').replace(/[^\w\-]/g, '_');
+  const collectionName = `${cleanPath}.${workspaceName}.${projectName}`;
+  
+  return mongoDB.collection(collectionName);
+};
 
 // =====================
 //  Kiểm tra tất cả kết nối

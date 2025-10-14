@@ -1,5 +1,5 @@
 const logSvc = require('./project_request_log.service');
-const { connectMongo } = require("../config/db");
+const { getCollection2  } = require("../config/db");
 
 // Get all folders (optionally filter by project_id)
 async function getFolders(db, project_id) {
@@ -153,8 +153,7 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
  * cho toàn bộ collection thuộc folder chỉ định.
  */
 async function resetMongoCollectionsByFolder(folderId, dbStateless) {
-  const mongo = await connectMongo();
-
+  // Lấy danh sách endpoint trong folder
   const endpoints = await dbStateless.query(
     `SELECT 
        e.path, 
@@ -175,47 +174,40 @@ async function resetMongoCollectionsByFolder(folderId, dbStateless) {
   }
 
   for (const ep of endpoints.rows) {
-    const cleanPath = ep.path.replace(/^\//, '').replace(/[^\w\-]/g, '_');
-    const collectionName = `${cleanPath}.${ep.workspace_name}.${ep.project_name}`;
-    const col = mongo.collection(collectionName);
+    const collection = getCollection2(ep.path, ep.workspace_name, ep.project_name);
 
     let fields = [];
     try {
-      const schema = typeof ep.base_schema === 'string'
+      const schema = typeof ep.base_schema === "string"
         ? JSON.parse(ep.base_schema)
         : ep.base_schema;
 
-      if (schema && typeof schema === 'object') {
-        // trường hợp schema có "properties" hoặc không
+      if (schema && typeof schema === "object") {
+        // chấp nhận cả dạng có "properties" hoặc không
         const base = schema.properties || schema;
         fields = Object.keys(base);
       }
     } catch (err) {
-      console.warn(`⚠️ Base schema không hợp lệ cho endpoint ${ep.path}`);
+      console.warn(`⚠️ Base schema không hợp lệ cho endpoint ${ep.path}:`, err.message);
       continue;
     }
 
-    // 4️⃣ Tạo document mẫu có tất cả field = null
-    const baseDoc = {};
+    // Tạo document mẫu: tất cả field = null, id = 1
+    const baseDoc = { id: 1 };
     for (const f of fields) {
-      baseDoc[f] = null;
+      if (f !== "id") baseDoc[f] = null;
     }
 
-    // đảm bảo id luôn là 1
-    baseDoc.id = 1;
-
-    // 5️⃣ Ghi vào Mongo (upsert)
-    await col.updateOne(
+    // Ghi vào Mongo (upsert)
+    await collection.updateOne(
       {},
       { $set: { data_default: [baseDoc], data_current: [baseDoc] } },
       { upsert: true }
     );
 
-    console.log(`✅ Reset collection "${collectionName}" thành công`);
+    console.log(`✅ Reset collection "${ep.path}.${ep.workspace_name}.${ep.project_name}" thành công`);
   }
 }
-
-
 
 // Delete folder and handle related logs inside a transaction
 async function deleteFolderAndHandleLogs(db, folderId) {
