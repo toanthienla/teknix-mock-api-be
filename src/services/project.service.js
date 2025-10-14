@@ -1,6 +1,20 @@
 //const db = require('../config/db');
 const logSvc = require('./project_request_log.service');
 
+// Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
+const NAME_RE = /^[A-Za-z0-9_]+$/;
+function validateNameOrError(name) {
+  if (typeof name !== "string" || !NAME_RE.test(name)) {
+    return {
+      success: false,
+      errors: [{
+        field: "name",
+        message: "Tên chỉ được chứa chữ cái tiếng Anh, số và dấu gạch dưới (_). Không được có dấu cách, dấu hoặc ký tự đặc biệt."
+      }]
+    };
+  }
+  return null;
+}
 // Get all projects (optionally filter by workspace_id)
 async function getProjects(db, workspace_id) {
   let query = 'SELECT * FROM projects';
@@ -28,6 +42,9 @@ async function getProjectById(db, projectId) {
 
 // Create project (check duplicate in same workspace)
 async function createProject(db, { workspace_id, name, description }) {
+  // Validate format tên
+  const invalid = validateNameOrError(name);
+  if (invalid) return invalid;
   const { rows: existRows } = await db.query(
     'SELECT id FROM projects WHERE workspace_id=$1 AND LOWER(name)=LOWER($2)',
     [workspace_id, name]
@@ -41,23 +58,30 @@ async function createProject(db, { workspace_id, name, description }) {
   }
 
   const { rows } = await db.query(
-    'INSERT INTO projects(workspace_id, name, description) VALUES($1,$2,$3) RETURNING *',
-    [workspace_id, name, description]
+    'INSERT INTO projects (workspace_id, name, description) VALUES($1,$2,$3) RETURNING *',
+    [workspace_id, name, description ?? null]
   );
-  return { success: true, data: rows[0] };
-}
+     return { success: true, data: rows[0] };
+ }
 
 // Update project (check duplicate in same workspace, ignore itself)
 async function updateProject(db, projectId, { name, description }) {
+  // Validate nếu client gửi name
+  if (name != null) {
+    const invalid = validateNameOrError(name);
+    if (invalid) return invalid;
+  }
   const { rows: currentRows } = await db.query('SELECT * FROM projects WHERE id=$1', [projectId]);
   if (currentRows.length === 0) {
     return { success: false, notFound: true };
   }
 
   if (name) {
+    // lấy workspace_id từ record hiện có để kiểm tra trùng trong cùng workspace
+    const workspaceId = currentRows[0].workspace_id;
     const { rows: existRows } = await db.query(
-      'SELECT id FROM projects WHERE workspace_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3',
-      [currentRows[0].workspace_id, name, projectId]
+      'SELECT id FROM projects WHERE workspace_id=$1 AND LOWER(name)=LOWER($2) AND id <> $3',
+      [workspaceId, name, projectId]
     );
     if (existRows.length > 0) {
       return {
@@ -74,7 +98,7 @@ async function updateProject(db, projectId, { name, description }) {
          updated_at=NOW() 
      WHERE id=$3 
      RETURNING *`,
-    [name, description, projectId]
+    [name ?? null, description ?? null, projectId]
   );
   return { success: true, data: rows[0] };
 }

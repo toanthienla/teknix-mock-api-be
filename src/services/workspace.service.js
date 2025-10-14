@@ -1,5 +1,20 @@
 //const db = require('../config/db');
 const logSvc = require('./project_request_log.service');
+
+// Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
+const NAME_RE = /^[A-Za-z0-9_]+$/;
+function validateNameOrError(name) {
+  if (typeof name !== "string" || !NAME_RE.test(name)) {
+    return {
+      success: false,
+      errors: [{
+        field: "name",
+        message: "Tên chỉ được chứa chữ cái tiếng Anh, số và dấu gạch dưới (_). Không được có dấu cách, dấu hoặc ký tự đặc biệt."
+      }]
+    };
+  }
+  return null;
+}
 // Get all workspaces
 async function getAllWorkspaces(db) {
   const { rows } = await db.query(
@@ -19,6 +34,9 @@ async function getWorkspaceById(db, id) {
 
 // Create workspace (check duplicate name)
 async function createWorkspace(db, { name }) {
+  // Validate format tên
+  const invalid = validateNameOrError(name);
+  if (invalid) return invalid;
   const { rows: existRows } = await db.query(
     "SELECT id FROM workspaces WHERE LOWER(name)=LOWER($1)",
     [name]
@@ -40,6 +58,11 @@ async function createWorkspace(db, { name }) {
 
 // Update workspace (check duplicate name)
 async function updateWorkspace(db, id, { name }) {
+  // Validate nếu client gửi name
+  if (name != null) {
+    const invalid = validateNameOrError(name);
+   if (invalid) return invalid;
+  }
   // Lấy workspace hiện tại để kiểm tra tồn tại
   const { rows: currentRows } = await db.query('SELECT * FROM workspaces WHERE id=$1', [id]);
   if (currentRows.length === 0) {

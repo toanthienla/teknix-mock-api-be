@@ -1,6 +1,20 @@
 const logSvc = require('./project_request_log.service');
 const { getCollection2  } = require("../config/db");
 
+// Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
+const NAME_RE = /^[A-Za-z0-9_]+$/;
+function validateNameOrError(name) {
+  if (typeof name !== "string" || !NAME_RE.test(name)) {
+    return {
+      success: false,
+      errors: [{
+        field: "name",
+        message: "Tên chỉ được chứa chữ cái tiếng Anh, số và dấu gạch dưới (_). Không được có dấu cách, dấu hoặc ký tự đặc biệt."
+      }]
+    };
+  }
+  return null;
+}
 // Get all folders (optionally filter by project_id)
 async function getFolders(db, project_id) {
   let query = `
@@ -33,6 +47,10 @@ async function getFolderById(db, id) {
 }
 
 async function createFolder(db, { project_id, name, description, is_public }) {
+  // Validate format tên
+  const invalid = validateNameOrError(name);
+  if (invalid) return invalid;
+
   // Kiểm tra trùng tên trong cùng project (không còn theo user)
   const { rows: existRows } = await db.query(
     `SELECT id 
@@ -60,6 +78,13 @@ async function createFolder(db, { project_id, name, description, is_public }) {
 
 async function updateFolder(dbStateless, dbStateful, id, payload) {
   const { name, description, is_public, base_schema } = payload;
+
+  // Validate nếu client gửi name
+  if (name != null) {
+    const invalid = validateNameOrError(name);
+    if (invalid) return invalid;
+  }
+
 
   // 🧱 1️⃣ Kiểm tra folder có tồn tại không
   const { rows: currentRows } = await dbStateless.query(
