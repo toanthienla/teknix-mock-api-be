@@ -89,8 +89,8 @@ async function deleteById(id) {
   try {
     await client.query("BEGIN");
 
-    const { rows: epRows } = await client.query(
-      "SELECT path FROM endpoints_ful WHERE id = $1",
+   const { rows: epRows } = await client.query(
+      "SELECT path, origin_id FROM endpoints_ful WHERE id = $1",
       [id]
     );
     const ep = epRows[0];
@@ -98,7 +98,7 @@ async function deleteById(id) {
       await client.query("ROLLBACK");
       return { success: false, notFound: true };
     }
-
+    const originIdBeforeDelete = ep.origin_id || null;
     await client.query(
       "DELETE FROM endpoint_responses_ful WHERE endpoint_id = $1",
       [id]
@@ -109,12 +109,9 @@ async function deleteById(id) {
 
     // Mongo delete (ngoài transaction)
     if (ep.path) {
-      // tìm workspace/project theo origin_id
-      const { rows: full } = await statefulPool.query(
-        `SELECT origin_id FROM endpoints_ful WHERE id = $1 LIMIT 1`, [id]
-      );
+// tìm workspace/project theo origin_id (đã lưu trước khi xoá)
       let workspaceName = "Workspace", projectName = "Project";
-      if (full[0]?.origin_id) {
+      if (originIdBeforeDelete) {
         const { rows } = await statelessPool.query(
           `SELECT w.name AS workspace_name, p.name AS project_name
              FROM endpoints e
@@ -122,7 +119,7 @@ async function deleteById(id) {
              JOIN projects p ON p.id = f.project_id
              JOIN workspaces w ON w.id = p.workspace_id
             WHERE e.id = $1 LIMIT 1`,
-          [full[0].origin_id]
+          [originIdBeforeDelete]
         );
         workspaceName = rows[0]?.workspace_name || workspaceName;
         projectName   = rows[0]?.project_name   || projectName;
@@ -580,18 +577,33 @@ async function updateEndpointResponse(responseId, { response_body, delay }) {
 // ------------------------
 // Update endpoint data (Schema in PG, data in Mongo)
 // ------------------------
+
+async function getEndpointData(path, opts = {}) {
+  const { workspaceName = null, projectName = null } = opts || {};
+  if (!path) throw new Error("Thiếu path");
+  const pgPath = path.startsWith("/") ? path : "/" + path;
+  const { rows } = await statefulPool.query(
+    "SELECT id FROM endpoints_ful WHERE path = $1 LIMIT 1",
+    [pgPath]
+  );
+  if (rows.length === 0) {
+    throw new Error(`Không tìm thấy endpoints_ful với path: ${pgPath}`);
+  }
+  return await mongoFindOneByPath(pgPath, workspaceName, projectName);
+}
 async function updateEndpointData(path, body, opts = {}) {
   const { workspaceName = null, projectName = null } = opts || {};
   if (!body) throw new Error("Body không hợp lệ hoặc thiếu");
   const { schema, data_default } = body;
 
   // Lấy row endpoints_ful theo path (kèm schema_order để giữ đúng thứ tự)
+  const pgPath = path.startsWith("/") ? path : "/" + path;
   const { rows } = await statefulPool.query(
     "SELECT id, schema FROM endpoints_ful WHERE path = $1 LIMIT 1",
-    [path]
+    [pgPath]
   );
   if (rows.length === 0)
-    throw new Error("Không tìm thấy endpoints_ful với path: " + path);
+    throw new Error("Không tìm thấy endpoints_ful với path: " + pgPath);
   const currentSchema = rows[0].schema || {};
 
   // Helpers validate (giữ tinh gọn)
@@ -707,7 +719,7 @@ async function updateEndpointData(path, body, opts = {}) {
 
     await statefulPool.query(
       "UPDATE endpoints_ful SET schema = $1, updated_at = NOW() WHERE path = $2",
-      [JSON.stringify(schema), path]
+       [JSON.stringify(schema), pgPath]
     );
 
     const col = getCollection(toCollectionName(path, workspaceName, projectName));
@@ -725,7 +737,7 @@ async function updateEndpointData(path, body, opts = {}) {
       throw new Error("schema phải là object (map field -> rule)");
     await statefulPool.query(
       "UPDATE endpoints_ful SET schema = $1, updated_at = NOW() WHERE path = $2",
-      [JSON.stringify(schema), path]
+      [JSON.stringify(schema), pgPath] 
     );
     return await findByPathPG(path);
   }
@@ -862,6 +874,7 @@ module.exports = {
   ResponsesForDELETE,
   updateEndpointResponse,
   updateEndpointData,
+  getEndpointData,
   getEndpointSchema,
   getBaseSchemaByEndpointId,
 };

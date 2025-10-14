@@ -181,12 +181,23 @@ async function insertLogSafely(req, {
 module.exports = async function statefulHandler(req, res, next) {
   const started = Date.now();
   const method = (req.method || "GET").toUpperCase();
-  // URL: /{workspaceName}/{projectName}/{path...}
-  const segs = (req.path || "").split("/").filter(Boolean);
-  const workspaceName = segs[0];
-  const projectName   = segs[1];
-  const restPath = segs.slice(2).join("/");
-  const basePath = "/" + restPath; // đây là path lưu trong PG (endpoints_ful.path)
+  // URL khi mount tại '/:workspace/:project':
+  //  - req.baseUrl = '/{workspaceName}/{projectName}'
+  //  - req.path    = '/{path...}'
+  const baseSegs = (req.baseUrl || "").split("/").filter(Boolean);
+  const workspaceName = baseSegs[0] || null;
+  const projectName   = baseSegs[1] || null;
+  const restPath      = (req.path || "").replace(/^\/+/, ""); // 'cat' | 'users/profile'
+  const basePath      = restPath ? `/${restPath}` : req.path;
+
+  // Bắt buộc đủ WS/Project (không fallback legacy)
+  if (!workspaceName || !projectName || !restPath) {
+    const body = {
+      message: "Full route required: /{workspaceName}/{projectName}/{path}",
+      detail: { method, path: req.originalUrl || req.url }
+    };
+    return res.status(400).json(body);
+  }
 
   const rawId =
     (req.params && req.params.id) ?? (req.universal && req.universal.idInUrl);
@@ -200,19 +211,38 @@ module.exports = async function statefulHandler(req, res, next) {
   let projectId = null, originId = null;
 
   try {
-    // Endpoint (method, path)
+    // 🔎 Resolve endpoint theo (WS, Project, Path, Method):
+    //   1) tìm origin_id bên stateless (endpoints) qua JOIN workspaces/projects/folders
+    //   2) map sang endpoints_ful bằng origin_id + method + path
     const endpointId =
       req.endpoint_stateful?.id ||
       (await (async () => {
-        const q = await req.db.stateful.query(
-          `SELECT id FROM endpoints_ful WHERE UPPER(method) = $1 AND path = $2 LIMIT 1`,
-          [method, basePath]
+        const q1 = await req.db.stateless.query(
+          `SELECT e.id AS origin_id
+             FROM endpoints e
+             JOIN folders f  ON f.id = e.folder_id
+             JOIN projects p ON p.id = f.project_id
+             JOIN workspaces w ON w.id = p.workspace_id
+            WHERE UPPER(e.method) = $1
+              AND e.path = $2
+              AND w.name = $3
+              AND p.name = $4
+            LIMIT 1`,
+          [method, basePath, workspaceName, projectName]
         );
-        return q.rows[0]?.id;
+        const originIdLocal = q1.rows?.[0]?.origin_id || null;
+        if (!originIdLocal) return null;
+        const q2 = await req.db.stateful.query(
+          `SELECT id FROM endpoints_ful
+            WHERE origin_id = $1 AND UPPER(method) = $2 AND path = $3
+            LIMIT 1`,
+          [originIdLocal, method, basePath]
+        );
+        return q2.rows?.[0]?.id || null;
       })());
     if (!endpointId) {
       const status = 404;
-      const body = { message: "Endpoint not found", detail: { method, path: req.path } };
+      const body = { message: "Endpoint not found", detail: { method, path: req.originalUrl || req.path, workspaceName, projectName, basePath } };
       await insertLogSafely(req, {
         projectId, originId, method, path: req.path, status,
         responseBody: body, started, payload: req.body,
@@ -241,7 +271,7 @@ module.exports = async function statefulHandler(req, res, next) {
       }
     }
 
-    // Mongo: data_current + data_default
+    // Mongo: data_current + data_default (collection: {path}.{workspace}.{project})
     const collectionName = (function () {
       // Giữ nguyên tên (kể cả dấu cách). Chỉ bỏ ký tự NUL và chấm ở đầu/cuối cho an toàn.
       const sanitize = (s) =>
