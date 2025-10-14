@@ -16,15 +16,15 @@ router.get('/:id', asyncHandler(ctrl.getFolderById));
 
 // Create folder
 // POST /folder
-router.post('/', auth, validateFolder, asyncHandler(ctrl.createFolder));
+router.post('/', validateFolder, asyncHandler(ctrl.createFolder));
 
 // Update folder
 // PUT /folder/:id
-router.put('/:id', auth, validateFolder, asyncHandler(ctrl.updateFolder)); // Gắn middleware
+router.put('/:id', validateFolder, asyncHandler(ctrl.updateFolder)); // Gắn middleware
 
 // Delete folder
 // DELETE /folder/:id
-router.delete('/:id', auth, asyncHandler(ctrl.deleteFolder));
+router.delete('/:id', asyncHandler(ctrl.deleteFolder));
 
 // // ✅ Route mới để lấy thông tin chủ folder
 // router.get("/getOwner/:id", ctrl.getFolderOwner);

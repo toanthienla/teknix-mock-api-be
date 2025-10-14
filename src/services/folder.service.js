@@ -1,4 +1,5 @@
 const logSvc = require('./project_request_log.service');
+const { connectMongo } = require("../config/db");
 
 // Get all folders (optionally filter by project_id)
 async function getFolders(db, project_id) {
@@ -57,41 +58,163 @@ async function createFolder(db, { project_id, name, description, is_public }) {
   return { success: true, data: rows[0] };
 }
 
+async function updateFolder(dbStateless, dbStateful, id, payload) {
+  const { name, description, is_public, base_schema } = payload;
 
-
-async function updateFolder(db, id, { name, description, is_public }) {
-  const { rows: currentRows } = await db.query('SELECT * FROM folders WHERE id=$1', [id]);
+  // 🧱 1️⃣ Kiểm tra folder có tồn tại không
+  const { rows: currentRows } = await dbStateless.query(
+    'SELECT * FROM folders WHERE id = $1',
+    [id]
+  );
   if (currentRows.length === 0) {
     return { success: false, notFound: true };
   }
 
-  // Kiểm tra trùng tên trong cùng project
+  const folder = currentRows[0];
+
+  // 🚦 2️⃣ Nếu người dùng gửi base_schema → xử lý riêng
+  if (base_schema) {
+    if (!dbStateful) {
+      return { success: false, message: "Stateful DB connection required" };
+    }
+
+    if (typeof base_schema !== "object" || Array.isArray(base_schema)) {
+      return { success: false, message: "Invalid base_schema format" };
+    }
+
+    // ✅ Cập nhật base_schema trước
+    const { rows } = await dbStateless.query(
+      `UPDATE folders
+       SET base_schema = $1::jsonb,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING id, project_id, user_id, name, description, is_public, base_schema, created_at, updated_at`,
+      [JSON.stringify(base_schema), id]
+    );
+
+    const updatedFolder = rows[0];
+
+    // 🔍 3️⃣ Sau khi update, kiểm tra xem có endpoint nào đã được chuyển stateful chưa
+    const { rows: endpoints } = await dbStateless.query(
+      'SELECT id, path FROM endpoints WHERE folder_id = $1',
+      [id]
+    );
+
+    if (endpoints.length > 0) {
+      const endpointIds = endpoints.map(e => e.id);
+      const { rows: used } = await dbStateful.query(
+        'SELECT id, origin_id FROM endpoints_ful WHERE origin_id = ANY($1)',
+        [endpointIds]
+      );
+
+      // ⚙️ Nếu có endpoint stateful → gọi reset Mongo collections
+      if (used.length > 0) {
+        try {
+          await resetMongoCollectionsByFolder(id, dbStateless);
+        } catch (err) {
+          console.error("Error resetting Mongo collections:", err);
+        }
+      }
+    }
+
+    return { success: true, data: updatedFolder };
+  }
+
+  // 🧱 4️⃣ Nếu không có base_schema → giữ nguyên logic cũ
   if (name) {
-    const { rows: existRows } = await db.query(
+    const { rows: existRows } = await dbStateless.query(
       'SELECT id FROM folders WHERE project_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3',
-      [currentRows[0].project_id, name, id]
+      [folder.project_id, name, id]
     );
     if (existRows.length > 0) {
       return {
         success: false,
-        errors: [{ field: 'name', message: 'Folder name already exists in this project' }]
+        errors: [{ field: 'name', message: 'Folder name already exists in this project' }],
       };
     }
   }
 
-  const { rows } = await db.query(
+  const { rows } = await dbStateless.query(
     `UPDATE folders
      SET name = COALESCE($1, name),
          description = COALESCE($2, description),
          is_public = COALESCE($3, is_public),
          updated_at = CURRENT_TIMESTAMP
      WHERE id = $4
-     RETURNING id, project_id, name, description, is_public, created_at, updated_at`,
+     RETURNING id, project_id, user_id, name, description, is_public, base_schema, created_at, updated_at`,
     [name, description, is_public, id]
   );
 
   return { success: true, data: rows[0] };
 }
+
+/**
+ * Reset lại data_default và data_current trong MongoDB
+ * cho toàn bộ collection thuộc folder chỉ định.
+ */
+async function resetMongoCollectionsByFolder(folderId, dbStateless) {
+  const mongo = await connectMongo();
+
+  const endpoints = await dbStateless.query(
+    `SELECT 
+       e.path, 
+       w.name AS workspace_name, 
+       p.name AS project_name, 
+       f.base_schema
+     FROM endpoints e
+     JOIN folders f ON e.folder_id = f.id
+     JOIN projects p ON f.project_id = p.id
+     JOIN workspaces w ON p.workspace_id = w.id
+     WHERE e.folder_id = $1`,
+    [folderId]
+  );
+
+  if (endpoints.rows.length === 0) {
+    console.log("⚠️ Folder không chứa endpoint nào, bỏ qua reset Mongo.");
+    return;
+  }
+
+  for (const ep of endpoints.rows) {
+    const cleanPath = ep.path.replace(/^\//, '').replace(/[^\w\-]/g, '_');
+    const collectionName = `${cleanPath}.${ep.workspace_name}.${ep.project_name}`;
+    const col = mongo.collection(collectionName);
+
+    let fields = [];
+    try {
+      const schema = typeof ep.base_schema === 'string'
+        ? JSON.parse(ep.base_schema)
+        : ep.base_schema;
+
+      if (schema && typeof schema === 'object') {
+        // trường hợp schema có "properties" hoặc không
+        const base = schema.properties || schema;
+        fields = Object.keys(base);
+      }
+    } catch (err) {
+      console.warn(`⚠️ Base schema không hợp lệ cho endpoint ${ep.path}`);
+      continue;
+    }
+
+    // 4️⃣ Tạo document mẫu có tất cả field = null
+    const baseDoc = {};
+    for (const f of fields) {
+      baseDoc[f] = null;
+    }
+
+    // đảm bảo id luôn là 1
+    baseDoc.id = 1;
+
+    // 5️⃣ Ghi vào Mongo (upsert)
+    await col.updateOne(
+      {},
+      { $set: { data_default: [baseDoc], data_current: [baseDoc] } },
+      { upsert: true }
+    );
+
+    console.log(`✅ Reset collection "${collectionName}" thành công`);
+  }
+}
+
 
 
 // Delete folder and handle related logs inside a transaction

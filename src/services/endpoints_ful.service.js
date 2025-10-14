@@ -166,6 +166,16 @@ async function convertToStateful(endpointId) {
     ]);
     if (!endpoint) throw new Error("Stateless endpoint not found");
 
+    // 🔍 Kiểm tra base_schema của folder trước khi cho phép chuyển đổi
+    const { rows: [folderCheck] } = await clientStateless.query(
+      `SELECT base_schema FROM folders WHERE id = $1 LIMIT 1`,
+      [endpoint.folder_id]
+    );
+
+    if (!folderCheck || folderCheck.base_schema === null) {
+      throw new Error(JSON.stringify({ message: "Folder does not have a base schema" }));
+    }
+
     // 2) đã có stateful trước đó chưa?
     const { rows: existing } = await clientStateful.query(
       "SELECT id, is_active, path, method FROM endpoints_ful WHERE origin_id = $1 LIMIT 1",

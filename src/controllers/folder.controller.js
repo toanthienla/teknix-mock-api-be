@@ -75,6 +75,7 @@ async function createFolder(req, res) {
 
 
 // Update folder
+// Update folder
 async function updateFolder(req, res) {
   try {
     const id = parseInt(req.params.id, 10);
@@ -82,32 +83,42 @@ async function updateFolder(req, res) {
       return error(res, 400, "id must be an integer");
     }
 
-    // const userId = req.user?.user_id;
-    // if (!userId) {
-    //   return error(res, 401, "Unauthorized: missing user info");
-    // }
+    //const userId = req.user?.user_id;
+    //if (!userId) {
+    //  return error(res, 401, "Unauthorized: missing user info");
+    //}
 
-    // // Kiểm tra quyền sở hữu trước khi update
-    // const { rows } = await req.db.stateless.query(
-    //   'SELECT user_id FROM folders WHERE id = $1',
-    //   [id]
-    // );
+    // 🧱 Kiểm tra quyền sở hữu
+    //const { rows } = await req.db.stateless.query(
+    //  'SELECT user_id FROM folders WHERE id = $1',
+    //  [id]
+    //);
 
-    // if (rows.length === 0) {
-    //   return error(res, 404, "Folder not found");
-    // }
+    //if (rows.length === 0) {
+    //  return error(res, 404, "Folder not found");
+    //}
 
-    // const folder = rows[0];
-    // if (folder.user_id !== userId) {
-    //   return error(res, 403, "Forbidden: you do not own this folder");
-    // }
+    //const folder = rows[0];
+    //if (folder.user_id !== userId) {
+    //  return error(res, 403, "Forbidden: you do not own this folder");
+    //}
 
-    // Bất kỳ ai cũng có thể update (kể cả is_public)
-    const result = await svc.updateFolder(req.db.stateless, id, req.body);
+    // 🧩 Phân biệt loại update
+    const payload = req.body;
+    let result;
+
+    if (payload.base_schema) {
+      // Cập nhật base_schema → cần cả stateful DB
+      result = await svc.updateFolder(req.db.stateless, req.db.stateful, id, payload);
+    } else {
+      // Cập nhật thông tin cơ bản → chỉ dùng stateless DB
+      result = await svc.updateFolder(req.db.stateless, null, id, payload);
+    }
 
     if (result.notFound) {
       return error(res, 404, "Folder not found");
     }
+
     if (result.success === false) {
       return res.status(400).json(result);
     }
