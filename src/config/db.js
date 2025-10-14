@@ -96,5 +96,6 @@ module.exports = {
   mongoDB,
   getCollection,
   connectMongo,
-  checkConnections
+  checkConnections,
+  getCollection2
 };
