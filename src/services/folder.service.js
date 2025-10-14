@@ -31,13 +31,13 @@ async function getFolderById(db, id) {
   return { success: true, data: rows[0] || null };
 }
 
-async function createFolder(db, { project_id, name, description, user_id, is_public }) {
-  // Kiểm tra trùng tên trong cùng project của cùng user
+async function createFolder(db, { project_id, name, description, is_public }) {
+  // Kiểm tra trùng tên trong cùng project (không còn theo user)
   const { rows: existRows } = await db.query(
     `SELECT id 
      FROM folders 
-     WHERE project_id = $1 AND user_id = $2 AND LOWER(name) = LOWER($3)`,
-    [project_id, user_id, name]
+     WHERE project_id = $1 AND LOWER(name) = LOWER($2)`,
+    [project_id, name]
   );
 
   if (existRows.length > 0) {
@@ -48,16 +48,14 @@ async function createFolder(db, { project_id, name, description, user_id, is_pub
   }
 
   const { rows } = await db.query(
-    `INSERT INTO folders (project_id, user_id, name, description, is_public)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, project_id, user_id, name, description, is_public, created_at, updated_at`,
-    [project_id, user_id, name, description, is_public]
+    `INSERT INTO folders (project_id, name, description, is_public)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, project_id, name, description, is_public, created_at, updated_at`,
+    [project_id, name, description, is_public]
   );
 
   return { success: true, data: rows[0] };
 }
-
-
 
 async function updateFolder(dbStateless, dbStateful, id, payload) {
   const { name, description, is_public, base_schema } = payload;
@@ -149,9 +147,6 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
   return { success: true, data: rows[0] };
 }
 
-
-
-
 // Delete folder and handle related logs inside a transaction
 async function deleteFolderAndHandleLogs(db, folderId) {
   const client = await db.connect();
@@ -178,71 +173,71 @@ async function deleteFolderAndHandleLogs(db, folderId) {
   }
 }
 
-async function getFolderOwnerById(dbPool, folderId) {
-  // 1️⃣ Truy vấn để lấy user_id từ folder
-  const { rows: folderRows } = await dbPool.query(
-    "SELECT user_id FROM folders WHERE id = $1",
-    [folderId]
-  );
+// async function getFolderOwnerById(dbPool, folderId) {
+//   // 1️⃣ Truy vấn để lấy user_id từ folder
+//   const { rows: folderRows } = await dbPool.query(
+//     "SELECT user_id FROM folders WHERE id = $1",
+//     [folderId]
+//   );
 
-  if (folderRows.length === 0) {
-    return {
-      success: false,
-      errors: [{ field: "folder_id", message: "Folder not found" }],
-    };
-  }
+//   if (folderRows.length === 0) {
+//     return {
+//       success: false,
+//       errors: [{ field: "folder_id", message: "Folder not found" }],
+//     };
+//   }
 
-  const userId = folderRows[0].user_id;
+//   const userId = folderRows[0].user_id;
 
-  // 2️⃣ Truy vấn để lấy username từ bảng users
-  const { rows: userRows } = await dbPool.query(
-    "SELECT username FROM users WHERE id = $1",
-    [userId]
-  );
+//   // 2️⃣ Truy vấn để lấy username từ bảng users
+//   const { rows: userRows } = await dbPool.query(
+//     "SELECT username FROM users WHERE id = $1",
+//     [userId]
+//   );
 
-  if (userRows.length === 0) {
-    return {
-      success: false,
-      errors: [{ field: "user_id", message: "User not found" }],
-    };
-  }
+//   if (userRows.length === 0) {
+//     return {
+//       success: false,
+//       errors: [{ field: "user_id", message: "User not found" }],
+//     };
+//   }
 
-  // 3️⃣ Trả về kết quả
-  return {
-    success: true,
-    data: { username: userRows[0].username },
-  };
-}
+//   // 3️⃣ Trả về kết quả
+//   return {
+//     success: true,
+//     data: { username: userRows[0].username },
+//   };
+// }
 
 // Check if current user is owner of a folder
-async function checkFolderOwner(dbPool, folderId, userId) {
-  try {
-    // Truy vấn folder theo ID
-    const { rows } = await dbPool.query(
-      "SELECT user_id FROM folders WHERE id = $1",
-      [folderId]
-    );
+// async function checkFolderOwner(dbPool, folderId, userId) {
+//   try {
+//     // Truy vấn folder theo ID
+//     const { rows } = await dbPool.query(
+//       "SELECT user_id FROM folders WHERE id = $1",
+//       [folderId]
+//     );
 
-    // Nếu không tồn tại folder
-    if (rows.length === 0) {
-      return { success: false, message: "Folder not found" };
-    }
+//     // Nếu không tồn tại folder
+//     if (rows.length === 0) {
+//       return { success: false, message: "Folder not found" };
+//     }
 
-    // So sánh với user_id trong JWT
-    const isOwner = rows[0].user_id === userId;
+//     // So sánh với user_id trong JWT
+//     const isOwner = rows[0].user_id === userId;
 
-    return { success: isOwner, message: isOwner ? "User is the folder owner" : "User is not the folder owner" };
-  } catch (err) {
-    throw new Error("Database query failed: " + err.message);
-  }
-}
+//     return { success: isOwner, message: isOwner ? "User is the folder owner" : "User is not the folder owner" };
+//   } catch (err) {
+//     throw new Error("Database query failed: " + err.message);
+//   }
+// }
 
 module.exports = {
   getFolders,
   getFolderById,
   createFolder,
   updateFolder,
-  deleteFolderAndHandleLogs,
-  getFolderOwnerById,
-  checkFolderOwner,
+  deleteFolderAndHandleLogs
+  // getFolderOwnerById,
+  // checkFolderOwner,
 };

@@ -397,16 +397,16 @@ router.use(async (req, res, next) => {
       if (!r) {
         const status = 404;
         const body = { error: "No matching response found" };
-        // await logSvc.insertLog(req.db.stateless, {
-        //   project_id: ep.project_id || null,
-        //   endpoint_id: ep.id,
-        //   request_method: method,
-        //   request_path: req.path,
-        //   response_status_code: status,
-        //   response_body: body,
-        //   ip_address: getClientIp(req),
-        //   latency_ms: Date.now() - started,
-        // });
+        await logSvc.insertLog(req.db.stateless, {
+          project_id: ep.project_id || null,
+          endpoint_id: ep.id,
+          request_method: method,
+          request_path: req.path,
+          response_status_code: status,
+          response_body: body,
+          ip_address: getClientIp(req),
+          latency_ms: Date.now() - started,
+        });
         return res.status(status).json(body);
       }
     }

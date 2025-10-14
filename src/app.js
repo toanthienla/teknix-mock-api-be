@@ -3,6 +3,7 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const app = express();
 const cors = require('cors');
+const auth = require('./middlewares/authMiddleware');
 
 app.use(express.json());
 app.use(cookieParser());
@@ -54,6 +55,6 @@ app.use('/folders', folderRoutes);
 app.use('/', endpointResponseRoutes);
 app.use('/', statefulRoutes);
 app.use('/', projectRequestLogRoutes);
-app.use('/', require("./routes/universalHandler"));
+app.use('/', auth, require("./routes/universalHandler"));
 
 module.exports = app;

@@ -10,26 +10,41 @@ const ResponseStatefulService = require("./endpoint_responses_ful.service");
 // ------------------------
 // Helpers
 // ------------------------
-function toCollectionName(path) {
+//  giữ nguyên dấu cách; chỉ bỏ NUL và dấu '.' ở đầu/cuối; bỏ leading '/'
+function sanitizeName(s) {
+  return String(s ?? "")
+    .replace(/^\//, "")
+    .replace(/\u0000/g, "")      // Mongo cấm NUL
+    .replace(/^\.+|\.+$/g, "")   // tránh '.' ở đầu/cuối segment
+    .trim();
+}
+function toCollectionName(path, workspaceName, projectName) {
   if (typeof path !== "string" || !path.trim()) {
     throw new Error("Invalid path");
   }
-  return path.replace(/^\//, "").trim();
+  const p  = sanitizeName(path);
+  const w  = sanitizeName(workspaceName);
+  const pr = sanitizeName(projectName);
+  if (!w || !pr) {
+    // fallback legacy nếu chưa truyền đủ workspace/project
+    return p;
+  }
+  return `${p}.${w}.${pr}`;
 }
 
-async function mongoFindOneByPath(path) {
-  const col = getCollection(toCollectionName(path));
+async function mongoFindOneByPath(path, workspaceName, projectName) {
+  const col = getCollection(toCollectionName(path, workspaceName, projectName));
   return await col.findOne({});
 }
 
-async function mongoDeleteAllByPath(path) {
-  const col = getCollection(toCollectionName(path));
+async function mongoDeleteAllByPath(path, workspaceName, projectName) {
+  const col = getCollection(toCollectionName(path, workspaceName, projectName));
   const r = await col.deleteMany({});
   return r.deletedCount > 0;
 }
 
-async function mongoUpsertEmptyIfMissing(path) {
-  const col = getCollection(toCollectionName(path));
+async function mongoUpsertEmptyIfMissing(path, workspaceName, projectName) {
+  const col = getCollection(toCollectionName(path, workspaceName, projectName));
   await col.updateOne(
     {},
     { $setOnInsert: { data_default: [], data_current: [] } },
@@ -42,7 +57,7 @@ async function mongoUpsertEmptyIfMissing(path) {
 // ------------------------
 async function findById(id) {
   const { rows } = await statefulPool.query(
-    "SELECT * FROM endpoints_ful WHERE id = $1",
+    "SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE id = $1",
     [id]
   );
   return rows[0] || null;
@@ -50,7 +65,7 @@ async function findById(id) {
 
 async function findByFolderId(folderId) {
   const { rows } = await statefulPool.query(
-    "SELECT * FROM endpoints_ful WHERE folder_id = $1 ORDER BY created_at DESC",
+    "SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE folder_id = $1 ORDER BY created_at DESC",
     [folderId]
   );
   return rows;
@@ -62,6 +77,9 @@ async function getFullDetailById(id) {
     ResponseStatefulService.findByEndpointId(id),
   ]);
   if (!endpoint) return null;
+
+  // 🔁 Sắp xếp schema theo schema_order (nếu có) để API trả về đúng thứ tự FE đã PUT
+  // Trả thẳng schema từ DB; không dùng schema_order nữa
   return { ...endpoint, is_stateful: true, responses: responses || [] };
 }
 
@@ -81,13 +99,36 @@ async function deleteById(id) {
       return { success: false, notFound: true };
     }
 
-    await client.query("DELETE FROM endpoint_responses_ful WHERE endpoint_id = $1", [id]);
+    await client.query(
+      "DELETE FROM endpoint_responses_ful WHERE endpoint_id = $1",
+      [id]
+    );
     await client.query("DELETE FROM endpoints_ful WHERE id = $1", [id]);
 
     await client.query("COMMIT");
 
     // Mongo delete (ngoài transaction)
-    if (ep.path) await mongoDeleteAllByPath(ep.path);
+    if (ep.path) {
+      // tìm workspace/project theo origin_id
+      const { rows: full } = await statefulPool.query(
+        `SELECT origin_id FROM endpoints_ful WHERE id = $1 LIMIT 1`, [id]
+      );
+      let workspaceName = "Workspace", projectName = "Project";
+      if (full[0]?.origin_id) {
+        const { rows } = await statelessPool.query(
+          `SELECT w.name AS workspace_name, p.name AS project_name
+             FROM endpoints e
+             JOIN folders f  ON f.id = e.folder_id
+             JOIN projects p ON p.id = f.project_id
+             JOIN workspaces w ON w.id = p.workspace_id
+            WHERE e.id = $1 LIMIT 1`,
+          [full[0].origin_id]
+        );
+        workspaceName = rows[0]?.workspace_name || workspaceName;
+        projectName   = rows[0]?.project_name   || projectName;
+      }
+      await mongoDeleteAllByPath(ep.path, workspaceName, projectName);
+    }
 
     return { success: true };
   } catch (e) {
@@ -118,10 +159,11 @@ async function convertToStateful(endpointId) {
     await clientStateful.query("BEGIN");
 
     // 1) lấy endpoint gốc
-    const { rows: [endpoint] } = await clientStateless.query(
-      "SELECT * FROM endpoints WHERE id = $1",
-      [endpointId]
-    );
+    const {
+      rows: [endpoint],
+    } = await clientStateless.query("SELECT * FROM endpoints WHERE id = $1", [
+      endpointId,
+    ]);
     if (!endpoint) throw new Error("Stateless endpoint not found");
 
     // 🔍 Kiểm tra base_schema của folder trước khi cho phép chuyển đổi
@@ -165,13 +207,29 @@ async function convertToStateful(endpointId) {
       return { stateful_id: statefulId };
     }
 
+    // ► Lấy project_name & workspace_name để đặt collection
+    const { rows: wpRows } = await clientStateless.query(
+      `SELECT w.name AS workspace_name, p.name AS project_name
+         FROM endpoints e
+         JOIN folders f  ON f.id = e.folder_id
+         JOIN projects p ON p.id = f.project_id
+         JOIN workspaces w ON w.id = p.workspace_id
+        WHERE e.id = $1
+        LIMIT 1`,
+      [endpointId]
+    );
+    const workspaceName = wpRows[0]?.workspace_name || "Workspace";
+    const projectName = wpRows[0]?.project_name || "Project";
+
     // 3) convert lần đầu
     await clientStateless.query(
       "UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1",
       [endpointId]
     );
 
-    const { rows: [statefulEndpoint] } = await clientStateful.query(
+    const {
+      rows: [statefulEndpoint],
+    } = await clientStateful.query(
       `INSERT INTO endpoints_ful (folder_id, name, method, path, is_active, origin_id, schema)
        VALUES ($1, $2, $3, $4, TRUE, $5, $6::jsonb)
        RETURNING *`,
@@ -188,7 +246,9 @@ async function convertToStateful(endpointId) {
     );
 
     // 🔹 [NEW] Sau khi tạo endpoints_ful, đảm bảo folder có base_schema mặc định nếu đang null
-    const { rows: [folder] } = await clientStateless.query(
+    const {
+      rows: [folder],
+    } = await clientStateless.query(
       `SELECT f.id, f.base_schema
    FROM folders f
    INNER JOIN endpoints e ON e.folder_id = f.id
@@ -211,25 +271,40 @@ async function convertToStateful(endpointId) {
       );
     }
 
-
     await clientStateful.query("COMMIT");
     await clientStateless.query("COMMIT");
 
-    // Tạo default responses + khởi tạo collection Mongo trống
+    // Tạo default responses + khởi tạo collection Mongo trống (gắn WS/Project)
     const responsesResult = await generateDefaultResponses(statefulEndpoint);
-    await mongoUpsertEmptyIfMissing(statefulEndpoint.path);
+    await mongoUpsertEmptyIfMissing(
+      statefulEndpoint.path,
+      workspaceName,
+      projectName
+    );
 
-    return { stateless: endpoint, stateful: statefulEndpoint, responses: responsesResult };
+    return {
+      stateless: endpoint,
+      stateful: statefulEndpoint,
+      responses: responsesResult,
+      mongo_collection: toCollectionName(
+        statefulEndpoint.path,
+        workspaceName,
+        projectName
+      ),
+    };
   } catch (e) {
-    try { await clientStateless.query("ROLLBACK"); } catch { }
-    try { await clientStateful.query("ROLLBACK"); } catch { }
+    try {
+      await clientStateless.query("ROLLBACK");
+    } catch {}
+    try {
+      await clientStateful.query("ROLLBACK");
+    } catch {}
     throw e;
   } finally {
     clientStateless.release();
     clientStateful.release();
   }
 }
-
 
 async function revertToStateless(endpointId) {
   const clientStateless = await statelessPool.connect();
@@ -275,7 +350,28 @@ async function revertToStateless(endpointId) {
 
 // Đảm bảo có dữ liệu Mongo (trống nếu thiếu) + default responses
 async function ensureDefaultsForReactivate(statefulId, path, method) {
-  await mongoUpsertEmptyIfMissing(path);
+  // Truy ngược để biết workspace/project theo origin_id
+  const { rows: epRows } = await statefulPool.query(
+    `SELECT origin_id FROM endpoints_ful WHERE id=$1 LIMIT 1`,
+    [statefulId]
+  );
+  const originId = epRows[0]?.origin_id;
+  let workspaceName = "Workspace", projectName = "Project";
+  if (originId) {
+    const { rows } = await statelessPool.query(
+      `SELECT w.name AS workspace_name, p.name AS project_name
+         FROM endpoints e
+         JOIN folders f  ON f.id = e.folder_id
+         JOIN projects p ON p.id = f.project_id
+         JOIN workspaces w ON w.id = p.workspace_id
+        WHERE e.id = $1
+        LIMIT 1`,
+      [originId]
+    );
+    workspaceName = rows[0]?.workspace_name || workspaceName;
+    projectName   = rows[0]?.project_name   || projectName;
+  }
+  await mongoUpsertEmptyIfMissing(path, workspaceName, projectName);
 
   const { rows: respRows } = await statefulPool.query(
     "SELECT 1 FROM endpoint_responses_ful WHERE endpoint_id = $1 LIMIT 1",
@@ -312,7 +408,8 @@ async function insertResponses(endpointId, responses) {
 }
 
 function capitalizeFromPath(endpointPath) {
-  const seg = (endpointPath || "").split("/").filter(Boolean).pop() || "Resource";
+  const seg =
+    (endpointPath || "").split("/").filter(Boolean).pop() || "Resource";
   return seg.charAt(0).toUpperCase() + seg.slice(1);
 }
 
@@ -321,7 +418,11 @@ async function ResponsesForGET(endpointId, endpointPath) {
   const responses = [
     { name: "Get All Success", status_code: 200, response_body: [{}] },
     { name: "Get Detail Success", status_code: 200, response_body: {} },
-    { name: "Get Detail Not Found", status_code: 404, response_body: { message: `${R} with id {{params.id}} not found.` } },
+    {
+      name: "Get Detail Not Found",
+      status_code: 404,
+      response_body: { message: `${R} with id {{params.id}} not found.` },
+    },
   ];
   return insertResponses(endpointId, responses);
 }
@@ -329,9 +430,25 @@ async function ResponsesForGET(endpointId, endpointPath) {
 async function ResponsesForPOST(endpointId, endpointPath) {
   const R = capitalizeFromPath(endpointPath);
   const responses = [
-    { name: "Create Success", status_code: 201, response_body: { message: `New ${R} item added successfully.` } },
-    { name: "Schema Invalid", status_code: 403, response_body: { message: `Invalid data: request does not match ${R} object schema.` } },
-    { name: "ID Conflict", status_code: 409, response_body: { message: `${R} {{params.id}} conflict: {{params.id}} already exists.` } },
+    {
+      name: "Create Success",
+      status_code: 201,
+      response_body: { message: `New ${R} item added successfully.` },
+    },
+    {
+      name: "Schema Invalid",
+      status_code: 400,
+      response_body: {
+        message: `Invalid data: request does not match ${R} object schema.`,
+      },
+    },
+    {
+      name: "ID Conflict",
+      status_code: 409,
+      response_body: {
+        message: `${R} {{params.id}} conflict: {{params.id}} already exists.`,
+      },
+    },
   ];
   return insertResponses(endpointId, responses);
 }
@@ -339,10 +456,32 @@ async function ResponsesForPOST(endpointId, endpointPath) {
 async function ResponsesForPUT(endpointId, endpointPath) {
   const R = capitalizeFromPath(endpointPath);
   const responses = [
-    { name: "Update Success", status_code: 200, response_body: { message: `${R} with id {{params.id}} updated successfully.` } },
-    { name: "Schema Invalid", status_code: 403, response_body: { message: `Invalid data: request does not match ${R} schema.` } },
-    { name: "ID Conflict", status_code: 409, response_body: { message: `Update id {{params.id}} conflict: ${R} id {{params.id}} in request body already exists.` } },
-    { name: "Not Found", status_code: 404, response_body: { message: `${R} with id {{params.id}} not found.` } },
+    {
+      name: "Update Success",
+      status_code: 200,
+      response_body: {
+        message: `${R} with id {{params.id}} updated successfully.`,
+      },
+    },
+    {
+      name: "Schema Invalid",
+      status_code: 400,
+      response_body: {
+        message: `Invalid data: request does not match ${R} schema.`,
+      },
+    },
+    {
+      name: "ID Conflict",
+      status_code: 409,
+      response_body: {
+        message: `Update id {{params.id}} conflict: ${R} id {{params.id}} in request body already exists.`,
+      },
+    },
+    {
+      name: "Not Found",
+      status_code: 404,
+      response_body: { message: `${R} with id {{params.id}} not found.` },
+    },
   ];
   return insertResponses(endpointId, responses);
 }
@@ -350,9 +489,25 @@ async function ResponsesForPUT(endpointId, endpointPath) {
 async function ResponsesForDELETE(endpointId, endpointPath) {
   const R = capitalizeFromPath(endpointPath);
   const responses = [
-    { name: "Delete All Success", status_code: 200, response_body: { message: `Delete all data with ${R} successfully.` } },
-    { name: "Delete Success", status_code: 200, response_body: { message: `${R} with id {{params.id}} deleted successfully.` } },
-    { name: "Not Found", status_code: 404, response_body: { message: `${R} with id {{params.id}} to delete not found.` } },
+    {
+      name: "Delete All Success",
+      status_code: 200,
+      response_body: { message: `Delete all data with ${R} successfully.` },
+    },
+    {
+      name: "Delete Success",
+      status_code: 200,
+      response_body: {
+        message: `${R} with id {{params.id}} deleted successfully.`,
+      },
+    },
+    {
+      name: "Not Found",
+      status_code: 404,
+      response_body: {
+        message: `${R} with id {{params.id}} to delete not found.`,
+      },
+    },
   ];
   return insertResponses(endpointId, responses);
 }
@@ -376,14 +531,17 @@ async function generateDefaultResponses(endpoint) {
 async function updateEndpointResponse(responseId, { response_body, delay }) {
   const client = await statefulPool.connect();
   try {
-    const { rows: [response] } = await client.query(
+    const {
+      rows: [response],
+    } = await client.query(
       "SELECT * FROM endpoint_responses_ful WHERE id = $1",
       [responseId]
     );
     if (!response) throw new Error("Response not found");
     if (
       response.status_code === 200 &&
-      (response.name === "Get All Success" || response.name === "Get Detail Success")
+      (response.name === "Get All Success" ||
+        response.name === "Get Detail Success")
     ) {
       throw new Error("This response is not editable.");
     }
@@ -404,8 +562,12 @@ async function updateEndpointResponse(responseId, { response_body, delay }) {
     if (updates.length === 0) return response;
 
     values.push(responseId);
-    const { rows: [updated] } = await client.query(
-      `UPDATE endpoint_responses_ful SET ${updates.join(", ")}, updated_at = NOW()
+    const {
+      rows: [updated],
+    } = await client.query(
+      `UPDATE endpoint_responses_ful SET ${updates.join(
+        ", "
+      )}, updated_at = NOW()
        WHERE id = $${idx} RETURNING *`,
       values
     );
@@ -418,39 +580,51 @@ async function updateEndpointResponse(responseId, { response_body, delay }) {
 // ------------------------
 // Update endpoint data (Schema in PG, data in Mongo)
 // ------------------------
-async function updateEndpointData(path, body) {
+async function updateEndpointData(path, body, opts = {}) {
+  const { workspaceName = null, projectName = null } = opts || {};
   if (!body) throw new Error("Body không hợp lệ hoặc thiếu");
   const { schema, data_default } = body;
 
-  // Lấy row endpoints_ful theo path
+  // Lấy row endpoints_ful theo path (kèm schema_order để giữ đúng thứ tự)
   const { rows } = await statefulPool.query(
     "SELECT id, schema FROM endpoints_ful WHERE path = $1 LIMIT 1",
     [path]
   );
-  if (rows.length === 0) throw new Error("Không tìm thấy endpoints_ful với path: " + path);
-
-  const currentSchema = rows[0].schema || null;
+  if (rows.length === 0)
+    throw new Error("Không tìm thấy endpoints_ful với path: " + path);
+  const currentSchema = rows[0].schema || {};
 
   // Helpers validate (giữ tinh gọn)
-  const typeOf = (v) => (Array.isArray(v) ? "array" : v === null ? "null" : typeof v);
-  const orderedSchemaKeys = (sch) => Object.keys(sch || {});
+  const typeOf = (v) =>
+    Array.isArray(v) ? "array" : v === null ? "null" : typeof v;
+  const orderedSchemaKeys = (sch) => {
+    if (sch && Array.isArray(sch.__order)) return sch.__order.slice();
+    return Object.keys(sch || {}).filter((k) => k !== "__order");
+  };
   const hasSameKeyOrderAsSchema = (obj, sch) => {
     const sKeys = orderedSchemaKeys(sch);
     const dKeys = Object.keys(obj || {});
     if (sKeys.length !== dKeys.length) return false;
-    for (let i = 0; i < sKeys.length; i++) if (sKeys[i] !== dKeys[i]) return false;
+    for (let i = 0; i < sKeys.length; i++)
+      if (sKeys[i] !== dKeys[i]) return false;
     return true;
   };
   const validateObjectWithSchema = (obj, sch) => {
     const sKeys = orderedSchemaKeys(sch);
     if (!hasSameKeyOrderAsSchema(obj, sch)) {
-      return { ok: false, reason: `Thứ tự/trường không khớp schema. Schema: [${sKeys.join(", ")}], Data: [${Object.keys(obj).join(", ")}]` };
+      return {
+        ok: false,
+        reason: `Thứ tự/trường không khớp schema. Schema: [${sKeys.join(
+          ", "
+        )}], Data: [${Object.keys(obj).join(", ")}]`,
+      };
     }
     for (const key of sKeys) {
       const rule = sch[key];
       const value = obj[key];
       const isMissing = value === undefined;
-      if (rule.required && isMissing) return { ok: false, reason: `Thiếu trường bắt buộc: "${key}"` };
+      if (rule.required && isMissing)
+        return { ok: false, reason: `Thiếu trường bắt buộc: "${key}"` };
       if (!isMissing) {
         const jsType = typeOf(value);
         const ok =
@@ -459,14 +633,23 @@ async function updateEndpointData(path, body) {
           (rule.type === "boolean" && jsType === "boolean") ||
           (rule.type === "object" && jsType === "object") ||
           (rule.type === "array" && jsType === "array");
-        if (!ok) return { ok: false, reason: `Sai kiểu "${key}". Mong đợi: ${rule.type}, thực tế: ${jsType}` };
+        if (!ok)
+          return {
+            ok: false,
+            reason: `Sai kiểu "${key}". Mong đợi: ${rule.type}, thực tế: ${jsType}`,
+          };
       }
     }
     return { ok: true };
   };
   const autoAssignIdsIfAllowed = (dataArr, sch) => {
-    if (!Array.isArray(dataArr)) throw new Error("data_default phải là một mảng object");
-    const idOptional = !!(sch?.id && sch.id.type === "number" && sch.id.required === false);
+    if (!Array.isArray(dataArr))
+      throw new Error("data_default phải là một mảng object");
+    const idOptional = !!(
+      sch?.id &&
+      sch.id.type === "number" &&
+      sch.id.required === false
+    );
     let nextId = 1;
     const seen = new Set();
     for (const o of dataArr) if (o && typeof o.id === "number") seen.add(o.id);
@@ -474,7 +657,8 @@ async function updateEndpointData(path, body) {
     if (idOptional) {
       for (let i = 0; i < dataArr.length; i++) {
         if (dataArr[i].id === undefined) {
-          dataArr[i].id = seen.size === 0 ? (i === 0 ? 1 : dataArr[i - 1].id + 1) : nextId++;
+          dataArr[i].id =
+            seen.size === 0 ? (i === 0 ? 1 : dataArr[i - 1].id + 1) : nextId++;
         }
       }
     }
@@ -484,33 +668,41 @@ async function updateEndpointData(path, body) {
     const set = new Set();
     for (const o of dataArr) {
       if (o.id !== undefined) {
-        if (set.has(o.id)) return { ok: false, reason: `Trùng id trong data_default: ${o.id}` };
+        if (set.has(o.id))
+          return { ok: false, reason: `Trùng id trong data_default: ${o.id}` };
         set.add(o.id);
       }
     }
     return { ok: true };
   };
   const validateArrayWithSchema = (dataArr, sch) => {
-    if (!Array.isArray(dataArr)) return { ok: false, reason: "data_default phải là mảng các object" };
+    if (!Array.isArray(dataArr))
+      return { ok: false, reason: "data_default phải là mảng các object" };
     for (let i = 0; i < dataArr.length; i++) {
       const r = validateObjectWithSchema(dataArr[i], sch);
-      if (!r.ok) return { ok: false, reason: `Phần tử thứ ${i} không hợp lệ: ${r.reason}` };
+      if (!r.ok)
+        return {
+          ok: false,
+          reason: `Phần tử thứ ${i} không hợp lệ: ${r.reason}`,
+        };
     }
     const u = ensureUniqueIdsIfPresent(dataArr);
     if (!u.ok) return u;
     return { ok: true };
   };
 
-  // 1) Cả schema + data_default → cập nhật schema (PG) + validate + ghi Mongo
+  // 1) Cả schema + data_default → chuẩn hoá schema (ép 'id'), validate + ghi Mongo
   if (schema && data_default) {
     if (typeof schema !== "object" || Array.isArray(schema))
       throw new Error("schema phải là object (map field -> rule)");
     if (!Array.isArray(data_default))
       throw new Error("data_default phải là mảng object");
 
+    // dùng nguyên schema FE gửi; không tự thêm 'id'
     const cloned = JSON.parse(JSON.stringify(data_default));
     const withIds = autoAssignIdsIfAllowed(cloned, schema);
     const v = validateArrayWithSchema(withIds, schema);
+
     if (!v.ok) throw new Error(`Dữ liệu không khớp schema: ${v.reason}`);
 
     await statefulPool.query(
@@ -518,16 +710,16 @@ async function updateEndpointData(path, body) {
       [JSON.stringify(schema), path]
     );
 
-    const col = getCollection(toCollectionName(path));
+    const col = getCollection(toCollectionName(path, workspaceName, projectName));
     await col.updateOne(
       {},
       { $set: { data_default: withIds, data_current: withIds } },
       { upsert: true }
     );
-    return await mongoFindOneByPath(path);
+    return await mongoFindOneByPath(path, workspaceName, projectName);
   }
 
-  // 2) Chỉ schema → cập nhật PG; KHÔNG động vào Mongo
+  // 2) Chỉ schema → chuẩn hoá + cập nhật PG; KHÔNG động vào Mongo
   if (schema && !data_default) {
     if (typeof schema !== "object" || Array.isArray(schema))
       throw new Error("schema phải là object (map field -> rule)");
@@ -538,37 +730,38 @@ async function updateEndpointData(path, body) {
     return await findByPathPG(path);
   }
 
-  // 3) Chỉ data_default → cần schema hiện tại
+  // 3) Chỉ data_default → KHÔNG cần theo schema; chấp nhận object hoặc mảng các object
   if (!schema && data_default) {
-    if (!currentSchema)
-      throw new Error("Không thể cập nhật data_default khi chưa có schema hiện tại");
-    if (!Array.isArray(data_default))
-      throw new Error("data_default phải là mảng object");
-
-    const cloned = JSON.parse(JSON.stringify(data_default));
-    const withIds = autoAssignIdsIfAllowed(cloned, currentSchema);
-    const v = validateArrayWithSchema(withIds, currentSchema);
-    if (!v.ok) throw new Error(`data_default không khớp schema hiện tại: ${v.reason}`);
-
-    const col = getCollection(toCollectionName(path));
+    // Ép về mảng object
+    const payload = Array.isArray(data_default) ? data_default : [data_default];
+    if (
+      !payload.every((x) => x && typeof x === "object" && !Array.isArray(x))
+    ) {
+      throw new Error("data_default phải là object hoặc mảng các object.");
+    }
+    // Ghi thẳng vào Mongo, không auto-assign id, không validate theo schema
+    const col = getCollection(toCollectionName(path, workspaceName, projectName));
     await col.updateOne(
       {},
-      { $set: { data_default: withIds, data_current: withIds } },
+      { $set: { data_default: payload, data_current: payload } },
       { upsert: true }
     );
-    return await mongoFindOneByPath(path);
+    return await mongoFindOneByPath(path, workspaceName, projectName);
   }
 
-  throw new Error("Payload phải có ít nhất một trong hai: schema hoặc data_default");
+  throw new Error(
+    "Payload phải có ít nhất một trong hai: schema hoặc data_default"
+  );
 }
 
 // tiện ích nhỏ để trả hàng PG theo path (khi chỉ sửa schema)
 async function findByPathPG(path) {
   const { rows } = await statefulPool.query(
-    "SELECT * FROM endpoints_ful WHERE path = $1 LIMIT 1",
+    "SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE path = $1 LIMIT 1",
     [path]
   );
-  return rows[0] || null;
+  if (rows.length === 0) return null;
+  return rows[0];
 }
 
 // Lấy schema của endpoint stateful thông qua origin_id (id bên stateless)
@@ -648,7 +841,6 @@ async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
 
   return { fields };
 }
-
 
 // ------------------------
 // Exports (function-based)
