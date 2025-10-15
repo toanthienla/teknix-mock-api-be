@@ -13,20 +13,18 @@ const { statelessPool, statefulPool } = require('./config/db');
 
 // Inject DB vào request
 app.use((req, res, next) => {
-    req.db = {
-        stateless: statelessPool,
-        stateful: statefulPool,
-    };
-    next();
+  req.db = {
+    stateless: statelessPool,
+    stateful: statefulPool,
+  };
+  next();
 });
 
 app.use(
-  cors(
-    {
-      origin: "http://localhost:5173",
-      credentials: true,
-    },
-  )
+  cors({
+    origin: "http://localhost:5173",
+    credentials: true,
+  })
 );
 
 // ===== IMPORT ROUTES JWT =====
@@ -44,10 +42,12 @@ const endpointRoutes = require('./routes/endpoint.routes');
 const endpointResponseRoutes = require('./routes/endpoint_response.routes');
 const folderRoutes = require('./routes/folder.routes');
 const projectRequestLogRoutes = require('./routes/project_request_log.routes');
-const mockRoutes = require('./routes/mock.routes');
-const statefulRoutes = require('./routes/stateful.routes');
+const mockRoutes = require('./routes/mock.routes');           // stateless
+const statefulRoutes = require('./routes/stateful.routes');   // các API quản trị stateful (không phải handler chính)
 const adminResponseLogger = require('./middlewares/adminResponseLogger');
-const statefulHandler = require('./routes/statefulHandler');
+
+// ⚠️ KHÔNG import statefulHandler trực tiếp để tránh bypass auth
+// const statefulHandler = require('./routes/statefulHandler'); // ← remove
 
 app.use('/workspaces', workspaceRoutes);
 app.use('/projects', projectRoutes);
@@ -56,18 +56,23 @@ app.use('/folders', folderRoutes);
 app.use('/', endpointResponseRoutes);
 app.use('/', statefulRoutes);
 
-// ✅ BẮT BUỘC DÙNG FULL ROUTE: /:workspace/:project/:path...
-// Chỉ chuyển tiếp khi có phần path phía sau (ít nhất 1 segment sau project)
-app.use('/:workspace/:project', (req, res, next) => {
-  if ((req.path || '/').split('/').filter(Boolean).length >= 1) {
-    return statefulHandler(req, res, next);
-  }
-  return res.status(400).json({
-    message: "Full route required: /{workspaceName}/{projectName}/{path}",
-    detail: { path: req.originalUrl || req.url }
-  });
-});
+// ❌ GỠ BỎ đoạn bắt trực tiếp /:workspace/:project để khỏi bypass auth
+// app.use('/:workspace/:project', (req, res, next) => {
+//   if ((req.path || '/').split('/').filter(Boolean).length >= 1) {
+//     return statefulHandler(req, res, next);
+//   }
+//   return res.status(400).json({
+//     message: "Full route required: /{workspaceName}/{projectName}/{path}",
+//     detail: { path: req.originalUrl || req.url }
+//   });
+// });
+
+// Các route logs khác
 app.use('/', projectRequestLogRoutes);
-app.use('/', auth, require("./routes/universalHandler"));
+
+// ✅ MOUNT UNIVERSAL HANDLER CUỐI CÙNG + CÓ AUTH  // CHANGED
+// Mọi request động (/:workspace/:project/...) sẽ đi qua đây, có req.user
+// MỌI request dạng /:workspace/:project/... phải đi qua auth -> universalHandler
+app.use('/:workspace/:project', auth, require("./routes/universalHandler"));
 
 module.exports = app;
