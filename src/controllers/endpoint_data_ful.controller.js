@@ -2,6 +2,53 @@ const EndpointStatefulService = require("../services/endpoints_ful.service");
 const DataStatefulService = require("../services/endpoint_data_ful.service");
 const ResponseSvc = require("../services/endpoint_response.service");
 
+// ---- Local helpers: reuse logic style from statefulHandler (isTypeOK) ----
+function isTypeOK(expected, value) {
+  if (value === undefined) return true; // missing -> sẽ do 'required' kiểm tra
+  if (expected === "number") return typeof value === "number" && !Number.isNaN(value);
+  if (expected === "string") return typeof value === "string" && String(value).trim() !== "";
+  if (expected === "boolean") return typeof value === "boolean";
+  if (expected === "object") return value && typeof value === "object" && !Array.isArray(value);
+  if (expected === "array") return Array.isArray(value);
+  return true;
+}
+
+/**
+ * Validate 1 object theo base_schema dạng:
+ * {
+ *   "id":   { "type": "number", "required": false },
+ *   "name": { "type": "string", "required": true  },
+ *   ...
+ * }
+ * - Từ chối field lạ (rejectUnknown = true)
+ * - Kiểm tra thiếu required
+ * - Kiểm tra sai type
+ */
+function validateOneAgainstBaseSchema(baseSchema, obj, { rejectUnknown = true } = {}) {
+  const errors = [];
+  const keys = Object.keys(baseSchema || {});
+
+  if (rejectUnknown) {
+    const unknown = Object.keys(obj || {}).filter((k) => !keys.includes(k));
+    if (unknown.length) errors.push(`Unknown fields: ${unknown.join(", ")}`);
+  }
+
+  for (const k of keys) {
+    const rule = baseSchema[k] || {};
+    const has = Object.prototype.hasOwnProperty.call(obj || {}, k);
+    const val = obj?.[k];
+
+    if (rule.required === true && !has) {
+      errors.push(`Missing required field: ${k}`);
+      continue;
+    }
+    if (has && rule.type && !isTypeOK(rule.type, val)) {
+      errors.push(`Invalid type for ${k}: expected ${rule.type}`);
+    }
+  }
+  return errors;
+}
+
 // Parse workspace/project/path từ query:
 //  - Dạng tách:  ?workspace=WP_3&project=pj_3&path=/cat
 //  - Dạng gộp:   ?path=WP_3/pj_3/cat
@@ -97,6 +144,43 @@ exports.updateEndpointData = async (req, res) => {
 
     const { schema, data_default } = req.body;
 
+    // Nếu đang cập nhật data_default thì validate theo base_schema của folder chứa endpoint
+    if (data_default !== undefined) {
+      const { rows: bsRows } = await req.db.stateless.query(
+        `
+        SELECT f.base_schema
+        FROM endpoints e
+        JOIN folders   f ON e.folder_id   = f.id
+        JOIN projects  p ON f.project_id  = p.id
+        JOIN workspaces w ON p.workspace_id = w.id
+        WHERE w.name = $1 AND p.name = $2 AND e.path = $3
+        LIMIT 1
+        `,
+        [opts.workspaceName, opts.projectName, pgPath]
+      );
+      let baseSchema = bsRows?.[0]?.base_schema || null;
+      if (typeof baseSchema === "string") {
+        try {
+          baseSchema = JSON.parse(baseSchema);
+        } catch {}
+      }
+      if (baseSchema && typeof baseSchema === "object") {
+        const base = baseSchema.properties || baseSchema;
+        const arr = Array.isArray(data_default) ? data_default : [data_default];
+        const allErrors = [];
+        arr.forEach((item, idx) => {
+          const errs = validateOneAgainstBaseSchema(base, item, { rejectUnknown: true });
+          if (errs.length) allErrors.push(`Phần tử thứ ${idx}: ${errs.join("; ")}`);
+        });
+        if (allErrors.length) {
+          return res.status(400).json({
+            error: "data_default không khớp base_schema của folder",
+            details: allErrors,
+          });
+        }
+      }
+    }
+
     const result = await EndpointStatefulService.updateEndpointData(
       pgPath,
       {
@@ -128,19 +212,53 @@ exports.setDefaultEndpointData = async (req, res) => {
     if (!pgPath) return res.status(400).json({ error: "Thiếu query 'path'." });
     if (data_default === undefined) return res.status(400).json({ error: "Thiếu 'data_default' trong payload." });
 
-    // Nếu service data hỗ trợ sync current, ưu tiên dùng
-    if (typeof DataStatefulService.upsertDefaultAndCurrentByPath === "function") {
-      const result = await DataStatefulService.upsertDefaultAndCurrentByPath(pgPath, data_default, opts);
-      return res.status(200).json({
-        message: "Cập nhật data_default và đồng bộ data_current thành công.",
-        data: result,
-      });
+    // 1) Lấy base_schema của folder chứa endpoint theo (workspace, project, path)
+    //    Dùng DB stateless để join w -> p -> f -> e
+    const { rows: bsRows } = await req.db.stateless.query(
+      `
+      SELECT f.base_schema
+      FROM endpoints e
+      JOIN folders   f ON e.folder_id   = f.id
+      JOIN projects  p ON f.project_id  = p.id
+      JOIN workspaces w ON p.workspace_id = w.id
+      WHERE w.name = $1 AND p.name = $2 AND e.path = $3
+      LIMIT 1
+      `,
+      [opts.workspaceName, opts.projectName, pgPath]
+    );
+
+    let baseSchema = bsRows?.[0]?.base_schema || null;
+    if (typeof baseSchema === "string") {
+      try {
+        baseSchema = JSON.parse(baseSchema);
+      } catch {
+        /* keep raw */
+      }
     }
 
-    // Fallback: chỉ set data_default qua endpoints service
-    const result = await EndpointStatefulService.updateEndpointData(pgPath, { data_default }, opts);
+    // 2) Nếu có base_schema thì validate data_default theo schema này
+    if (baseSchema && typeof baseSchema === "object") {
+      const base = baseSchema.properties || baseSchema; // chấp nhận cả dạng có "properties"
+      const arr = Array.isArray(data_default) ? data_default : [data_default];
+      const allErrors = [];
+      arr.forEach((item, idx) => {
+        const errs = validateOneAgainstBaseSchema(base, item, { rejectUnknown: true });
+        if (errs.length) {
+          allErrors.push(`Phần tử thứ ${idx}: ${errs.join("; ")}`);
+        }
+      });
+      if (allErrors.length) {
+        return res.status(400).json({
+          error: "data_default không khớp base_schema của folder",
+          details: allErrors,
+        });
+      }
+    }
+
+    // 3) Ghi vào Mongo và đồng bộ current = default
+    const result = await DataStatefulService.upsertDefaultAndCurrentByPath(pgPath, data_default, opts);
     return res.status(200).json({
-      message: "Đã cập nhật data_default (không đồng bộ data_current vì service chưa hỗ trợ).",
+      message: "Cập nhật data_default (đồng bộ data_current) thành công.",
       data: result,
     });
   } catch (err) {

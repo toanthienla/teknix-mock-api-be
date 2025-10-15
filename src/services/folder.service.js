@@ -253,71 +253,10 @@ async function deleteFolderAndHandleLogs(db, folderId) {
   }
 }
 
-// async function getFolderOwnerById(dbPool, folderId) {
-//   // 1️⃣ Truy vấn để lấy user_id từ folder
-//   const { rows: folderRows } = await dbPool.query(
-//     "SELECT user_id FROM folders WHERE id = $1",
-//     [folderId]
-//   );
-
-//   if (folderRows.length === 0) {
-//     return {
-//       success: false,
-//       errors: [{ field: "folder_id", message: "Folder not found" }],
-//     };
-//   }
-
-//   const userId = folderRows[0].user_id;
-
-//   // 2️⃣ Truy vấn để lấy username từ bảng users
-//   const { rows: userRows } = await dbPool.query(
-//     "SELECT username FROM users WHERE id = $1",
-//     [userId]
-//   );
-
-//   if (userRows.length === 0) {
-//     return {
-//       success: false,
-//       errors: [{ field: "user_id", message: "User not found" }],
-//     };
-//   }
-
-//   // 3️⃣ Trả về kết quả
-//   return {
-//     success: true,
-//     data: { username: userRows[0].username },
-//   };
-// }
-
-// Check if current user is owner of a folder
-// async function checkFolderOwner(dbPool, folderId, userId) {
-//   try {
-//     // Truy vấn folder theo ID
-//     const { rows } = await dbPool.query(
-//       "SELECT user_id FROM folders WHERE id = $1",
-//       [folderId]
-//     );
-
-//     // Nếu không tồn tại folder
-//     if (rows.length === 0) {
-//       return { success: false, message: "Folder not found" };
-//     }
-
-//     // So sánh với user_id trong JWT
-//     const isOwner = rows[0].user_id === userId;
-
-//     return { success: isOwner, message: isOwner ? "User is the folder owner" : "User is not the folder owner" };
-//   } catch (err) {
-//     throw new Error("Database query failed: " + err.message);
-//   }
-// }
-
 module.exports = {
   getFolders,
   getFolderById,
   createFolder,
   updateFolder,
   deleteFolderAndHandleLogs,
-  // getFolderOwnerById,
-  // checkFolderOwner,
 };
