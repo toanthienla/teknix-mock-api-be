@@ -125,6 +125,28 @@ async function removeFromCurrent(path, matchFn) {
   return await col.findOne({});
 }
 
+/**
+ * Drop toàn bộ collection ứng với 1 endpoint path trên Mongo.
+ * Sử dụng chính quy ước đặt tên hiện tại của hệ thống qua getCollection(path),
+ * để luôn khớp với cách bạn đang lưu (ví dụ: '/users' -> 'users', 'WP_3/pj_3/cat' -> 'cat', v.v.).
+ */
+async function dropCollectionByPath(path) {
+  const db = await getDb();
+  const coll = await getCollection(path); // phải trả về một đối tượng Collection
+  const name = coll.collectionName;
+
+  // Kiểm tra tồn tại trước khi drop để idempotent
+  const exists = (await db.listCollections({ name }).toArray()).length > 0;
+  if (!exists) {
+    return { dropped: false, name, reason: 'not_exists' };
+  }
+
+  // Dùng db.dropCollection để đảm bảo drop theo tên đúng
+  await db.dropCollection(name);
+  return { dropped: true, name };
+}
+
+
 module.exports = {
   findByPath,
   deleteByPath,
@@ -132,5 +154,6 @@ module.exports = {
   getCurrentList,
   pushToCurrent,
   updateInCurrent,
+  dropCollectionByPath,
   removeFromCurrent,
 };

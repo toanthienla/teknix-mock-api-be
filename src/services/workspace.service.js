@@ -1,5 +1,6 @@
 //const db = require('../config/db');
 const logSvc = require('./project_request_log.service');
+const endpointsFulSvc = require('./endpoints_ful.service');
 
 // Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
 const NAME_RE = /^[A-Za-z0-9_]+$/;
@@ -119,13 +120,29 @@ async function deleteWorkspaceAndHandleLogs(db, workspaceId) {
 
     // Bước 2: NULL hóa các tham chiếu trong bảng log
     // Giả định hàm này đã được cập nhật để nhận client
+    // Gather stateless endpoint IDs in this workspace BEFORE delete (for stateful cleanup)
+    const { rows: epRows } = await client.query(
+      `SELECT e.id
+         FROM endpoints e
+         JOIN folders f ON f.id = e.folder_id
+         JOIN projects p ON p.id = f.project_id
+        WHERE p.workspace_id = $1`,
+      [workspaceId]
+    );
+    const endpointIds = epRows.map(r => r.id);
+
+    // Nullify logs first
     await logSvc.nullifyWorkspaceTree(client, workspaceId);
 
     // Bước 3: Xóa workspace
     await client.query('DELETE FROM workspaces WHERE id = $1', [workspaceId]);
 
     await client.query('COMMIT'); // Hoàn tất transaction
-    return { success: true, data: { id: workspaceId } };
+    // Cleanup STATEFUL side (PG + Mongo) outside stateless tx
+    if (endpointIds.length > 0) {
+      await endpointsFulSvc.deleteByOriginIds(endpointIds);
+    }
+    return { success: true, data: { id: workspaceId }, affectedEndpoints: endpointIds.length };
   } catch (err) {
     await client.query('ROLLBACK'); // Hoàn tác nếu có lỗi
     console.error(`Transaction failed for deleting workspace ${workspaceId}:`, err);
