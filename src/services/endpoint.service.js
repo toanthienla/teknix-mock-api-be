@@ -41,56 +41,92 @@ async function getEndpointById(dbPool, endpointId) {
 }
 
 // Create endpoint
+// services/endpoint.service.js
 async function createEndpoint(
   dbPool,
   { folder_id, name, method, path, is_active, is_stateful }
 ) {
   const errors = [];
 
-  // Check duplicate name (ignore case)
+  // 0) Kiểm tra folder_id hợp lệ và lấy project_id
+  const { rows: folderRows } = await dbPool.query(
+    `SELECT id, project_id FROM folders WHERE id = $1`,
+    [folder_id]
+  );
+  const folder = folderRows[0];
+  if (!folder) {
+    return {
+      success: false,
+      errors: [{ field: "folder_id", message: "Folder not found" }],
+    };
+  }
+  const projectId = folder.project_id;
+
+  // 1) Check duplicate NAME trong CÙNG PROJECT (ignore case)
   const { rows: nameRows } = await dbPool.query(
-    "SELECT id FROM endpoints WHERE folder_id=$1 AND LOWER(name)=LOWER($2)",
-    [folder_id, name]
+    `
+    SELECT e.id
+    FROM endpoints e
+    JOIN folders f ON f.id = e.folder_id
+    WHERE f.project_id = $1
+      AND LOWER(e.name) = LOWER($2)
+    LIMIT 1
+    `,
+    [projectId, name]
   );
   if (nameRows.length > 0) {
     errors.push({
       field: "name",
-      message: "Name already exists in this folder",
+      message: "Name already exists in this project",
     });
   }
 
-  // Check path + method constraints (case-sensitive path)
+  // 2) Check PATH + METHOD theo PROJECT (path case-sensitive như cũ)
   const { rows: samePathRows } = await dbPool.query(
-    "SELECT method FROM endpoints WHERE folder_id=$1 AND path=$2",
-    [folder_id, path]
+    `
+    SELECT e.method
+    FROM endpoints e
+    JOIN folders f ON f.id = e.folder_id
+    WHERE f.project_id = $1
+      AND e.path = $2
+    `,
+    [projectId, path]
   );
 
-  const usedMethods = samePathRows.map((r) => r.method.toUpperCase());
-  const methodUpper = method.toUpperCase();
+  const usedMethods = samePathRows.map((r) => String(r.method || "").toUpperCase());
+  const methodUpper = String(method || "").toUpperCase();
 
   if (usedMethods.includes(methodUpper)) {
     errors.push({
       field: "method",
-      message: "Method already exists for this path",
+      message: "Method already exists for this path in this project",
     });
   }
   if (!usedMethods.includes(methodUpper) && usedMethods.length >= 4) {
-    errors.push({ field: "path", message: "Path already has all 4 methods" });
+    errors.push({
+      field: "path",
+      message: "Path already has all 4 methods in this project",
+    });
   }
 
   if (errors.length > 0) return { success: false, errors };
 
-  // Xử lý giá trị mặc định cho is_active
+  // 3) Giá trị mặc định
   const final_is_active = is_active === undefined ? true : is_active;
   const final_is_stateful = is_stateful === undefined ? false : is_stateful;
 
+  // 4) Tạo endpoint
   const { rows } = await dbPool.query(
-    "INSERT INTO endpoints(folder_id, name, method, path, is_active, is_stateful) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
-    [folder_id, name, method, path, final_is_active, final_is_stateful]
+    `
+    INSERT INTO endpoints (folder_id, name, method, path, is_active, is_stateful)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING *
+    `,
+    [folder_id, name, methodUpper, path, final_is_active, final_is_stateful]
   );
   const endpoint = rows[0];
 
-  //  Auto-create default endpoint_response
+  // 5) Auto-create default endpoint_response
   await endpointResponseService.create(dbPool, {
     endpoint_id: endpoint.id,
     name: "Success",
@@ -103,6 +139,7 @@ async function createEndpoint(
 
   return { success: true, data: endpoint };
 }
+
 
 // Update endpoint (Stateless + Stateful)
 async function updateEndpoint(
