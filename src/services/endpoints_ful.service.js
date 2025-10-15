@@ -816,43 +816,56 @@ async function getEndpointSchema(statefulPool, originId) {
 }
 
 // Lấy base_schema thông qua id của endpoint (stateless)
+// Lấy base_schema qua endpointId; thêm required nếu method là POST/PUT
 async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
-  // 1) Lấy folder_id từ bảng endpoints
+  // 1) Lấy folder_id + method từ endpoints
   const { rows: endpointRows } = await statelessPool.query(
-    `SELECT folder_id FROM endpoints WHERE id = $1 LIMIT 1`,
+    `SELECT folder_id, method FROM endpoints WHERE id = $1 LIMIT 1`,
     [endpointId]
   );
-
-  if (endpointRows.length === 0) {
-    throw new Error("Endpoint not found");
-  }
+  if (endpointRows.length === 0) throw new Error("Endpoint not found");
 
   const folderId = endpointRows[0].folder_id;
+  const method = String(endpointRows[0].method || "GET").toUpperCase();
+  const isMutating = method === "POST" || method === "PUT";
 
-  // 2) Lấy base_schema từ bảng folders
+  // 2) Lấy base_schema (kiểu dữ liệu: JSON/JSONB hoặc TEXT JSON)
   const { rows: folderRows } = await statelessPool.query(
     `SELECT base_schema FROM folders WHERE id = $1 LIMIT 1`,
     [folderId]
   );
+  if (folderRows.length === 0) throw new Error("Folder not found");
 
-  if (folderRows.length === 0) {
-    throw new Error("Folder not found");
+  let schemaObj = folderRows[0].base_schema ?? null;
+  if (!schemaObj) return { fields: [] };
+
+  // Hỗ trợ trường hợp cột là TEXT chứa JSON
+  if (typeof schemaObj === "string") {
+    try {
+      schemaObj = JSON.parse(schemaObj);
+    } catch {
+      return { fields: [] };
+    }
   }
 
-  const baseSchema = folderRows[0].base_schema || null;
-
-  if (!baseSchema) {
+  if (typeof schemaObj !== "object" || Array.isArray(schemaObj)) {
     return { fields: [] };
   }
 
-  // ✅ Chuyển object -> array
-  const fields = Object.entries(baseSchema).map(([key, value]) => ({
-    name: key,
-    type: value.type === "number" ? "integer" : value.type, // đổi "number" -> "integer" nếu cần
-  }));
+  // 3) Map fields: luôn có name + type; chỉ thêm required khi POST/PUT
+  const fields = Object.entries(schemaObj).map(([name, def]) => {
+    const t = def && typeof def === "object" ? def.type : undefined;
+    const type = t === "number" ? "integer" : (t || "string");
+    if (isMutating) {
+      const required = !!(def && typeof def === "object" && def.required === true);
+      return { name, type, required };
+    }
+    return { name, type };
+  });
 
   return { fields };
 }
+
 
 // ------------------------
 // Exports (function-based)
