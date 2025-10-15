@@ -38,7 +38,7 @@ async function getFolders(db, project_id) {
 // Get folder by id
 async function getFolderById(db, id) {
   const { rows } = await db.query(
-    `SELECT id, project_id, name, description, created_at, updated_at, is_public
+    `SELECT id, project_id, name, base_schema, description, created_at, updated_at, is_public
      FROM folders
      WHERE id = $1`,
     [id]
@@ -113,7 +113,7 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
        SET base_schema = $1::jsonb,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $2
-       RETURNING id, project_id, user_id, name, description, is_public, base_schema, created_at, updated_at`,
+       RETURNING id, project_id, name, description, is_public, base_schema, created_at, updated_at`,
       [JSON.stringify(base_schema), id]
     );
 
