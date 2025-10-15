@@ -1,6 +1,6 @@
 const svc = require("../services/folder.service");
 const { success, error } = require("../utils/response");
-const auth = require('../middlewares/authMiddleware');
+const auth = require("../middlewares/authMiddleware");
 // List all folders (optionally filter by project_id)
 async function listFolders(req, res) {
   try {
@@ -53,7 +53,7 @@ async function createFolder(req, res) {
     const { project_id, name, description, is_public } = req.body;
 
     // Nếu payload không có is_public → mặc định là false
-    const isPublicValue = typeof is_public !== 'undefined' ? Boolean(is_public) : false;
+    const isPublicValue = typeof is_public !== "undefined" ? Boolean(is_public) : false;
 
     const result = await svc.createFolder(req.db.stateless, {
       project_id: parseInt(project_id, 10),
@@ -72,7 +72,6 @@ async function createFolder(req, res) {
     return error(res, 500, err.message);
   }
 }
-
 
 // Update folder
 // Update folder
@@ -129,7 +128,6 @@ async function updateFolder(req, res) {
   }
 }
 
-
 async function deleteFolder(req, res) {
   try {
     const id = parseInt(req.params.id, 10);
@@ -170,11 +168,10 @@ async function deleteFolder(req, res) {
   }
 }
 
-
 module.exports = {
   listFolders,
   getFolderById,
   createFolder,
   updateFolder,
-  deleteFolder
+  deleteFolder,
 };

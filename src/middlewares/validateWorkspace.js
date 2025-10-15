@@ -17,7 +17,7 @@ module.exports = function validateWorkspace(req, res, next) {
     if (!isValidName(name)) {
       errors.push({
         field: "name",
-        message: "Workspace name must start with a letter and can only contain letters, numbers, spaces, - or _"
+        message: "Workspace name must start with a letter and can only contain letters, numbers, spaces, - or _",
       });
     }
   }

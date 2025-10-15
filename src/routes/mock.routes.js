@@ -34,10 +34,7 @@ const pickIdsFromReq = (req) => {
 
 // === ADD: helper lấy endpoints_ful.id từ origin_id (endpoints.id)
 async function getEndpointsFulId(statefulPool, originId) {
-  const { rows } = await statefulPool.query(
-    `SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1`,
-    [originId]
-  );
+  const { rows } = await statefulPool.query(`SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1`, [originId]);
   return rows?.[0]?.id ?? null;
 }
 
@@ -73,13 +70,7 @@ function getMatcher(pattern) {
 }
 
 function getClientIp(req) {
-  const raw = (
-    req.headers["x-forwarded-for"] ||
-    req.connection?.remoteAddress ||
-    req.socket?.remoteAddress ||
-    req.ip ||
-    ""
-  ).toString();
+  const raw = (req.headers["x-forwarded-for"] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || "").toString();
   const first = raw.split(",")[0].trim();
   return first.substring(0, 45);
 }
@@ -140,9 +131,7 @@ router.use(async (req, res, next) => {
 
     // Fallback: thử thêm/bớt dấu "/" cuối
     if (!ep) {
-      const altPath = req.path.endsWith("/")
-        ? req.path.slice(0, -1)
-        : req.path + "/";
+      const altPath = req.path.endsWith("/") ? req.path.slice(0, -1) : req.path + "/";
       ep = endpoints.find((e) => {
         try {
           const fn = getMatcher(e.path);
@@ -187,9 +176,7 @@ router.use(async (req, res, next) => {
           const actualType = Array.isArray(value) ? "array" : typeof value;
 
           if (actualType !== expectedType) {
-            errors.push(
-              `Field '${key}' must be of type '${expectedType}', but received '${actualType}'.`
-            );
+            errors.push(`Field '${key}' must be of type '${expectedType}', but received '${actualType}'.`);
           }
         }
       }
@@ -207,17 +194,10 @@ router.use(async (req, res, next) => {
       };
 
       // Chuẩn hoá currentData thành mảng
-      const currentData = Array.isArray(doc.data_current)
-        ? doc.data_current
-        : doc.data_current
-        ? [doc.data_current]
-        : [];
+      const currentData = Array.isArray(doc.data_current) ? doc.data_current : doc.data_current ? [doc.data_current] : [];
 
       // Lấy schema ở PG (đúng với thiết kế endpoints_ful.schema)
-      const { rows: schRows } = await req.db.stateful.query(
-        "SELECT schema FROM endpoints_ful WHERE path = $1 LIMIT 1",
-        [ep.path]
-      );
+      const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE path = $1 LIMIT 1", [ep.path]);
       const schema = schRows?.[0]?.schema || null;
 
       const method = req.method.toUpperCase();
@@ -231,19 +211,12 @@ router.use(async (req, res, next) => {
 
           const candidates = pickIdsFromReq(req);
           if (candidates.length) {
-            const item = currentData.find((d) =>
-              candidates.includes(String(d?.id))
-            );
+            const item = currentData.find((d) => candidates.includes(String(d?.id)));
             if (item) return res.status(200).json(item);
-            const nf = await getTemplateResponse(
-              req.db.stateful,
-              epFulId,
-              "Get Detail Not Found",
-              {
-                status_code: 404,
-                response_body: { message: "Resource not found." },
-              }
-            );
+            const nf = await getTemplateResponse(req.db.stateful, epFulId, "Get Detail Not Found", {
+              status_code: 404,
+              response_body: { message: "Resource not found." },
+            });
             return res.status(nf.status_code).json(nf.response_body);
           }
           return res.status(200).json(currentData);
@@ -257,15 +230,10 @@ router.use(async (req, res, next) => {
           //  BƯỚC 1: VALIDATE SCHEMA
           const validationErrors = validateSchema(schema, newItem);
           if (validationErrors.length > 0) {
-            const errResponse = await getTemplateResponse(
-              req.db.stateful,
-              epFulId,
-              "Schema Invalid",
-              {
-                status_code: 400,
-                response_body: { error: "Schema validation failed" },
-              }
-            );
+            const errResponse = await getTemplateResponse(req.db.stateful, epFulId, "Schema Invalid", {
+              status_code: 400,
+              response_body: { error: "Schema validation failed" },
+            });
             return res.status(errResponse.status_code).json({
               ...errResponse.response_body,
               details: validationErrors,
@@ -274,55 +242,35 @@ router.use(async (req, res, next) => {
 
           // KIỂM TRA ID VÀ TẠO MỚI
           if (typeof newItem.id !== "undefined") {
-            const idExists = currentData.some(
-              (item) => String(item.id) === String(newItem.id)
-            );
+            const idExists = currentData.some((item) => String(item.id) === String(newItem.id));
             if (idExists) {
-              const errResponse = await getTemplateResponse(
-                req.db.stateful,
-                epFulId,
-                "ID Conflict",
-                {
-                  status_code: 409,
-                  response_body: {
-                    error: `Conflict: An item with id '${newItem.id}' already exists.`,
-                  },
-                }
-              );
-              return res
-                .status(errResponse.status_code)
-                .json(errResponse.response_body);
+              const errResponse = await getTemplateResponse(req.db.stateful, epFulId, "ID Conflict", {
+                status_code: 409,
+                response_body: {
+                  error: `Conflict: An item with id '${newItem.id}' already exists.`,
+                },
+              });
+              return res.status(errResponse.status_code).json(errResponse.response_body);
             }
           } else {
-            const maxId = currentData.reduce(
-              (max, item) => (item.id > max ? item.id : max),
-              0
-            );
+            const maxId = currentData.reduce((max, item) => (item.id > max ? item.id : max), 0);
             newItem.id = maxId + 1;
           }
 
           const newData = [...currentData, newItem];
           // Cập nhật lại Mongo
-          await col.updateOne(
-            {},
-            { $set: { data_current: newData } },
-            { upsert: true }
-          );
+          await col.updateOne({}, { $set: { data_current: newData } }, { upsert: true });
           return res.status(201).json(newItem);
         }
 
         case "PUT": {
           //  Logic cho PUT
-          return res
-            .status(501)
-            .json({ message: "PUT method not implemented yet." });
+          return res.status(501).json({ message: "PUT method not implemented yet." });
         }
 
         case "DELETE": {
           // Logic cho DELETE
-          return res
-            .status(501)
-            .json({ message: "DELETE method not implemented yet." });
+          return res.status(501).json({ message: "DELETE method not implemented yet." });
         }
 
         default: {
@@ -349,12 +297,7 @@ router.use(async (req, res, next) => {
 
     if (responses.length === 0) {
       const status = req.method.toUpperCase() === "GET" ? 200 : 501;
-      const body =
-        req.method.toUpperCase() === "GET"
-          ? hasParams
-            ? {}
-            : []
-          : { error: { message: "No response configured" } };
+      const body = req.method.toUpperCase() === "GET" ? (hasParams ? {} : []) : { error: { message: "No response configured" } };
 
       // await logSvc.insertLog(req.db.stateless, {
       //   project_id: ep.project_id || null,
@@ -369,8 +312,7 @@ router.use(async (req, res, next) => {
       return res.status(status).json(body);
     }
 
-    const isPlainObject = (v) =>
-      v && typeof v === "object" && !Array.isArray(v);
+    const isPlainObject = (v) => v && typeof v === "object" && !Array.isArray(v);
     const matchesCondition = (cond) => {
       if (!isPlainObject(cond) || Object.keys(cond).length === 0) return false;
       if (isPlainObject(cond.params)) {
@@ -386,9 +328,7 @@ router.use(async (req, res, next) => {
       return true;
     };
 
-    const matchedResponses = responses.filter((r) =>
-      matchesCondition(r.condition)
-    );
+    const matchedResponses = responses.filter((r) => matchesCondition(r.condition));
     let r;
     if (matchedResponses.length > 0) {
       r = matchedResponses[0];
@@ -448,10 +388,7 @@ router.use(async (req, res, next) => {
           //   ip_address: getClientIp(req),
           //   latency_ms: finished - started,
           // });
-          return res
-            .status(proxyResp.status)
-            .set(proxyResp.headers)
-            .send(proxyResp.data);
+          return res.status(proxyResp.status).set(proxyResp.headers).send(proxyResp.data);
         } catch (err) {
           return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
         }

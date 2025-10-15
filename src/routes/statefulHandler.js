@@ -4,21 +4,11 @@ const logSvc = require("../services/project_request_log.service");
 
 // ============ Generic helpers ============
 function getClientIp(req) {
-  return (
-    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
-    req.connection?.remoteAddress ||
-    req.ip ||
-    null
-  );
+  return req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.connection?.remoteAddress || req.ip || null;
 }
 function getByPath(obj, path) {
   if (!obj || !path) return undefined;
-  return path
-    .split(".")
-    .reduce(
-      (acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined),
-      obj
-    );
+  return path.split(".").reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
 }
 function renderTemplateDeep(value, ctx) {
   if (typeof value === "string") {
@@ -30,8 +20,7 @@ function renderTemplateDeep(value, ctx) {
   if (Array.isArray(value)) return value.map((v) => renderTemplateDeep(v, ctx));
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const out = {};
-    for (const [k, v] of Object.entries(value))
-      out[k] = renderTemplateDeep(v, ctx);
+    for (const [k, v] of Object.entries(value)) out[k] = renderTemplateDeep(v, ctx);
     return out;
   }
   return value;
@@ -125,38 +114,23 @@ function countParamsIdOccurrences(body) {
   const m = s.match(/\{\{\s*params\.id\s*\}\}/g);
   return m ? m.length : 0;
 }
-function pickResponseEntryAdv(
-  bucket,
-  status,
-  { requireParamId = null, paramsIdOccurrences = null } = {}
-) {
+function pickResponseEntryAdv(bucket, status, { requireParamId = null, paramsIdOccurrences = null } = {}) {
   const arr = bucket.get(status) || [];
   if (arr.length === 0) return undefined;
 
   let candidates = arr;
   if (requireParamId === true) {
-    candidates = candidates.filter(
-      (e) => countParamsIdOccurrences(e.body) >= 1
-    );
+    candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) >= 1);
   } else if (requireParamId === false) {
-    candidates = candidates.filter(
-      (e) => countParamsIdOccurrences(e.body) === 0
-    );
+    candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) === 0);
   }
   if (paramsIdOccurrences != null) {
-    const exact = candidates.filter(
-      (e) => countParamsIdOccurrences(e.body) === paramsIdOccurrences
-    );
+    const exact = candidates.filter((e) => countParamsIdOccurrences(e.body) === paramsIdOccurrences);
     if (exact.length) candidates = exact;
   }
   return candidates[0] || arr[0];
 }
-function selectAndRenderResponseAdv(
-  bucket,
-  status,
-  ctx,
-  { fallback, requireParamId, paramsIdOccurrences, logicalPath } = {}
-) {
+function selectAndRenderResponseAdv(bucket, status, ctx, { fallback, requireParamId, paramsIdOccurrences, logicalPath } = {}) {
   const entry = pickResponseEntryAdv(bucket, status, {
     requireParamId,
     paramsIdOccurrences,
@@ -169,9 +143,7 @@ function selectAndRenderResponseAdv(
     rendered = expandStaticPlaceholders(rendered, logicalPath);
   } else {
     const tmp = renderTemplateDeepOrdered(normalizeJsonb(raw), ctx);
-    rendered = JSON.parse(
-      expandStaticPlaceholders(JSON.stringify(tmp), logicalPath)
-    );
+    rendered = JSON.parse(expandStaticPlaceholders(JSON.stringify(tmp), logicalPath));
   }
   return { rendered, responseId: entry?.id ?? null };
 }
@@ -179,14 +151,7 @@ function selectAndRenderResponseAdv(
 // ============ Auth & Schema ============
 function pickUserIdFromRequest(req) {
   const localsUser = req.res?.locals?.user;
-  const uid =
-    req.user?.id ??
-    req.user?.user_id ??
-    localsUser?.id ??
-    localsUser?.user_id ??
-    (req.headers["x-mock-user-id"] != null
-      ? Number(req.headers["x-mock-user-id"])
-      : null);
+  const uid = req.user?.id ?? req.user?.user_id ?? localsUser?.id ?? localsUser?.user_id ?? (req.headers["x-mock-user-id"] != null ? Number(req.headers["x-mock-user-id"]) : null);
   return uid != null && Number.isFinite(Number(uid)) ? Number(uid) : null;
 }
 function requireAuth(req, res) {
@@ -200,32 +165,22 @@ function requireAuth(req, res) {
 
 function isTypeOK(expected, value) {
   if (value === undefined) return true;
-  if (expected === "number")
-    return typeof value === "number" && !Number.isNaN(value);
+  if (expected === "number") return typeof value === "number" && !Number.isNaN(value);
   // ⬇️ reject string rỗng / toàn space
-  if (expected === "string")
-    return typeof value === "string" && value.trim() !== "";
+  if (expected === "string") return typeof value === "string" && value.trim() !== "";
   if (expected === "boolean") return typeof value === "boolean";
-  if (expected === "object")
-    return value && typeof value === "object" && !Array.isArray(value);
+  if (expected === "object") return value && typeof value === "object" && !Array.isArray(value);
   if (expected === "array") return Array.isArray(value);
   return true;
 }
-function validateAndSanitizePayload(
-  schema,
-  payload,
-  { allowMissingRequired = false, rejectUnknown = true }
-) {
+function validateAndSanitizePayload(schema, payload, { allowMissingRequired = false, rejectUnknown = true }) {
   const errors = [];
   const sanitized = {};
   const schemaFields = Object.keys(schema || {});
 
   if (rejectUnknown) {
-    const unknownKeys = Object.keys(payload || {}).filter(
-      (k) => !schemaFields.includes(k) && k !== "user_id"
-    );
-    if (unknownKeys.length)
-      errors.push(`Unknown fields: ${unknownKeys.join(", ")}`);
+    const unknownKeys = Object.keys(payload || {}).filter((k) => !schemaFields.includes(k) && k !== "user_id");
+    if (unknownKeys.length) errors.push(`Unknown fields: ${unknownKeys.join(", ")}`);
   }
 
   for (const key of schemaFields) {
@@ -252,20 +207,7 @@ function validateAndSanitizePayload(
 }
 
 // ============ Logging util ============
-async function insertLogSafely(
-  req,
-  {
-    projectId,
-    originId,
-    method,
-    path,
-    status,
-    responseBody,
-    endpointResponseId = null,
-    started,
-    payload,
-  }
-) {
+async function insertLogSafely(req, { projectId, originId, method, path, status, responseBody, endpointResponseId = null, started, payload }) {
   try {
     await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
@@ -342,19 +284,13 @@ module.exports = async function statefulHandler(req, res, next) {
     // --- Fetch endpoints_ful info (origin_id, folder_id) ---
     let folderId = null;
     {
-      const efRow = await req.db.stateful.query(
-        "SELECT origin_id, folder_id FROM endpoints_ful WHERE id = $1 LIMIT 1",
-        [statefulId]
-      );
+      const efRow = await req.db.stateful.query("SELECT origin_id, folder_id FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
       if (efRow.rows[0]) {
         originId = originId || efRow.rows[0].origin_id || null;
         folderId = efRow.rows[0].folder_id || null;
       }
       if (folderId) {
-        const prj = await req.db.stateless.query(
-          "SELECT project_id, is_public FROM folders WHERE id = $1 LIMIT 1",
-          [folderId]
-        );
+        const prj = await req.db.stateless.query("SELECT project_id, is_public FROM folders WHERE id = $1 LIMIT 1", [folderId]);
         projectId = prj.rows[0]?.project_id ?? null;
         isPublic = Boolean(prj.rows[0]?.is_public);
       }
@@ -367,48 +303,29 @@ module.exports = async function statefulHandler(req, res, next) {
           .replace(/\u0000/g, "")
           .replace(/^\.+|\.+$/g, "");
       const logicalRest = String(logicalPath || "").replace(/^\/+/, "");
-      return `${sanitize(logicalRest)}.${sanitize(workspaceName)}.${sanitize(
-        projectName
-      )}`;
+      return `${sanitize(logicalRest)}.${sanitize(workspaceName)}.${sanitize(projectName)}`;
     })();
     const col = getCollection(collectionName);
     const doc = (await col.findOne({})) || {
       data_current: [],
       data_default: [],
     };
-    const current = Array.isArray(doc.data_current)
-      ? doc.data_current
-      : doc.data_current
-      ? [doc.data_current]
-      : [];
-    const defaults = Array.isArray(doc.data_default)
-      ? doc.data_default
-      : doc.data_default
-      ? [doc.data_default]
-      : [];
+    const current = Array.isArray(doc.data_current) ? doc.data_current : doc.data_current ? [doc.data_current] : [];
+    const defaults = Array.isArray(doc.data_default) ? doc.data_default : doc.data_default ? [doc.data_default] : [];
 
     // --- Endpoint schema ---
-    const { rows: schRows } = await req.db.stateful.query(
-      "SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1",
-      [statefulId]
-    );
+    const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
     const schema = normalizeJsonb(schRows?.[0]?.schema) || {};
 
     // --- Folder base_schema ---
     let baseSchema = {};
     if (folderId) {
-      const { rows: baseRows } = await req.db.stateless.query(
-        "SELECT base_schema FROM folders WHERE id = $1 LIMIT 1",
-        [folderId]
-      );
+      const { rows: baseRows } = await req.db.stateless.query("SELECT base_schema FROM folders WHERE id = $1 LIMIT 1", [folderId]);
       baseSchema = normalizeJsonb(baseRows?.[0]?.base_schema) || {};
     }
 
     // --- Responses bucket ---
-    const responsesBucket = await loadResponsesBucket(
-      req.db.stateful,
-      statefulId
-    );
+    const responsesBucket = await loadResponsesBucket(req.db.stateful, statefulId);
 
     // =================== GET ===================
     if (method === "GET") {
@@ -423,9 +340,7 @@ module.exports = async function statefulHandler(req, res, next) {
         const out = {};
         for (const k of fieldsArray) {
           if (k === "user_id") continue;
-          out[k] = Object.prototype.hasOwnProperty.call(obj || {}, k)
-            ? obj[k]
-            : null;
+          out[k] = Object.prototype.hasOwnProperty.call(obj || {}, k) ? obj[k] : null;
         }
         if (hasId && !fieldsArray.includes("id")) out.id = obj?.id ?? null;
         return out;
@@ -435,16 +350,11 @@ module.exports = async function statefulHandler(req, res, next) {
       if (isPublic) {
         currentScoped = userIdMaybe == null ? [] : current; // public, chưa login → ko lấy current
       } else {
-        currentScoped =
-          userIdMaybe == null
-            ? []
-            : current.filter((x) => Number(x?.user_id) === Number(userIdMaybe));
+        currentScoped = userIdMaybe == null ? [] : current.filter((x) => Number(x?.user_id) === Number(userIdMaybe));
       }
 
       if (hasId) {
-        const foundCurrent = currentScoped.find(
-          (x) => Number(x?.id) === idFromUrl
-        );
+        const foundCurrent = currentScoped.find((x) => Number(x?.id) === idFromUrl);
         if (foundCurrent) {
           const body = pickForGET(foundCurrent);
           await insertLogSafely(req, {
@@ -460,9 +370,7 @@ module.exports = async function statefulHandler(req, res, next) {
           });
           return res.status(200).json(body);
         }
-        const foundDefault =
-          defaults.find((x) => Number(x).id === idFromUrl) ||
-          defaults.find((x) => Number(x?.id) === idFromUrl);
+        const foundDefault = defaults.find((x) => Number(x).id === idFromUrl) || defaults.find((x) => Number(x?.id) === idFromUrl);
         if (foundDefault) {
           const body = pickForGET(foundDefault);
           await insertLogSafely(req, {
@@ -556,8 +464,7 @@ module.exports = async function statefulHandler(req, res, next) {
           {},
           {
             fallback: {
-              message:
-                "Invalid data: request does not match {path} object schema.",
+              message: "Invalid data: request does not match {path} object schema.",
             },
             logicalPath,
           }
@@ -576,19 +483,11 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(rendered);
       }
 
-      const unionKeys = Array.from(
-        new Set([
-          ...Object.keys(baseSchema || {}),
-          ...Object.keys(endpointSchema || {}),
-        ])
-      ).filter((k) => k !== "user_id");
+      const unionKeys = Array.from(new Set([...Object.keys(baseSchema || {}), ...Object.keys(endpointSchema || {})])).filter((k) => k !== "user_id");
 
       const idRule = endpointSchema?.id || {};
       let newId = payload.id;
-      if (
-        idRule?.required === true &&
-        (newId === undefined || newId === null)
-      ) {
+      if (idRule?.required === true && (newId === undefined || newId === null)) {
         const status = 400;
         const { rendered, responseId } = selectAndRenderResponseAdv(
           responsesBucket,
@@ -596,8 +495,7 @@ module.exports = async function statefulHandler(req, res, next) {
           {},
           {
             fallback: {
-              message:
-                "Invalid data: request does not match {path} object schema.",
+              message: "Invalid data: request does not match {path} object schema.",
             },
             logicalPath,
           }
@@ -615,21 +513,12 @@ module.exports = async function statefulHandler(req, res, next) {
         });
         return res.status(status).json(rendered);
       }
-      if (
-        idRule?.required === false &&
-        (newId === undefined || newId === null)
-      ) {
-        const maxId = current.reduce(
-          (m, x) => Math.max(m, Number(x?.id) || 0),
-          0
-        );
+      if (idRule?.required === false && (newId === undefined || newId === null)) {
+        const maxId = current.reduce((m, x) => Math.max(m, Number(x?.id) || 0), 0);
         newId = maxId + 1;
       }
 
-      if (
-        newId !== undefined &&
-        current.some((x) => Number(x?.id) === Number(newId))
-      ) {
+      if (newId !== undefined && current.some((x) => Number(x?.id) === Number(newId))) {
         const status = 409;
         const { rendered, responseId } = selectAndRenderResponseAdv(
           responsesBucket,
@@ -637,8 +526,7 @@ module.exports = async function statefulHandler(req, res, next) {
           { params: { id: newId } },
           {
             fallback: {
-              message:
-                "{Path} {{params.id}} conflict: {{params.id}} already exists.",
+              message: "{Path} {{params.id}} conflict: {{params.id}} already exists.",
             },
             requireParamId: true,
             paramsIdOccurrences: 1,
@@ -672,11 +560,7 @@ module.exports = async function statefulHandler(req, res, next) {
       newObj.user_id = Number(userId);
 
       const updated = [...current, newObj];
-      await col.updateOne(
-        {},
-        { $set: { data_current: updated } },
-        { upsert: true }
-      );
+      await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
 
       const status = 201;
       const { rendered, responseId } = selectAndRenderResponseAdv(
@@ -793,8 +677,7 @@ module.exports = async function statefulHandler(req, res, next) {
       }
 
       const payload = req.body || {};
-      if (Object.prototype.hasOwnProperty.call(payload, "user_id"))
-        delete payload.user_id;
+      if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
       // Đổi id → check conflict (URL id vs body id)
       const targetId = payload.id;
@@ -808,8 +691,7 @@ module.exports = async function statefulHandler(req, res, next) {
             { params: { id: idFromUrl, id_conflict: Number(targetId) } },
             {
               fallback: {
-                message:
-                  "Update id {{params.id}} conflict: {Path} id {{params.id}} in request body already exists.",
+                message: "Update id {{params.id}} conflict: {Path} id {{params.id}} in request body already exists.",
               },
               requireParamId: true,
               paramsIdOccurrences: 2,
@@ -866,11 +748,7 @@ module.exports = async function statefulHandler(req, res, next) {
       const updatedItem = { ...current[idx], ...payload, user_id: ownerId };
       const updated = current.slice();
       updated[idx] = updatedItem;
-      await col.updateOne(
-        {},
-        { $set: { data_current: updated } },
-        { upsert: true }
-      );
+      await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
 
       const status = 200;
       const { rendered, responseId } = selectAndRenderResponseAdv(
@@ -968,11 +846,7 @@ module.exports = async function statefulHandler(req, res, next) {
 
         const updated = current.slice();
         updated.splice(idx, 1);
-        await col.updateOne(
-          {},
-          { $set: { data_current: updated } },
-          { upsert: true }
-        );
+        await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
 
         const status = 200;
         const { rendered, responseId } = selectAndRenderResponseAdv(
@@ -1003,11 +877,7 @@ module.exports = async function statefulHandler(req, res, next) {
       }
 
       const keep = current.filter((x) => Number(x?.user_id) !== Number(userId));
-      await col.updateOne(
-        {},
-        { $set: { data_current: keep } },
-        { upsert: true }
-      );
+      await col.updateOne({}, { $set: { data_current: keep } }, { upsert: true });
 
       const status = 200;
       const { rendered, responseId } = selectAndRenderResponseAdv(

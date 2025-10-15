@@ -13,9 +13,13 @@ const cacheKeyOf = (m, p) => `${m}:${p}`;
 const cacheGet = (k) => {
   const v = CACHE.get(k);
   if (!v) return null;
-  if (Date.now() - v.t > CACHE_TTL_MS) { CACHE.delete(k); return null; }
+  if (Date.now() - v.t > CACHE_TTL_MS) {
+    CACHE.delete(k);
+    return null;
+  }
   // bump LRU
-  CACHE.delete(k); CACHE.set(k, v);
+  CACHE.delete(k);
+  CACHE.set(k, v);
   return v.data;
 };
 const cacheSet = (k, data) => {
@@ -31,8 +35,10 @@ function normalizePath(raw) {
   if (!raw) return "/";
   // express đã loại query, nhưng cứ chắc:
   let p = raw.split("?")[0];
-  try { p = decodeURIComponent(p); } catch {}
-  p = p.replace(/\/{2,}/g, "/");       // nén nhiều slash
+  try {
+    p = decodeURIComponent(p);
+  } catch {}
+  p = p.replace(/\/{2,}/g, "/"); // nén nhiều slash
   if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1); // bỏ slash cuối (trừ "/")
   if (!p.startsWith("/")) p = "/" + p;
   return p || "/";
@@ -71,9 +77,7 @@ router.use(async (req, res, next) => {
 
     // 1) Tìm endpoint ở DB stateless theo method + path (ưu tiên exact; nếu không, base khi có id)
     //    => Đây là "registry" quyết định chế độ.
-    const candidates = (idCandidate !== null && baseCandidate !== normPath)
-      ? [normPath, baseCandidate]
-      : [normPath];
+    const candidates = idCandidate !== null && baseCandidate !== normPath ? [normPath, baseCandidate] : [normPath];
 
     // Cache theo path exact để các lần sau không hit DB
     const ck = cacheKeyOf(method, normPath);
@@ -97,16 +101,14 @@ router.use(async (req, res, next) => {
     }
 
     // Ưu tiên exact match, fallback base
-    const matchedStateless =
-      epRows.find(r => normalizePath(r.path) === normPath) ||
-      epRows.find(r => normalizePath(r.path) === baseCandidate);
+    const matchedStateless = epRows.find((r) => normalizePath(r.path) === normPath) || epRows.find((r) => normalizePath(r.path) === baseCandidate);
 
     if (!matchedStateless) {
       return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
     }
 
     const matchedPath = normalizePath(matchedStateless.path);
-    const idInUrl = (matchedPath !== normPath) ? idCandidate : null;
+    const idInUrl = matchedPath !== normPath ? idCandidate : null;
 
     // 2) Quyết định stateful/stateless dựa trên cờ
     if (matchedStateless.is_stateful === true) {
@@ -135,7 +137,7 @@ router.use(async (req, res, next) => {
         // Bật stateful nhưng chưa provision xong
         return res.status(500).json({
           message: "Stateful endpoint is enabled but not provisioned",
-          detail: { method, path: matchedPath, origin_id: matchedStateless.id }
+          detail: { method, path: matchedPath, origin_id: matchedStateless.id },
         });
       }
 
@@ -143,7 +145,7 @@ router.use(async (req, res, next) => {
         // Endpoint stateful đang tắt
         return res.status(404).json({
           message: "Stateful endpoint is disabled",
-          detail: { method, path: matchedPath }
+          detail: { method, path: matchedPath },
         });
       }
 
@@ -154,7 +156,7 @@ router.use(async (req, res, next) => {
         basePath: matchedPath,
         idInUrl,
         statelessId: matchedStateless.id,
-        statefulId: st.rows[0].id
+        statefulId: st.rows[0].id,
       };
       req.universal = meta;
       cacheSet(ck, { mode: "stateful", meta });
@@ -165,7 +167,7 @@ router.use(async (req, res, next) => {
     if (matchedStateless.is_active === false) {
       return res.status(404).json({
         message: "Stateless endpoint is disabled",
-        detail: { method, path: matchedPath }
+        detail: { method, path: matchedPath },
       });
     }
 
@@ -175,12 +177,11 @@ router.use(async (req, res, next) => {
       rawPath: normPath,
       basePath: matchedPath,
       idInUrl,
-      statelessId: matchedStateless.id
+      statelessId: matchedStateless.id,
     };
     req.universal = meta;
     cacheSet(ck, { mode: "stateless", meta });
     return runHandler(statelessHandler, req, res, next);
-
   } catch (err) {
     console.error("❌ universalHandler error:", err);
     res.status(500).json({ error: "Internal Server Error", message: err.message });

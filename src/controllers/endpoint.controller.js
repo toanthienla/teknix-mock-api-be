@@ -57,21 +57,14 @@ async function listEndpoints(req, res) {
     let endpoints = result.data;
 
     // Bước 2: Tìm các ID của endpoint cần lấy dữ liệu stateful
-    const statefulIds = endpoints
-      .filter((ep) => ep.is_stateful === true)
-      .map((ep) => ep.id);
+    const statefulIds = endpoints.filter((ep) => ep.is_stateful === true).map((ep) => ep.id);
 
     // Bước 3: Nếu có, lấy tất cả dữ liệu stateful trong MỘT lần gọi
     if (statefulIds.length > 0) {
-      const { rows: statefulEndpoints } = await req.db.stateful.query(
-        `SELECT * FROM endpoints_ful WHERE origin_id = ANY($1::int[])`,
-        [statefulIds]
-      );
+      const { rows: statefulEndpoints } = await req.db.stateful.query(`SELECT * FROM endpoints_ful WHERE origin_id = ANY($1::int[])`, [statefulIds]);
 
       // Tạo một map để tra cứu nhanh
-      const statefulMap = new Map(
-        statefulEndpoints.map((sep) => [sep.origin_id, sep])
-      );
+      const statefulMap = new Map(statefulEndpoints.map((sep) => [sep.origin_id, sep]));
 
       // Bước 4: Hợp nhất dữ liệu
       endpoints = endpoints.map((ep) => {
@@ -103,19 +96,13 @@ async function getEndpointById(req, res) {
     // Bước 2: Kiểm tra cờ is_stateful
     if (statelessEndpoint.is_stateful === true) {
       // Nếu true, tìm bản ghi stateful tương ứng bằng origin_id
-      const statefulEndpoint = await statefulSvc.findByOriginId(
-        statelessEndpoint.id
-      );
+      const statefulEndpoint = await statefulSvc.findByOriginId(statelessEndpoint.id);
       if (!statefulEndpoint) {
-        return error(
-          res,
-          404,
-          `Stateful data for endpoint ${id} not found, but it is marked as stateful.`
-        );
+        return error(res, 404, `Stateful data for endpoint ${id} not found, but it is marked as stateful.`);
       }
       // Trả về với id = origin_id để thống nhất với list
       return success(res, presentStateful(statefulEndpoint));
-    }   
+    }
 
     // Bước 3: Nếu không, trả về dữ liệu stateless như bình thường
     return success(res, statelessEndpoint);
@@ -131,12 +118,9 @@ async function createEndpoint(req, res) {
     const errors = [];
 
     // Validate required fields
-    if (!folder_id)
-      errors.push({ field: "folder_id", message: "Folder ID is required" });
-    if (!name)
-      errors.push({ field: "name", message: "Endpoint name is required" });
-    if (!method)
-      errors.push({ field: "method", message: "HTTP method is required" });
+    if (!folder_id) errors.push({ field: "folder_id", message: "Folder ID is required" });
+    if (!name) errors.push({ field: "name", message: "Endpoint name is required" });
+    if (!method) errors.push({ field: "method", message: "HTTP method is required" });
     if (!path) errors.push({ field: "path", message: "Path is required" });
 
     if (errors.length > 0) {
@@ -159,25 +143,20 @@ async function createEndpoint(req, res) {
 }
 
 // Update endpoint
-// Update endpoint controller 
+// Update endpoint controller
 async function updateEndpoint(req, res) {
   try {
     const { id } = req.params;
     const payload = { ...req.body };
 
     // 🔁 Normalize: nếu client gửi { fields:[...] } -> chuyển thành { schema:{ fields:[...] } }
-    if (req.method === 'PUT' && Array.isArray(payload.fields) && Object.keys(payload).length === 1) {
+    if (req.method === "PUT" && Array.isArray(payload.fields) && Object.keys(payload).length === 1) {
       payload.schema = { fields: payload.fields };
       delete payload.fields;
     }
 
     // --- Cho phép payload chỉ có { schema } (đã normalize) ---
-    const result = await svc.updateEndpoint(
-      req.db.stateless,
-      req.db.stateful,
-      id,
-      payload
-    );
+    const result = await svc.updateEndpoint(req.db.stateless, req.db.stateful, id, payload);
 
     if (!result) {
       return res.status(404).json({
@@ -192,9 +171,9 @@ async function updateEndpoint(req, res) {
 
     // Giữ thứ tự keys theo payload.schema (nếu có)
     let data = result.data;
-    if (payload && payload.schema && typeof payload.schema === 'object' && !Array.isArray(payload.schema)) {
+    if (payload && payload.schema && typeof payload.schema === "object" && !Array.isArray(payload.schema)) {
       const order = Object.keys(payload.schema);
-      const src = data?.schema && typeof data.schema === 'object' ? data.schema : {};
+      const src = data?.schema && typeof data.schema === "object" ? data.schema : {};
       const reordered = {};
       for (const k of order) if (Object.prototype.hasOwnProperty.call(src, k)) reordered[k] = src[k];
       for (const k of Object.keys(src)) if (!Object.prototype.hasOwnProperty.call(reordered, k)) reordered[k] = src[k];
@@ -210,8 +189,6 @@ async function updateEndpoint(req, res) {
   }
 }
 
-
-
 // Delete endpoint (giữ log: NULL hoá FK trước, rồi ghi log DELETE)
 // Bước 1: NULL hoá endpoint_id và endpoint_response_id thuộc endpoint trong bảng log
 // Bước 2: Xoá endpoint
@@ -225,17 +202,7 @@ async function deleteEndpoint(req, res) {
     const urlPath = req.originalUrl || req.path || "";
     const headersReq = req.headers || {};
     const bodyReq = req.body || {};
-    const ip = (
-      req.headers["x-forwarded-for"] ||
-      req.connection?.remoteAddress ||
-      req.socket?.remoteAddress ||
-      req.ip ||
-      ""
-    )
-      .toString()
-      .split(",")[0]
-      .trim()
-      .substring(0, 45);
+    const ip = (req.headers["x-forwarded-for"] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || "").toString().split(",")[0].trim().substring(0, 45);
 
     // Lấy endpoint để suy ra project_id trước khi xoá
     const current = await svc.getEndpointById(req.db.stateless, eid);

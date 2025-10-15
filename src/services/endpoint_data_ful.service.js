@@ -53,14 +53,9 @@ async function upsertDefaultAndCurrentByPath(path, dataDefault = []) {
   const col = getCollection(colName);
 
   // Ép kiểu về array nếu dev truyền object lẻ
-  const payload =
-    Array.isArray(dataDefault) ? dataDefault : [dataDefault];
+  const payload = Array.isArray(dataDefault) ? dataDefault : [dataDefault];
 
-  await col.updateOne(
-    {},
-    { $set: { data_default: payload, data_current: payload } },
-    { upsert: true }
-  );
+  await col.updateOne({}, { $set: { data_default: payload, data_current: payload } }, { upsert: true });
 
   return await col.findOne({});
 }
@@ -98,11 +93,9 @@ async function pushToCurrent(path, item) {
 async function updateInCurrent(path, matchFn, updateFn) {
   const colName = toCollectionName(path);
   const col = getCollection(colName);
-  const doc = await col.findOne({}) || { data_current: [] };
+  const doc = (await col.findOne({})) || { data_current: [] };
 
-  const updated = Array.from(doc.data_current || []).map((it) =>
-    matchFn(it) ? updateFn({ ...it }) : it
-  );
+  const updated = Array.from(doc.data_current || []).map((it) => (matchFn(it) ? updateFn({ ...it }) : it));
 
   await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
   return await col.findOne({});
@@ -117,7 +110,7 @@ async function updateInCurrent(path, matchFn, updateFn) {
 async function removeFromCurrent(path, matchFn) {
   const colName = toCollectionName(path);
   const col = getCollection(colName);
-  const doc = await col.findOne({}) || { data_current: [] };
+  const doc = (await col.findOne({})) || { data_current: [] };
 
   const filtered = Array.from(doc.data_current || []).filter((it) => !matchFn(it));
 
@@ -138,14 +131,13 @@ async function dropCollectionByPath(path) {
   // Kiểm tra tồn tại trước khi drop để idempotent
   const exists = (await db.listCollections({ name }).toArray()).length > 0;
   if (!exists) {
-    return { dropped: false, name, reason: 'not_exists' };
+    return { dropped: false, name, reason: "not_exists" };
   }
 
   // Dùng db.dropCollection để đảm bảo drop theo tên đúng
   await db.dropCollection(name);
   return { dropped: true, name };
 }
-
 
 module.exports = {
   findByPath,

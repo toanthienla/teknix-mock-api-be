@@ -1,6 +1,6 @@
-const logSvc = require('./project_request_log.service');
-const { getCollection2  } = require("../config/db");
-const endpointsFulSvc = require('./endpoints_ful.service');
+const logSvc = require("./project_request_log.service");
+const { getCollection2 } = require("../config/db");
+const endpointsFulSvc = require("./endpoints_ful.service");
 
 // Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
 const NAME_RE = /^[A-Za-z0-9_]+$/;
@@ -8,10 +8,12 @@ function validateNameOrError(name) {
   if (typeof name !== "string" || !NAME_RE.test(name)) {
     return {
       success: false,
-      errors: [{
-        field: "name",
-        message: "Tên chỉ được chứa chữ cái tiếng Anh, số và dấu gạch dưới (_). Không được có dấu cách, dấu hoặc ký tự đặc biệt."
-      }]
+      errors: [
+        {
+          field: "name",
+          message: "Tên chỉ được chứa chữ cái tiếng Anh, số và dấu gạch dưới (_). Không được có dấu cách, dấu hoặc ký tự đặc biệt.",
+        },
+      ],
     };
   }
   return null;
@@ -26,11 +28,11 @@ async function getFolders(db, project_id) {
 
   // Nếu có project_id, thêm điều kiện WHERE để lọc
   if (project_id) {
-    query += ' WHERE project_id = $1';
+    query += " WHERE project_id = $1";
     params.push(project_id);
   }
 
-  query += ' ORDER BY id ASC';
+  query += " ORDER BY id ASC";
 
   const { rows } = await db.query(query, params);
   return { success: true, data: rows };
@@ -63,7 +65,7 @@ async function createFolder(db, { project_id, name, description, is_public }) {
   if (existRows.length > 0) {
     return {
       success: false,
-      errors: [{ field: 'name', message: 'Folder name already exists in this project' }],
+      errors: [{ field: "name", message: "Folder name already exists in this project" }],
     };
   }
 
@@ -86,12 +88,8 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
     if (invalid) return invalid;
   }
 
-
   // 🧱 1️⃣ Kiểm tra folder có tồn tại không
-  const { rows: currentRows } = await dbStateless.query(
-    'SELECT * FROM folders WHERE id = $1',
-    [id]
-  );
+  const { rows: currentRows } = await dbStateless.query("SELECT * FROM folders WHERE id = $1", [id]);
   if (currentRows.length === 0) {
     return { success: false, notFound: true };
   }
@@ -121,17 +119,11 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
     const updatedFolder = rows[0];
 
     // 🔍 3️⃣ Sau khi update, kiểm tra xem có endpoint nào đã được chuyển stateful chưa
-    const { rows: endpoints } = await dbStateless.query(
-      'SELECT id, path FROM endpoints WHERE folder_id = $1',
-      [id]
-    );
+    const { rows: endpoints } = await dbStateless.query("SELECT id, path FROM endpoints WHERE folder_id = $1", [id]);
 
     if (endpoints.length > 0) {
-      const endpointIds = endpoints.map(e => e.id);
-      const { rows: used } = await dbStateful.query(
-        'SELECT id, origin_id FROM endpoints_ful WHERE origin_id = ANY($1)',
-        [endpointIds]
-      );
+      const endpointIds = endpoints.map((e) => e.id);
+      const { rows: used } = await dbStateful.query("SELECT id, origin_id FROM endpoints_ful WHERE origin_id = ANY($1)", [endpointIds]);
 
       // ⚙️ Nếu có endpoint stateful → gọi reset Mongo collections
       if (used.length > 0) {
@@ -148,14 +140,11 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
 
   // 🧱 4️⃣ Nếu không có base_schema → giữ nguyên logic cũ
   if (name) {
-    const { rows: existRows } = await dbStateless.query(
-      'SELECT id FROM folders WHERE project_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3',
-      [folder.project_id, name, id]
-    );
+    const { rows: existRows } = await dbStateless.query("SELECT id FROM folders WHERE project_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3", [folder.project_id, name, id]);
     if (existRows.length > 0) {
       return {
         success: false,
-        errors: [{ field: 'name', message: 'Folder name already exists in this project' }],
+        errors: [{ field: "name", message: "Folder name already exists in this project" }],
       };
     }
   }
@@ -204,9 +193,7 @@ async function resetMongoCollectionsByFolder(folderId, dbStateless) {
 
     let fields = [];
     try {
-      const schema = typeof ep.base_schema === "string"
-        ? JSON.parse(ep.base_schema)
-        : ep.base_schema;
+      const schema = typeof ep.base_schema === "string" ? JSON.parse(ep.base_schema) : ep.base_schema;
 
       if (schema && typeof schema === "object") {
         // chấp nhận cả dạng có "properties" hoặc không
@@ -225,11 +212,7 @@ async function resetMongoCollectionsByFolder(folderId, dbStateless) {
     }
 
     // Ghi vào Mongo (upsert)
-    await collection.updateOne(
-      {},
-      { $set: { data_default: [baseDoc], data_current: [baseDoc] } },
-      { upsert: true }
-    );
+    await collection.updateOne({}, { $set: { data_default: [baseDoc], data_current: [baseDoc] } }, { upsert: true });
 
     console.log(`✅ Reset collection "${ep.path}.${ep.workspace_name}.${ep.project_name}" thành công`);
   }
@@ -239,34 +222,31 @@ async function resetMongoCollectionsByFolder(folderId, dbStateless) {
 async function deleteFolderAndHandleLogs(db, folderId) {
   const client = await db.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
-    const { rows: folderRows } = await client.query('SELECT id FROM folders WHERE id = $1', [folderId]);
+    const { rows: folderRows } = await client.query("SELECT id FROM folders WHERE id = $1", [folderId]);
     if (folderRows.length === 0) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       return { success: false, notFound: true };
     }
 
-     // Gather stateless endpoint IDs in this folder BEFORE delete (for stateful cleanup)
-    const { rows: epRows } = await client.query(
-      `SELECT e.id FROM endpoints e WHERE e.folder_id = $1`,
-      [folderId]
-    );
-    const endpointIds = epRows.map(r => r.id);
+    // Gather stateless endpoint IDs in this folder BEFORE delete (for stateful cleanup)
+    const { rows: epRows } = await client.query(`SELECT e.id FROM endpoints e WHERE e.folder_id = $1`, [folderId]);
+    const endpointIds = epRows.map((r) => r.id);
 
     // Nullify logs for this folder (param order: client first)
     await logSvc.nullifyFolderTree(client, folderId);
 
-    await client.query('DELETE FROM folders WHERE id = $1', [folderId]);
+    await client.query("DELETE FROM folders WHERE id = $1", [folderId]);
 
-    await client.query('COMMIT');
-        // Cleanup STATEFUL side (PG + Mongo) outside stateless tx
+    await client.query("COMMIT");
+    // Cleanup STATEFUL side (PG + Mongo) outside stateless tx
     if (endpointIds.length > 0) {
       await endpointsFulSvc.deleteByOriginIds(endpointIds);
     }
-   return { success: true, data: { id: folderId }, affectedEndpoints: endpointIds.length };
+    return { success: true, data: { id: folderId }, affectedEndpoints: endpointIds.length };
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw err;
   } finally {
     client.release();
@@ -337,7 +317,7 @@ module.exports = {
   getFolderById,
   createFolder,
   updateFolder,
-  deleteFolderAndHandleLogs
+  deleteFolderAndHandleLogs,
   // getFolderOwnerById,
   // checkFolderOwner,
 };

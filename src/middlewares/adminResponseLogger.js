@@ -1,28 +1,26 @@
-const endpointResponseSvc = require('../services/endpoint_response.service');
-const endpointSvc = require('../services/endpoint.service');
-const logSvc = require('../services/project_request_log.service');
+const endpointResponseSvc = require("../services/endpoint_response.service");
+const endpointSvc = require("../services/endpoint.service");
+const logSvc = require("../services/project_request_log.service");
 
 function getClientIp(req) {
-  const raw = (req.headers['x-forwarded-for'] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || '').toString();
-  const first = raw.split(',')[0].trim();
+  const raw = (req.headers["x-forwarded-for"] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || "").toString();
+  const first = raw.split(",")[0].trim();
   return first.substring(0, 45);
 }
 
 // Middleware bọc res.json/res.send để BẮT response trả về và GHI LOG vào project_request_logs
 // scope: 'endpoint_responses' — middleware này biết cách SUY LUẬN id cho các route /endpoint_responses
 // Lưu ý: Nếu bảng project_request_logs CHƯA TẠO, việc ghi log sẽ lỗi và bị nuốt (không ảnh hưởng response)
-function adminResponseLogger(scope = 'endpoint_responses') {
+function adminResponseLogger(scope = "endpoint_responses") {
   return (req, res, next) => {
     // Chỉ log cho scope mong muốn; dựng full path kể cả khi có prefix (vd: /api)
-    const urlPath = (req.originalUrl)
-      || (req.baseUrl ? (req.baseUrl + (req.path || '')) : (req.path || ''))
-      || '';
-    if (scope === 'endpoint_responses') {
-      const inScope = urlPath.includes('/endpoint_responses');
+    const urlPath = req.originalUrl || (req.baseUrl ? req.baseUrl + (req.path || "") : req.path || "") || "";
+    if (scope === "endpoint_responses") {
+      const inScope = urlPath.includes("/endpoint_responses");
       if (!inScope) return next();
       // Tránh GHI LOG TRÙNG cho route /endpoint_responses/priority
       // Vì controller updatePriorities đã tự ghi log N dòng (mỗi item 1 dòng)
-      if (urlPath.includes('/endpoint_responses/priority')) {
+      if (urlPath.includes("/endpoint_responses/priority")) {
         return next();
       }
 
@@ -30,15 +28,17 @@ function adminResponseLogger(scope = 'endpoint_responses') {
       //   /endpoint_responses?endpoint_id=...
       // vì thường trả về mảng lớn → gây nhiễu log với N dòng.
       try {
-        const method = (req.method || '').toUpperCase();
-        const pathOnly = req.path || (urlPath.split('?')[0] || ''); // path không gồm query
+        const method = (req.method || "").toUpperCase();
+        const pathOnly = req.path || urlPath.split("?")[0] || ""; // path không gồm query
         const isListPath = /\/endpoint_responses\/?$/.test(pathOnly);
         const hasIdInPath = /\/endpoint_responses\/\d+(?:\/|$)/.test(pathOnly);
-        const hasEndpointIdQuery = req.query && typeof req.query.endpoint_id !== 'undefined' && `${req.query.endpoint_id}` !== '';
-        if (method === 'GET' && isListPath && !hasIdInPath && hasEndpointIdQuery) {
+        const hasEndpointIdQuery = req.query && typeof req.query.endpoint_id !== "undefined" && `${req.query.endpoint_id}` !== "";
+        if (method === "GET" && isListPath && !hasIdInPath && hasEndpointIdQuery) {
           return next(); // không gắn hook json/send → không ghi log
         }
-      } catch (_) { /* noop */ }
+      } catch (_) {
+        /* noop */
+      }
     }
 
     const started = Date.now();
@@ -57,7 +57,7 @@ function adminResponseLogger(scope = 'endpoint_responses') {
         let idParam = req.params?.id ? parseInt(req.params.id, 10) : null;
         // Nếu middleware đặt trước router nên req.params có thể trống: thử bắt id từ đường dẫn
         if (!idParam || Number.isNaN(idParam)) {
-          const m = (urlPath || '').match(/\/endpoint_responses\/(\d+)(?:\b|\/|\?|#|$)/);
+          const m = (urlPath || "").match(/\/endpoint_responses\/(\d+)(?:\b|\/|\?|#|$)/);
           if (m && m[1]) {
             idParam = parseInt(m[1], 10);
           }
@@ -97,7 +97,7 @@ function adminResponseLogger(scope = 'endpoint_responses') {
 
         // Ensure response_body is JSON-friendly object/array (JSONB)
         let response_body = payload;
-        if (typeof response_body === 'string') {
+        if (typeof response_body === "string") {
           try {
             response_body = JSON.parse(response_body);
           } catch {
@@ -111,7 +111,7 @@ function adminResponseLogger(scope = 'endpoint_responses') {
             project_id: project_id || null,
             endpoint_id: endpoint_id || null,
             endpoint_response_id: endpoint_response_id || null,
-            request_method: req.method?.toUpperCase?.() || '',
+            request_method: req.method?.toUpperCase?.() || "",
             request_path: urlPath,
             request_headers: headersReq,
             request_body: bodyReq,
@@ -128,8 +128,8 @@ function adminResponseLogger(scope = 'endpoint_responses') {
           const projectCache = new Map(); // endpoint_id -> project_id
           const tasks = response_body.map(async (item) => {
             // item có thể là object hoặc primitive
-            let perERId = (item && typeof item === 'object') ? (item.id ?? baseEndpointResponseId) : baseEndpointResponseId;
-            let perEndpointId = (item && typeof item === 'object') ? (item.endpoint_id ?? baseEndpointId) : baseEndpointId;
+            let perERId = item && typeof item === "object" ? item.id ?? baseEndpointResponseId : baseEndpointResponseId;
+            let perEndpointId = item && typeof item === "object" ? item.endpoint_id ?? baseEndpointId : baseEndpointId;
             let perProjectId = baseProjectId;
 
             // Nếu chưa có project_id mà có endpoint_id → tra cứu để điền project_id
@@ -147,7 +147,7 @@ function adminResponseLogger(scope = 'endpoint_responses') {
               }
             }
 
-            const rb = (item && typeof item === 'object') ? item : { value: item };
+            const rb = item && typeof item === "object" ? item : { value: item };
             await insertOne({ project_id: perProjectId, endpoint_id: perEndpointId, endpoint_response_id: perERId, response_body: rb });
           });
           await Promise.all(tasks);
@@ -157,8 +157,8 @@ function adminResponseLogger(scope = 'endpoint_responses') {
         }
       } catch (e) {
         // Không chặn response khi ghi log lỗi; in cảnh báo ở môi trường dev để dễ debug
-        if (process.env.NODE_ENV !== 'production') {
-          console.warn('[adminResponseLogger] Ghi log thất bại:', e?.message || e);
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[adminResponseLogger] Ghi log thất bại:", e?.message || e);
         }
       }
     }

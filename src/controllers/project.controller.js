@@ -1,5 +1,5 @@
-const svc = require('../services/project.service');
-const { success, error } = require('../utils/response');
+const svc = require("../services/project.service");
+const { success, error } = require("../utils/response");
 
 // List all projects (optionally filter by workspace_id)
 async function listProjects(req, res) {
@@ -16,7 +16,7 @@ async function getProjectById(req, res) {
   try {
     const result = await svc.getProjectById(req.db.stateless, req.params.id);
     if (!result.data) {
-      return error(res, 404, 'Project not found');
+      return error(res, 404, "Project not found");
     }
     return success(res, result.data);
   } catch (err) {
@@ -42,7 +42,7 @@ async function updateProject(req, res) {
   try {
     const result = await svc.updateProject(req.db.stateless, req.params.id, req.body);
     if (result.notFound) {
-      return error(res, 404, 'Project not found');
+      return error(res, 404, "Project not found");
     }
     if (result.success === false) {
       return res.status(400).json(result);
@@ -54,13 +54,13 @@ async function updateProject(req, res) {
 }
 
 // Delete project (KHÔNG ghi log xoá; chỉ NULL hoá các tham chiếu trong bảng log để tránh lỗi FK)
-const logSvc = require('../services/project_request_log.service');
+const logSvc = require("../services/project_request_log.service");
 async function deleteProject(req, res) {
   try {
     const { id } = req.params;
     const result = await svc.deleteProjectAndHandleLogs(req.db.stateless, parseInt(id, 10));
     if (result.notFound) {
-      return error(res, 404, 'Project not found');
+      return error(res, 404, "Project not found");
     }
     return success(res, { message: `Project with ID: ${id} has been deleted.` });
   } catch (err) {
@@ -73,5 +73,5 @@ module.exports = {
   getProjectById,
   createProject,
   updateProject,
-  deleteProject
+  deleteProject,
 };

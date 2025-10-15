@@ -1,6 +1,6 @@
 //const db = require('../config/db');
-const logSvc = require('./project_request_log.service');
-const endpointsFulSvc = require('./endpoints_ful.service');
+const logSvc = require("./project_request_log.service");
+const endpointsFulSvc = require("./endpoints_ful.service");
 
 // Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
 const NAME_RE = /^[A-Za-z0-9_]+$/;
@@ -8,19 +8,19 @@ function validateNameOrError(name) {
   if (typeof name !== "string" || !NAME_RE.test(name)) {
     return {
       success: false,
-      errors: [{
-        field: "name",
-        message: "Tên chỉ được chứa chữ cái tiếng Anh, số và dấu gạch dưới (_). Không được có dấu cách, dấu hoặc ký tự đặc biệt."
-      }]
+      errors: [
+        {
+          field: "name",
+          message: "Tên chỉ được chứa chữ cái tiếng Anh, số và dấu gạch dưới (_). Không được có dấu cách, dấu hoặc ký tự đặc biệt.",
+        },
+      ],
     };
   }
   return null;
 }
 // Get all workspaces
 async function getAllWorkspaces(db) {
-  const { rows } = await db.query(
-    "SELECT * FROM workspaces ORDER BY created_at DESC"
-  );
+  const { rows } = await db.query("SELECT * FROM workspaces ORDER BY created_at DESC");
   // Luôn trả về cấu trúc nhất quán
   return { success: true, data: rows };
 }
@@ -38,10 +38,7 @@ async function createWorkspace(db, { name }) {
   // Validate format tên
   const invalid = validateNameOrError(name);
   if (invalid) return invalid;
-  const { rows: existRows } = await db.query(
-    "SELECT id FROM workspaces WHERE LOWER(name)=LOWER($1)",
-    [name]
-  );
+  const { rows: existRows } = await db.query("SELECT id FROM workspaces WHERE LOWER(name)=LOWER($1)", [name]);
 
   if (existRows.length > 0) {
     return {
@@ -50,10 +47,7 @@ async function createWorkspace(db, { name }) {
     };
   }
 
-  const { rows } = await db.query(
-    "INSERT INTO workspaces(name) VALUES($1) RETURNING *",
-    [name]
-  );
+  const { rows } = await db.query("INSERT INTO workspaces(name) VALUES($1) RETURNING *", [name]);
   return { success: true, data: rows[0] };
 }
 
@@ -62,44 +56,34 @@ async function updateWorkspace(db, id, { name }) {
   // Validate nếu client gửi name
   if (name != null) {
     const invalid = validateNameOrError(name);
-   if (invalid) return invalid;
+    if (invalid) return invalid;
   }
   // Lấy workspace hiện tại để kiểm tra tồn tại
-  const { rows: currentRows } = await db.query('SELECT * FROM workspaces WHERE id=$1', [id]);
+  const { rows: currentRows } = await db.query("SELECT * FROM workspaces WHERE id=$1", [id]);
   if (currentRows.length === 0) {
     return { success: false, notFound: true }; // Thêm cờ notFound để controller biết trả 404
   }
 
   // Kiểm tra tên trùng lặp
-  const { rows: existRows } = await db.query(
-    'SELECT id FROM workspaces WHERE LOWER(name)=LOWER($1) AND id<>$2',
-    [name, id]
-  );
+  const { rows: existRows } = await db.query("SELECT id FROM workspaces WHERE LOWER(name)=LOWER($1) AND id<>$2", [name, id]);
 
   if (existRows.length > 0) {
     return {
       success: false,
-      errors: [{ field: 'name', message: 'Workspace already exists' }]
+      errors: [{ field: "name", message: "Workspace already exists" }],
     };
   }
 
-  const { rows } = await db.query(
-    'UPDATE workspaces SET name=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
-    [name, id]
-  );
+  const { rows } = await db.query("UPDATE workspaces SET name=$1, updated_at=NOW() WHERE id=$2 RETURNING *", [name, id]);
 
   return { success: true, data: rows[0] };
 }
 
-
 // Delete workspace
 async function deleteWorkspace(db, id) {
-  const { rows } = await db.query(
-    "DELETE FROM workspaces WHERE id=$1 RETURNING id",
-    [id]
-  );
+  const { rows } = await db.query("DELETE FROM workspaces WHERE id=$1 RETURNING id", [id]);
   if (rows.length === 0) {
-     return { success: false, notFound: true };
+    return { success: false, notFound: true };
   }
   return { success: true, data: rows[0] };
 }
@@ -109,12 +93,12 @@ async function deleteWorkspaceAndHandleLogs(db, workspaceId) {
   const client = await db.connect(); // Lấy client từ pool để dùng transaction
 
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     // Bước 1: Kiểm tra workspace có tồn tại không
-    const { rows: workspaceRows } = await client.query('SELECT id FROM workspaces WHERE id = $1', [workspaceId]);
+    const { rows: workspaceRows } = await client.query("SELECT id FROM workspaces WHERE id = $1", [workspaceId]);
     if (workspaceRows.length === 0) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       return { success: false, notFound: true };
     }
 
@@ -129,22 +113,22 @@ async function deleteWorkspaceAndHandleLogs(db, workspaceId) {
         WHERE p.workspace_id = $1`,
       [workspaceId]
     );
-    const endpointIds = epRows.map(r => r.id);
+    const endpointIds = epRows.map((r) => r.id);
 
     // Nullify logs first
     await logSvc.nullifyWorkspaceTree(client, workspaceId);
 
     // Bước 3: Xóa workspace
-    await client.query('DELETE FROM workspaces WHERE id = $1', [workspaceId]);
+    await client.query("DELETE FROM workspaces WHERE id = $1", [workspaceId]);
 
-    await client.query('COMMIT'); // Hoàn tất transaction
+    await client.query("COMMIT"); // Hoàn tất transaction
     // Cleanup STATEFUL side (PG + Mongo) outside stateless tx
     if (endpointIds.length > 0) {
       await endpointsFulSvc.deleteByOriginIds(endpointIds);
     }
     return { success: true, data: { id: workspaceId }, affectedEndpoints: endpointIds.length };
   } catch (err) {
-    await client.query('ROLLBACK'); // Hoàn tác nếu có lỗi
+    await client.query("ROLLBACK"); // Hoàn tác nếu có lỗi
     console.error(`Transaction failed for deleting workspace ${workspaceId}:`, err);
     throw err; // Ném lỗi để controller bắt và trả về 500
   } finally {

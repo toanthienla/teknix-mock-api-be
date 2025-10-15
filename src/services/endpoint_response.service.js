@@ -43,18 +43,7 @@ async function getById(dbPool, id) {
 //  - Đảm bảo chỉ 1 response mặc định/endpoint: nếu tạo mới default → unset các default khác
 //  - priority tự động = MAX(priority) + 1 (bắt đầu từ 1)
 // Trả về: response vừa tạo (đầy đủ trường)
-async function create(
-  dbPool,
-  {
-    endpoint_id,
-    name,
-    status_code,
-    response_body = {},
-    condition = {},
-    is_default = false,
-    delay_ms = 0,
-  }
-) {
+async function create(dbPool, { endpoint_id, name, status_code, response_body = {}, condition = {}, is_default = false, delay_ms = 0 }) {
   // Determine if this is the first response for the endpoint and the next priority
   const { rows: stats } = await dbPool.query(
     `SELECT COUNT(*)::int AS total, COALESCE(MAX(priority), 0)::int AS max_priority
@@ -68,26 +57,14 @@ async function create(
 
   // Ensure only one default per endpoint
   if (willBeDefault) {
-    await dbPool.query(
-      "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1",
-      [endpoint_id]
-    );
+    await dbPool.query("UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1", [endpoint_id]);
   }
 
   const { rows } = await dbPool.query(
     `INSERT INTO endpoint_responses (endpoint_id, name, status_code, response_body, condition, priority, is_default, delay_ms)
      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 0))
      RETURNING id, endpoint_id, name, status_code, response_body, condition, priority, is_default, delay_ms, created_at, updated_at`,
-    [
-      endpoint_id,
-      name,
-      status_code,
-      response_body,
-      condition,
-      nextPriority,
-      willBeDefault,
-      delay_ms,
-    ]
+    [endpoint_id, name, status_code, response_body, condition, nextPriority, willBeDefault, delay_ms]
   );
   return rows[0];
 }
@@ -99,21 +76,7 @@ async function create(
 //  - Không thay đổi priority ở API này (chỉ update dữ liệu)
 //  - Nếu proxy_url/proxy_method null → xóa cấu hình proxy
 // Trả về: response sau khi cập nhật hoặc null nếu không tồn tại
-async function update(
-  dbPool,
-  dbPoolfull,
-  id,
-  {
-    name,
-    status_code,
-    response_body,
-    condition,
-    is_default,
-    delay_ms,
-    proxy_url = null,
-    proxy_method = null,
-  }
-) {
+async function update(dbPool, dbPoolfull, id, { name, status_code, response_body, condition, is_default, delay_ms, proxy_url = null, proxy_method = null }) {
   // Xác định response thuộc stateful hay stateless
   const isStatefull = await checkIsStatefull(dbPool, dbPoolfull, id);
 
@@ -125,10 +88,7 @@ async function update(
       endpointId = current?.endpoint_id;
       if (!current) return null;
       if (is_default === true && endpointId) {
-        await dbPool.query(
-          "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1 AND id <> $2",
-          [endpointId, id]
-        );
+        await dbPool.query("UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1 AND id <> $2", [endpointId, id]);
       }
     }
 
@@ -145,17 +105,7 @@ async function update(
            updated_at = NOW()
        WHERE id = $9
        RETURNING *`,
-      [
-        name,
-        status_code,
-        response_body,
-        condition,
-        is_default,
-        delay_ms,
-        proxy_url,
-        proxy_method,
-        id,
-      ]
+      [name, status_code, response_body, condition, is_default, delay_ms, proxy_url, proxy_method, id]
     );
 
     return rows[0] || null;
@@ -169,7 +119,7 @@ async function update(
 
     // Lấy response + method endpoint kèm theo
     const {
-     rows: [row],
+      rows: [row],
     } = await dbPoolfull.query(
       `SELECT rf.id, rf.name, rf.status_code, rf.response_body, rf.delay_ms,
               ef.method
@@ -183,8 +133,8 @@ async function update(
     const isGet200 = String(row.method).toUpperCase() === "GET" && Number(row.status_code) === 200;
 
     // status_code là immutable: bỏ qua bất kỳ giá trị client gửi lên
-    const nextName  = typeof name      !== "undefined" ? name      : row.name;
-    const nextDelay = typeof delay_ms  !== "undefined" ? delay_ms  : row.delay_ms;
+    const nextName = typeof name !== "undefined" ? name : row.name;
+    const nextDelay = typeof delay_ms !== "undefined" ? delay_ms : row.delay_ms;
 
     // Chuẩn bị field cập nhật theo rule
     const sets = [`name = $1`, `delay_ms = $2`, `updated_at = NOW()`];
@@ -220,7 +170,7 @@ async function update(
         [nextName, nextDelay, id]
       );
       return up[0] || null;
-}
+    }
   }
 }
 
@@ -296,20 +246,11 @@ async function setDefault(dbPool, id) {
   const endpointId = current.endpoint_id;
 
   // Bỏ các mục khác, sau đó đặt mục này
-  await dbPool.query(
-    "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1",
-    [endpointId]
-  );
-  await dbPool.query(
-    "UPDATE endpoint_responses SET is_default = TRUE, updated_at = NOW() WHERE id = $1",
-    [id]
-  );
+  await dbPool.query("UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1", [endpointId]);
+  await dbPool.query("UPDATE endpoint_responses SET is_default = TRUE, updated_at = NOW() WHERE id = $1", [id]);
 
   // Trả về danh sách tóm tắt cho điểm cuối đó
-  const { rows } = await dbPool.query(
-    "SELECT id, endpoint_id, is_default FROM endpoint_responses WHERE endpoint_id = $1 ORDER BY id ASC",
-    [endpointId]
-  );
+  const { rows } = await dbPool.query("SELECT id, endpoint_id, is_default FROM endpoint_responses WHERE endpoint_id = $1 ORDER BY id ASC", [endpointId]);
   return rows;
 }
 

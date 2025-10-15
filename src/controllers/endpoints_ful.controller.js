@@ -32,9 +32,7 @@ async function deleteEndpointById(req, res) {
     const result = await EndpointStatefulService.deleteById(parseInt(id, 10));
 
     if (result.notFound) {
-      return res
-        .status(404)
-        .json({ error: "Không tìm thấy stateful endpoint." });
+      return res.status(404).json({ error: "Không tìm thấy stateful endpoint." });
     }
 
     res.status(204).send();
@@ -47,9 +45,7 @@ async function convertToStateful(req, res) {
   const { id } = req.params;
   try {
     // Dòng này bây giờ đã ĐÚNG vì service đã được cấu trúc lại
-    const result = await EndpointStatefulService.convertToStateful(
-      parseInt(id, 10)
-    );
+    const result = await EndpointStatefulService.convertToStateful(parseInt(id, 10));
     return res.status(200).json({
       message: "Endpoint converted to stateful successfully",
       data: result,
@@ -63,18 +59,14 @@ async function convertToStateful(req, res) {
 async function revertToStateless(req, res) {
   const { id } = req.params;
   try {
-    const result = await EndpointStatefulService.revertToStateless(
-      parseInt(id, 10)
-    );
+    const result = await EndpointStatefulService.revertToStateless(parseInt(id, 10));
     return res.status(200).json({
       message: "Endpoint reverted to stateless successfully",
       data: { endpoint_id: parseInt(id, 10), ...result },
     });
   } catch (err) {
     console.error("Error revertToStateless:", err);
-    return res
-      .status(500)
-      .json({ error: err.message || "Revert to stateless failed" });
+    return res.status(500).json({ error: err.message || "Revert to stateless failed" });
   }
 }
 
@@ -85,10 +77,7 @@ async function updateEndpointResponse(req, res) {
     const delay = req.body.delay ?? req.body.delay_ms;
 
     // Truyền dbStateful vào service
-    const updated = await EndpointStatefulService.updateEndpointResponse(
-      parseInt(id, 10),
-      { response_body, delay }
-    );
+    const updated = await EndpointStatefulService.updateEndpointResponse(parseInt(id, 10), { response_body, delay });
 
     return res.status(200).json({
       message: "Response updated successfully",

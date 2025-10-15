@@ -1,20 +1,20 @@
 const EndpointStatefulService = require("../services/endpoints_ful.service");
 const DataStatefulService = require("../services/endpoint_data_ful.service");
-const ResponseSvc = require('../services/endpoint_response.service');
+const ResponseSvc = require("../services/endpoint_response.service");
 
 // Parse workspace/project/path từ query:
 //  - Dạng tách:  ?workspace=WP_3&project=pj_3&path=/cat
 //  - Dạng gộp:   ?path=WP_3/pj_3/cat
 function parseWPPath(req) {
-  const ensureLeadingSlash = (p) => (p && p.startsWith('/') ? p : '/' + (p || ''));
+  const ensureLeadingSlash = (p) => (p && p.startsWith("/") ? p : "/" + (p || ""));
   const splitWP = (raw) => {
     if (!raw) return null;
-    const clean = String(raw).replace(/^\/+/, '');
-    const segs = clean.split('/').filter(Boolean);
+    const clean = String(raw).replace(/^\/+/, "");
+    const segs = clean.split("/").filter(Boolean);
     if (segs.length >= 3) {
       const ws = decodeURIComponent(segs[0]);
       const pj = decodeURIComponent(segs[1]);
-      const rest = '/' + segs.slice(2).join('/');
+      const rest = "/" + segs.slice(2).join("/");
       return { ws, pj, rest };
     }
     return null;
@@ -64,14 +64,14 @@ exports.getDataByPath = async (req, res) => {
  */
 exports.deleteDataByPath = async (req, res) => {
   try {
-   const { pgPath, opts } = parseWPPath(req);
+    const { pgPath, opts } = parseWPPath(req);
     if (!pgPath) return res.status(400).json({ error: "Tham số 'path' là bắt buộc." });
 
-    if (typeof EndpointStatefulService.deleteEndpointData === 'function') {
+    if (typeof EndpointStatefulService.deleteEndpointData === "function") {
       const ok = await EndpointStatefulService.deleteEndpointData(pgPath, opts);
       if (!ok) return res.status(404).json({ error: `Không tìm thấy dữ liệu với path: '${pgPath}'` });
-     return res.status(204).send();
-   }
+      return res.status(204).send();
+    }
     // Fallback sang data service cũ nếu bạn chưa implement xoá trong endpoints_ful.service
     const ok = await DataStatefulService.deleteByPath(pgPath, opts);
     if (!ok) return res.status(404).json({ error: `Không tìm thấy dữ liệu với path: '${pgPath}'` });
@@ -97,10 +97,14 @@ exports.updateEndpointData = async (req, res) => {
 
     const { schema, data_default } = req.body;
 
-    const result = await EndpointStatefulService.updateEndpointData(pgPath, {
-      schema,
-      data_default,
-    }, opts);
+    const result = await EndpointStatefulService.updateEndpointData(
+      pgPath,
+      {
+        schema,
+        data_default,
+      },
+      opts
+    );
 
     return res.status(200).json({
       message: "Cập nhật dữ liệu endpoint thành công.",
@@ -121,11 +125,11 @@ exports.setDefaultEndpointData = async (req, res) => {
     const { pgPath, opts } = parseWPPath(req);
     const { data_default } = req.body || {};
 
-   if (!pgPath) return res.status(400).json({ error: "Thiếu query 'path'." });
+    if (!pgPath) return res.status(400).json({ error: "Thiếu query 'path'." });
     if (data_default === undefined) return res.status(400).json({ error: "Thiếu 'data_default' trong payload." });
 
     // Nếu service data hỗ trợ sync current, ưu tiên dùng
-    if (typeof DataStatefulService.upsertDefaultAndCurrentByPath === 'function') {
+    if (typeof DataStatefulService.upsertDefaultAndCurrentByPath === "function") {
       const result = await DataStatefulService.upsertDefaultAndCurrentByPath(pgPath, data_default, opts);
       return res.status(200).json({
         message: "Cập nhật data_default và đồng bộ data_current thành công.",
