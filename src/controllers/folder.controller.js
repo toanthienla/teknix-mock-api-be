@@ -44,12 +44,6 @@ async function getFolderById(req, res) {
 // Create new folder
 async function createFolder(req, res) {
   try {
-    // console.log('🟡 req.user:', req.user);
-    // const userId = req.user?.user_id;
-    // if (!userId) {
-    //   return res.status(401).json({ message: 'Unauthorized: missing user info' });
-    // }
-
     const { project_id, name, description, is_public } = req.body;
 
     // Nếu payload không có is_public → mặc định là false
@@ -59,7 +53,6 @@ async function createFolder(req, res) {
       project_id: parseInt(project_id, 10),
       name: name.trim(),
       description: description ?? null,
-      // user_id: userId,
       is_public: isPublicValue,
     });
 
@@ -81,26 +74,6 @@ async function updateFolder(req, res) {
     if (Number.isNaN(id)) {
       return error(res, 400, "id must be an integer");
     }
-
-    //const userId = req.user?.user_id;
-    //if (!userId) {
-    //  return error(res, 401, "Unauthorized: missing user info");
-    //}
-
-    // 🧱 Kiểm tra quyền sở hữu
-    //const { rows } = await req.db.stateless.query(
-    //  'SELECT user_id FROM folders WHERE id = $1',
-    //  [id]
-    //);
-
-    //if (rows.length === 0) {
-    //  return error(res, 404, "Folder not found");
-    //}
-
-    //const folder = rows[0];
-    //if (folder.user_id !== userId) {
-    //  return error(res, 403, "Forbidden: you do not own this folder");
-    //}
 
     // 🧩 Phân biệt loại update
     const payload = req.body;
@@ -134,26 +107,6 @@ async function deleteFolder(req, res) {
     if (Number.isNaN(id)) {
       return error(res, 400, "id must be an integer");
     }
-
-    // const userId = req.user?.user_id;
-    // if (!userId) {
-    //   return error(res, 401, "Unauthorized: missing user info");
-    // }
-
-    // // Kiểm tra quyền sở hữu folder
-    // const { rows } = await req.db.stateless.query(
-    //   'SELECT user_id FROM folders WHERE id = $1',
-    //   [id]
-    // );
-
-    // if (rows.length === 0) {
-    //   return error(res, 404, "Folder not found");
-    // }
-
-    // const folder = rows[0];
-    // if (folder.user_id !== userId) {
-    //   return error(res, 403, "Forbidden: you do not own this folder");
-    // }
 
     // Xóa folder trong transaction (không cần owner-check)
     const result = await svc.deleteFolderAndHandleLogs(req.db.stateless, id);
