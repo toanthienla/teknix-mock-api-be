@@ -1,5 +1,6 @@
 //const db = require('../config/db');
 const logSvc = require('./project_request_log.service');
+const endpointsFulSvc = require('./endpoints_ful.service');
 
 // Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
 const NAME_RE = /^[A-Za-z0-9_]+$/;
@@ -116,12 +117,27 @@ async function deleteProjectAndHandleLogs(db, projectId) {
       return { success: false, notFound: true };
     }
 
+    // Gather stateless endpoint IDs in this project BEFORE delete (for stateful cleanup)
+    const { rows: epRows } = await client.query(
+      `SELECT e.id
+         FROM endpoints e
+         JOIN folders f ON f.id = e.folder_id
+        WHERE f.project_id = $1`,
+     [projectId]
+    );
+    const endpointIds = epRows.map(r => r.id);
+
+    // Nullify logs first
     await logSvc.nullifyProjectTree(client, projectId);
 
     await client.query('DELETE FROM projects WHERE id = $1', [projectId]);
 
     await client.query('COMMIT');
-    return { success: true, data: { id: projectId } };
+    // Cleanup STATEFUL side (PG + Mongo) outside stateless tx
+    if (endpointIds.length > 0) {
+      await endpointsFulSvc.deleteByOriginIds(endpointIds);
+    }
+    return { success: true, data: { id: projectId }, affectedEndpoints: endpointIds.length };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

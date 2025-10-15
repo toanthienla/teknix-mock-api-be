@@ -1,5 +1,6 @@
 const logSvc = require('./project_request_log.service');
 const { getCollection2  } = require("../config/db");
+const endpointsFulSvc = require('./endpoints_ful.service');
 
 // Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
 const NAME_RE = /^[A-Za-z0-9_]+$/;
@@ -246,12 +247,24 @@ async function deleteFolderAndHandleLogs(db, folderId) {
       return { success: false, notFound: true };
     }
 
-    await logSvc.nullifyFolderTree(folderId, client);
+     // Gather stateless endpoint IDs in this folder BEFORE delete (for stateful cleanup)
+    const { rows: epRows } = await client.query(
+      `SELECT e.id FROM endpoints e WHERE e.folder_id = $1`,
+      [folderId]
+    );
+    const endpointIds = epRows.map(r => r.id);
+
+    // Nullify logs for this folder (param order: client first)
+    await logSvc.nullifyFolderTree(client, folderId);
 
     await client.query('DELETE FROM folders WHERE id = $1', [folderId]);
 
     await client.query('COMMIT');
-    return { success: true, data: { id: folderId } };
+        // Cleanup STATEFUL side (PG + Mongo) outside stateless tx
+    if (endpointIds.length > 0) {
+      await endpointsFulSvc.deleteByOriginIds(endpointIds);
+    }
+   return { success: true, data: { id: folderId }, affectedEndpoints: endpointIds.length };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

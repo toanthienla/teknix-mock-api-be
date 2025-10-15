@@ -6,6 +6,7 @@
 
 const { statefulPool, statelessPool, getCollection } = require("../config/db");
 const ResponseStatefulService = require("./endpoint_responses_ful.service");
+const { dropCollectionByPath } = require('./endpoint_data_ful.service');
 
 // ------------------------
 // Helpers
@@ -866,6 +867,70 @@ async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
   return { fields };
 }
 
+/**
+ * Batch cleanup for STATEFUL side by stateless endpoint IDs (origin_ids):
+ * - Delete endpoint_responses_ful
+ * - Delete endpoints_ful
+ * - Drop Mongo collection tương ứng path (best-effort, idempotent)
+ */
+async function deleteByOriginIds(originIds = []) {
+  const ids = Array.from(new Set((originIds || []).map(Number))).filter(Number.isInteger);
+  if (ids.length === 0) return { statefulEndpoints: 0, mongoDropped: 0 };
+
+  // 1) Resolve names from stateless to keep Mongo naming consistent
+  const { rows: nameRows } = await statelessPool.query(
+    `SELECT e.id AS origin_id, w.name AS workspace_name, p.name AS project_name
+       FROM endpoints e
+       JOIN folders f  ON f.id = e.folder_id
+       JOIN projects p ON p.id = f.project_id
+       JOIN workspaces w ON w.id = p.workspace_id
+      WHERE e.id = ANY($1::int[])`,
+    [ids]
+  );
+  const nameMap = new Map(nameRows.map(r => [r.origin_id, { ws: r.workspace_name, pj: r.project_name }]));
+
+  // 2) Load endpoints_ful and paths in STATEFUL PG
+  const { rows: sfRows } = await statefulPool.query(
+   `SELECT id, origin_id, path FROM endpoints_ful WHERE origin_id = ANY($1::int[])`,
+    [ids]
+  );
+  const statefulIds = sfRows.map(r => r.id);
+
+  // 3) Delete STATEFUL PG in a tx: responses first, then endpoints_ful
+  await statefulPool.query("BEGIN");
+  try {
+    if (statefulIds.length > 0) {
+      await statefulPool.query(
+      `DELETE FROM endpoint_responses_ful WHERE endpoint_id = ANY($1::int[])`,
+        [statefulIds]
+      );
+      await statefulPool.query(
+        `DELETE FROM endpoints_ful WHERE id = ANY($1::int[])`,
+        [statefulIds]
+      );
+    }
+    await statefulPool.query("COMMIT");
+  } catch (e) {
+    await statefulPool.query("ROLLBACK");
+    throw e;
+  }
+
+  // 4) Best-effort Mongo: drop collection theo path qua helper mới
+  let dropped = 0;
+  for (const r of sfRows) {
+    if (!r.path) continue;
+    try {
+      const res = await dropCollectionByPath(r.path);
+      if (res?.dropped) dropped++;
+    } catch (_) {
+      // ignore to keep idempotency
+    }
+  }
+
+  return { statefulEndpoints: statefulIds.length, mongoDropped: dropped };
+}
+
+
 
 // ------------------------
 // Exports (function-based)
@@ -875,6 +940,7 @@ module.exports = {
   findByFolderId,
   getFullDetailById,
   deleteById,
+  deleteByOriginIds,
   findByOriginId,
   convertToStateful,
   revertToStateless,
