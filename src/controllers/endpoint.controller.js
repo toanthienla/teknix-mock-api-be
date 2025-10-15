@@ -159,17 +159,19 @@ async function createEndpoint(req, res) {
 }
 
 // Update endpoint
+// Update endpoint controller 
 async function updateEndpoint(req, res) {
   try {
     const { id } = req.params;
-
-    // --- NEW: Cho phép payload chỉ có { schema } ---
     const payload = { ...req.body };
-    // Nếu chỉ cập nhật schema, đừng yêu cầu name/method/path
-    // (service sẽ tự xử lý đẩy sang endpoints_ful khi endpoint đang stateful)
-    if (payload && typeof payload.schema !== "undefined") {
-      // để nguyên; không ép buộc field khác
+
+    // 🔁 Normalize: nếu client gửi { fields:[...] } -> chuyển thành { schema:{ fields:[...] } }
+    if (req.method === 'PUT' && Array.isArray(payload.fields) && Object.keys(payload).length === 1) {
+      payload.schema = { fields: payload.fields };
+      delete payload.fields;
     }
+
+    // --- Cho phép payload chỉ có { schema } (đã normalize) ---
     const result = await svc.updateEndpoint(
       req.db.stateless,
       req.db.stateful,
@@ -177,7 +179,6 @@ async function updateEndpoint(req, res) {
       payload
     );
 
-    // Không tìm thấy endpoint
     if (!result) {
       return res.status(404).json({
         success: false,
@@ -185,24 +186,21 @@ async function updateEndpoint(req, res) {
       });
     }
 
-    // Lỗi validate hoặc business logic
     if (result.success === false) {
       return res.status(400).json(result);
     }
 
-    // Thành công
-        // Thành công — nếu client có gửi schema, trả về theo đúng thứ tự keys của payload
+    // Giữ thứ tự keys theo payload.schema (nếu có)
     let data = result.data;
     if (payload && payload.schema && typeof payload.schema === 'object' && !Array.isArray(payload.schema)) {
       const order = Object.keys(payload.schema);
-     const src = data?.schema && typeof data.schema === 'object' ? data.schema : {};
+      const src = data?.schema && typeof data.schema === 'object' ? data.schema : {};
       const reordered = {};
-      // bám theo thứ tự payload
       for (const k of order) if (Object.prototype.hasOwnProperty.call(src, k)) reordered[k] = src[k];
-      // thêm các key còn lại (nếu vì lý do nào đó driver trả dư)
       for (const k of Object.keys(src)) if (!Object.prototype.hasOwnProperty.call(reordered, k)) reordered[k] = src[k];
       data = { ...data, schema: reordered };
     }
+
     return success(res, data);
   } catch (err) {
     return res.status(400).json({
@@ -211,6 +209,7 @@ async function updateEndpoint(req, res) {
     });
   }
 }
+
 
 
 // Delete endpoint (giữ log: NULL hoá FK trước, rồi ghi log DELETE)
