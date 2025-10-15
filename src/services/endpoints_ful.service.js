@@ -6,7 +6,7 @@
 
 const { statefulPool, statelessPool, getCollection } = require("../config/db");
 const ResponseStatefulService = require("./endpoint_responses_ful.service");
-const { dropCollectionByPath } = require('./endpoint_data_ful.service');
+const { dropCollectionByPath } = require("./endpoint_data_ful.service");
 
 // ------------------------
 // Helpers
@@ -15,16 +15,16 @@ const { dropCollectionByPath } = require('./endpoint_data_ful.service');
 function sanitizeName(s) {
   return String(s ?? "")
     .replace(/^\//, "")
-    .replace(/\u0000/g, "")      // Mongo cấm NUL
-    .replace(/^\.+|\.+$/g, "")   // tránh '.' ở đầu/cuối segment
+    .replace(/\u0000/g, "") // Mongo cấm NUL
+    .replace(/^\.+|\.+$/g, "") // tránh '.' ở đầu/cuối segment
     .trim();
 }
 function toCollectionName(path, workspaceName, projectName) {
   if (typeof path !== "string" || !path.trim()) {
     throw new Error("Invalid path");
   }
-  const p  = sanitizeName(path);
-  const w  = sanitizeName(workspaceName);
+  const p = sanitizeName(path);
+  const w = sanitizeName(workspaceName);
   const pr = sanitizeName(projectName);
   if (!w || !pr) {
     // fallback legacy nếu chưa truyền đủ workspace/project
@@ -46,37 +46,24 @@ async function mongoDeleteAllByPath(path, workspaceName, projectName) {
 
 async function mongoUpsertEmptyIfMissing(path, workspaceName, projectName) {
   const col = getCollection(toCollectionName(path, workspaceName, projectName));
-  await col.updateOne(
-    {},
-    { $setOnInsert: { data_default: [], data_current: [] } },
-    { upsert: true }
-  );
+  await col.updateOne({}, { $setOnInsert: { data_default: [], data_current: [] } }, { upsert: true });
 }
 
 // ------------------------
 // Core queries (Postgres)
 // ------------------------
 async function findById(id) {
-  const { rows } = await statefulPool.query(
-    "SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE id = $1",
-    [id]
-  );
+  const { rows } = await statefulPool.query("SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE id = $1", [id]);
   return rows[0] || null;
 }
 
 async function findByFolderId(folderId) {
-  const { rows } = await statefulPool.query(
-    "SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE folder_id = $1 ORDER BY created_at DESC",
-    [folderId]
-  );
+  const { rows } = await statefulPool.query("SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE folder_id = $1 ORDER BY created_at DESC", [folderId]);
   return rows;
 }
 
 async function getFullDetailById(id) {
-  const [endpoint, responses] = await Promise.all([
-    findById(id),
-    ResponseStatefulService.findByEndpointId(id),
-  ]);
+  const [endpoint, responses] = await Promise.all([findById(id), ResponseStatefulService.findByEndpointId(id)]);
   if (!endpoint) return null;
 
   // 🔁 Sắp xếp schema theo schema_order (nếu có) để API trả về đúng thứ tự FE đã PUT
@@ -90,28 +77,23 @@ async function deleteById(id) {
   try {
     await client.query("BEGIN");
 
-   const { rows: epRows } = await client.query(
-      "SELECT path, origin_id FROM endpoints_ful WHERE id = $1",
-      [id]
-    );
+    const { rows: epRows } = await client.query("SELECT path, origin_id FROM endpoints_ful WHERE id = $1", [id]);
     const ep = epRows[0];
     if (!ep) {
       await client.query("ROLLBACK");
       return { success: false, notFound: true };
     }
     const originIdBeforeDelete = ep.origin_id || null;
-    await client.query(
-      "DELETE FROM endpoint_responses_ful WHERE endpoint_id = $1",
-      [id]
-    );
+    await client.query("DELETE FROM endpoint_responses_ful WHERE endpoint_id = $1", [id]);
     await client.query("DELETE FROM endpoints_ful WHERE id = $1", [id]);
 
     await client.query("COMMIT");
 
     // Mongo delete (ngoài transaction)
     if (ep.path) {
-// tìm workspace/project theo origin_id (đã lưu trước khi xoá)
-      let workspaceName = "Workspace", projectName = "Project";
+      // tìm workspace/project theo origin_id (đã lưu trước khi xoá)
+      let workspaceName = "Workspace",
+        projectName = "Project";
       if (originIdBeforeDelete) {
         const { rows } = await statelessPool.query(
           `SELECT w.name AS workspace_name, p.name AS project_name
@@ -123,7 +105,7 @@ async function deleteById(id) {
           [originIdBeforeDelete]
         );
         workspaceName = rows[0]?.workspace_name || workspaceName;
-        projectName   = rows[0]?.project_name   || projectName;
+        projectName = rows[0]?.project_name || projectName;
       }
       await mongoDeleteAllByPath(ep.path, workspaceName, projectName);
     }
@@ -138,10 +120,7 @@ async function deleteById(id) {
 }
 
 async function findByOriginId(originId) {
-  const { rows } = await statefulPool.query(
-    "SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1",
-    [originId]
-  );
+  const { rows } = await statefulPool.query("SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1", [originId]);
   const hit = rows[0];
   if (!hit) return null;
   return await getFullDetailById(hit.id);
@@ -159,48 +138,32 @@ async function convertToStateful(endpointId) {
     // 1) lấy endpoint gốc
     const {
       rows: [endpoint],
-    } = await clientStateless.query("SELECT * FROM endpoints WHERE id = $1", [
-      endpointId,
-    ]);
+    } = await clientStateless.query("SELECT * FROM endpoints WHERE id = $1", [endpointId]);
     if (!endpoint) throw new Error("Stateless endpoint not found");
 
     // 🔍 Kiểm tra base_schema của folder trước khi cho phép chuyển đổi
-    const { rows: [folderCheck] } = await clientStateless.query(
-      `SELECT base_schema FROM folders WHERE id = $1 LIMIT 1`,
-      [endpoint.folder_id]
-    );
+    const {
+      rows: [folderCheck],
+    } = await clientStateless.query(`SELECT base_schema FROM folders WHERE id = $1 LIMIT 1`, [endpoint.folder_id]);
 
     if (!folderCheck || folderCheck.base_schema === null) {
       throw new Error(JSON.stringify({ message: "Folder does not have a base schema" }));
     }
 
     // 2) đã có stateful trước đó chưa?
-    const { rows: existing } = await clientStateful.query(
-      "SELECT id, is_active, path, method FROM endpoints_ful WHERE origin_id = $1 LIMIT 1",
-      [endpoint.id]
-    );
+    const { rows: existing } = await clientStateful.query("SELECT id, is_active, path, method FROM endpoints_ful WHERE origin_id = $1 LIMIT 1", [endpoint.id]);
 
     if (existing.length > 0) {
       const statefulId = existing[0].id;
 
-      await clientStateful.query(
-        "UPDATE endpoints_ful SET is_active = TRUE, updated_at = NOW() WHERE id = $1",
-        [statefulId]
-      );
-      await clientStateless.query(
-        "UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1",
-        [endpointId]
-      );
+      await clientStateful.query("UPDATE endpoints_ful SET is_active = TRUE, updated_at = NOW() WHERE id = $1", [statefulId]);
+      await clientStateless.query("UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1", [endpointId]);
 
       await clientStateful.query("COMMIT");
       await clientStateless.query("COMMIT");
 
       // Đảm bảo Mongo + default responses
-      await ensureDefaultsForReactivate(
-        statefulId,
-        existing[0].path ?? endpoint.path,
-        existing[0].method ?? endpoint.method
-      );
+      await ensureDefaultsForReactivate(statefulId, existing[0].path ?? endpoint.path, existing[0].method ?? endpoint.method);
 
       return { stateful_id: statefulId };
     }
@@ -220,10 +183,7 @@ async function convertToStateful(endpointId) {
     const projectName = wpRows[0]?.project_name || "Project";
 
     // 3) convert lần đầu
-    await clientStateless.query(
-      "UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1",
-      [endpointId]
-    );
+    await clientStateless.query("UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1", [endpointId]);
 
     const {
       rows: [statefulEndpoint],
@@ -274,21 +234,13 @@ async function convertToStateful(endpointId) {
 
     // Tạo default responses + khởi tạo collection Mongo trống (gắn WS/Project)
     const responsesResult = await generateDefaultResponses(statefulEndpoint);
-    await mongoUpsertEmptyIfMissing(
-      statefulEndpoint.path,
-      workspaceName,
-      projectName
-    );
+    await mongoUpsertEmptyIfMissing(statefulEndpoint.path, workspaceName, projectName);
 
     return {
       stateless: endpoint,
       stateful: statefulEndpoint,
       responses: responsesResult,
-      mongo_collection: toCollectionName(
-        statefulEndpoint.path,
-        workspaceName,
-        projectName
-      ),
+      mongo_collection: toCollectionName(statefulEndpoint.path, workspaceName, projectName),
     };
   } catch (e) {
     try {
@@ -311,21 +263,12 @@ async function revertToStateless(endpointId) {
     await clientStateless.query("BEGIN");
     await clientStateful.query("BEGIN");
 
-    const { rows: existing } = await clientStateful.query(
-      "SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1",
-      [endpointId]
-    );
+    const { rows: existing } = await clientStateful.query("SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1", [endpointId]);
     if (existing.length > 0) {
-      await clientStateful.query(
-        "UPDATE endpoints_ful SET is_active = FALSE, updated_at = NOW() WHERE id = $1",
-        [existing[0].id]
-      );
+      await clientStateful.query("UPDATE endpoints_ful SET is_active = FALSE, updated_at = NOW() WHERE id = $1", [existing[0].id]);
     }
 
-    await clientStateless.query(
-      "UPDATE endpoints SET is_stateful = FALSE, is_active = TRUE, updated_at = NOW() WHERE id = $1",
-      [endpointId]
-    );
+    await clientStateless.query("UPDATE endpoints SET is_stateful = FALSE, is_active = TRUE, updated_at = NOW() WHERE id = $1", [endpointId]);
 
     await clientStateless.query("COMMIT");
     await clientStateful.query("COMMIT");
@@ -349,12 +292,10 @@ async function revertToStateless(endpointId) {
 // Đảm bảo có dữ liệu Mongo (trống nếu thiếu) + default responses
 async function ensureDefaultsForReactivate(statefulId, path, method) {
   // Truy ngược để biết workspace/project theo origin_id
-  const { rows: epRows } = await statefulPool.query(
-    `SELECT origin_id FROM endpoints_ful WHERE id=$1 LIMIT 1`,
-    [statefulId]
-  );
+  const { rows: epRows } = await statefulPool.query(`SELECT origin_id FROM endpoints_ful WHERE id=$1 LIMIT 1`, [statefulId]);
   const originId = epRows[0]?.origin_id;
-  let workspaceName = "Workspace", projectName = "Project";
+  let workspaceName = "Workspace",
+    projectName = "Project";
   if (originId) {
     const { rows } = await statelessPool.query(
       `SELECT w.name AS workspace_name, p.name AS project_name
@@ -367,14 +308,11 @@ async function ensureDefaultsForReactivate(statefulId, path, method) {
       [originId]
     );
     workspaceName = rows[0]?.workspace_name || workspaceName;
-    projectName   = rows[0]?.project_name   || projectName;
+    projectName = rows[0]?.project_name || projectName;
   }
   await mongoUpsertEmptyIfMissing(path, workspaceName, projectName);
 
-  const { rows: respRows } = await statefulPool.query(
-    "SELECT 1 FROM endpoint_responses_ful WHERE endpoint_id = $1 LIMIT 1",
-    [statefulId]
-  );
+  const { rows: respRows } = await statefulPool.query("SELECT 1 FROM endpoint_responses_ful WHERE endpoint_id = $1 LIMIT 1", [statefulId]);
   if (respRows.length === 0) {
     await generateDefaultResponses({ id: statefulId, method, path });
   }
@@ -390,13 +328,7 @@ async function insertResponses(endpointId, responses) {
       await client.query(
         `INSERT INTO endpoint_responses_ful (endpoint_id, name, status_code, response_body, delay_ms)
          VALUES ($1, $2, $3, $4, $5)`,
-        [
-          endpointId,
-          res.name,
-          res.status_code,
-          JSON.stringify(res.response_body ?? {}),
-          res.delay_ms || 0,
-        ]
+        [endpointId, res.name, res.status_code, JSON.stringify(res.response_body ?? {}), res.delay_ms || 0]
       );
     }
     return { message: "Responses inserted", count: responses.length };
@@ -406,8 +338,7 @@ async function insertResponses(endpointId, responses) {
 }
 
 function capitalizeFromPath(endpointPath) {
-  const seg =
-    (endpointPath || "").split("/").filter(Boolean).pop() || "Resource";
+  const seg = (endpointPath || "").split("/").filter(Boolean).pop() || "Resource";
   return seg.charAt(0).toUpperCase() + seg.slice(1);
 }
 
@@ -531,16 +462,9 @@ async function updateEndpointResponse(responseId, { response_body, delay }) {
   try {
     const {
       rows: [response],
-    } = await client.query(
-      "SELECT * FROM endpoint_responses_ful WHERE id = $1",
-      [responseId]
-    );
+    } = await client.query("SELECT * FROM endpoint_responses_ful WHERE id = $1", [responseId]);
     if (!response) throw new Error("Response not found");
-    if (
-      response.status_code === 200 &&
-      (response.name === "Get All Success" ||
-        response.name === "Get Detail Success")
-    ) {
+    if (response.status_code === 200 && (response.name === "Get All Success" || response.name === "Get Detail Success")) {
       throw new Error("This response is not editable.");
     }
 
@@ -563,9 +487,7 @@ async function updateEndpointResponse(responseId, { response_body, delay }) {
     const {
       rows: [updated],
     } = await client.query(
-      `UPDATE endpoint_responses_ful SET ${updates.join(
-        ", "
-      )}, updated_at = NOW()
+      `UPDATE endpoint_responses_ful SET ${updates.join(", ")}, updated_at = NOW()
        WHERE id = $${idx} RETURNING *`,
       values
     );
@@ -583,10 +505,7 @@ async function getEndpointData(path, opts = {}) {
   const { workspaceName = null, projectName = null } = opts || {};
   if (!path) throw new Error("Thiếu path");
   const pgPath = path.startsWith("/") ? path : "/" + path;
-  const { rows } = await statefulPool.query(
-    "SELECT id FROM endpoints_ful WHERE path = $1 LIMIT 1",
-    [pgPath]
-  );
+  const { rows } = await statefulPool.query("SELECT id FROM endpoints_ful WHERE path = $1 LIMIT 1", [pgPath]);
   if (rows.length === 0) {
     throw new Error(`Không tìm thấy endpoints_ful với path: ${pgPath}`);
   }
@@ -599,17 +518,12 @@ async function updateEndpointData(path, body, opts = {}) {
 
   // Lấy row endpoints_ful theo path (kèm schema_order để giữ đúng thứ tự)
   const pgPath = path.startsWith("/") ? path : "/" + path;
-  const { rows } = await statefulPool.query(
-    "SELECT id, schema FROM endpoints_ful WHERE path = $1 LIMIT 1",
-    [pgPath]
-  );
-  if (rows.length === 0)
-    throw new Error("Không tìm thấy endpoints_ful với path: " + pgPath);
+  const { rows } = await statefulPool.query("SELECT id, schema FROM endpoints_ful WHERE path = $1 LIMIT 1", [pgPath]);
+  if (rows.length === 0) throw new Error("Không tìm thấy endpoints_ful với path: " + pgPath);
   const currentSchema = rows[0].schema || {};
 
   // Helpers validate (giữ tinh gọn)
-  const typeOf = (v) =>
-    Array.isArray(v) ? "array" : v === null ? "null" : typeof v;
+  const typeOf = (v) => (Array.isArray(v) ? "array" : v === null ? "null" : typeof v);
   const orderedSchemaKeys = (sch) => {
     if (sch && Array.isArray(sch.__order)) return sch.__order.slice();
     return Object.keys(sch || {}).filter((k) => k !== "__order");
@@ -618,8 +532,7 @@ async function updateEndpointData(path, body, opts = {}) {
     const sKeys = orderedSchemaKeys(sch);
     const dKeys = Object.keys(obj || {});
     if (sKeys.length !== dKeys.length) return false;
-    for (let i = 0; i < sKeys.length; i++)
-      if (sKeys[i] !== dKeys[i]) return false;
+    for (let i = 0; i < sKeys.length; i++) if (sKeys[i] !== dKeys[i]) return false;
     return true;
   };
   const validateObjectWithSchema = (obj, sch) => {
@@ -627,25 +540,17 @@ async function updateEndpointData(path, body, opts = {}) {
     if (!hasSameKeyOrderAsSchema(obj, sch)) {
       return {
         ok: false,
-        reason: `Thứ tự/trường không khớp schema. Schema: [${sKeys.join(
-          ", "
-        )}], Data: [${Object.keys(obj).join(", ")}]`,
+        reason: `Thứ tự/trường không khớp schema. Schema: [${sKeys.join(", ")}], Data: [${Object.keys(obj).join(", ")}]`,
       };
     }
     for (const key of sKeys) {
       const rule = sch[key];
       const value = obj[key];
       const isMissing = value === undefined;
-      if (rule.required && isMissing)
-        return { ok: false, reason: `Thiếu trường bắt buộc: "${key}"` };
+      if (rule.required && isMissing) return { ok: false, reason: `Thiếu trường bắt buộc: "${key}"` };
       if (!isMissing) {
         const jsType = typeOf(value);
-        const ok =
-          (rule.type === "number" && jsType === "number") ||
-          (rule.type === "string" && jsType === "string") ||
-          (rule.type === "boolean" && jsType === "boolean") ||
-          (rule.type === "object" && jsType === "object") ||
-          (rule.type === "array" && jsType === "array");
+        const ok = (rule.type === "number" && jsType === "number") || (rule.type === "string" && jsType === "string") || (rule.type === "boolean" && jsType === "boolean") || (rule.type === "object" && jsType === "object") || (rule.type === "array" && jsType === "array");
         if (!ok)
           return {
             ok: false,
@@ -656,13 +561,8 @@ async function updateEndpointData(path, body, opts = {}) {
     return { ok: true };
   };
   const autoAssignIdsIfAllowed = (dataArr, sch) => {
-    if (!Array.isArray(dataArr))
-      throw new Error("data_default phải là một mảng object");
-    const idOptional = !!(
-      sch?.id &&
-      sch.id.type === "number" &&
-      sch.id.required === false
-    );
+    if (!Array.isArray(dataArr)) throw new Error("data_default phải là một mảng object");
+    const idOptional = !!(sch?.id && sch.id.type === "number" && sch.id.required === false);
     let nextId = 1;
     const seen = new Set();
     for (const o of dataArr) if (o && typeof o.id === "number") seen.add(o.id);
@@ -670,8 +570,7 @@ async function updateEndpointData(path, body, opts = {}) {
     if (idOptional) {
       for (let i = 0; i < dataArr.length; i++) {
         if (dataArr[i].id === undefined) {
-          dataArr[i].id =
-            seen.size === 0 ? (i === 0 ? 1 : dataArr[i - 1].id + 1) : nextId++;
+          dataArr[i].id = seen.size === 0 ? (i === 0 ? 1 : dataArr[i - 1].id + 1) : nextId++;
         }
       }
     }
@@ -681,16 +580,14 @@ async function updateEndpointData(path, body, opts = {}) {
     const set = new Set();
     for (const o of dataArr) {
       if (o.id !== undefined) {
-        if (set.has(o.id))
-          return { ok: false, reason: `Trùng id trong data_default: ${o.id}` };
+        if (set.has(o.id)) return { ok: false, reason: `Trùng id trong data_default: ${o.id}` };
         set.add(o.id);
       }
     }
     return { ok: true };
   };
   const validateArrayWithSchema = (dataArr, sch) => {
-    if (!Array.isArray(dataArr))
-      return { ok: false, reason: "data_default phải là mảng các object" };
+    if (!Array.isArray(dataArr)) return { ok: false, reason: "data_default phải là mảng các object" };
     for (let i = 0; i < dataArr.length; i++) {
       const r = validateObjectWithSchema(dataArr[i], sch);
       if (!r.ok)
@@ -706,10 +603,8 @@ async function updateEndpointData(path, body, opts = {}) {
 
   // 1) Cả schema + data_default → chuẩn hoá schema (ép 'id'), validate + ghi Mongo
   if (schema && data_default) {
-    if (typeof schema !== "object" || Array.isArray(schema))
-      throw new Error("schema phải là object (map field -> rule)");
-    if (!Array.isArray(data_default))
-      throw new Error("data_default phải là mảng object");
+    if (typeof schema !== "object" || Array.isArray(schema)) throw new Error("schema phải là object (map field -> rule)");
+    if (!Array.isArray(data_default)) throw new Error("data_default phải là mảng object");
 
     // dùng nguyên schema FE gửi; không tự thêm 'id'
     const cloned = JSON.parse(JSON.stringify(data_default));
@@ -718,28 +613,17 @@ async function updateEndpointData(path, body, opts = {}) {
 
     if (!v.ok) throw new Error(`Dữ liệu không khớp schema: ${v.reason}`);
 
-    await statefulPool.query(
-      "UPDATE endpoints_ful SET schema = $1, updated_at = NOW() WHERE path = $2",
-       [JSON.stringify(schema), pgPath]
-    );
+    await statefulPool.query("UPDATE endpoints_ful SET schema = $1, updated_at = NOW() WHERE path = $2", [JSON.stringify(schema), pgPath]);
 
     const col = getCollection(toCollectionName(path, workspaceName, projectName));
-    await col.updateOne(
-      {},
-      { $set: { data_default: withIds, data_current: withIds } },
-      { upsert: true }
-    );
+    await col.updateOne({}, { $set: { data_default: withIds, data_current: withIds } }, { upsert: true });
     return await mongoFindOneByPath(path, workspaceName, projectName);
   }
 
   // 2) Chỉ schema → chuẩn hoá + cập nhật PG; KHÔNG động vào Mongo
   if (schema && !data_default) {
-    if (typeof schema !== "object" || Array.isArray(schema))
-      throw new Error("schema phải là object (map field -> rule)");
-    await statefulPool.query(
-      "UPDATE endpoints_ful SET schema = $1, updated_at = NOW() WHERE path = $2",
-      [JSON.stringify(schema), pgPath] 
-    );
+    if (typeof schema !== "object" || Array.isArray(schema)) throw new Error("schema phải là object (map field -> rule)");
+    await statefulPool.query("UPDATE endpoints_ful SET schema = $1, updated_at = NOW() WHERE path = $2", [JSON.stringify(schema), pgPath]);
     return await findByPathPG(path);
   }
 
@@ -747,32 +631,21 @@ async function updateEndpointData(path, body, opts = {}) {
   if (!schema && data_default) {
     // Ép về mảng object
     const payload = Array.isArray(data_default) ? data_default : [data_default];
-    if (
-      !payload.every((x) => x && typeof x === "object" && !Array.isArray(x))
-    ) {
+    if (!payload.every((x) => x && typeof x === "object" && !Array.isArray(x))) {
       throw new Error("data_default phải là object hoặc mảng các object.");
     }
     // Ghi thẳng vào Mongo, không auto-assign id, không validate theo schema
     const col = getCollection(toCollectionName(path, workspaceName, projectName));
-    await col.updateOne(
-      {},
-      { $set: { data_default: payload, data_current: payload } },
-      { upsert: true }
-    );
+    await col.updateOne({}, { $set: { data_default: payload, data_current: payload } }, { upsert: true });
     return await mongoFindOneByPath(path, workspaceName, projectName);
   }
 
-  throw new Error(
-    "Payload phải có ít nhất một trong hai: schema hoặc data_default"
-  );
+  throw new Error("Payload phải có ít nhất một trong hai: schema hoặc data_default");
 }
 
 // tiện ích nhỏ để trả hàng PG theo path (khi chỉ sửa schema)
 async function findByPathPG(path) {
-  const { rows } = await statefulPool.query(
-    "SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE path = $1 LIMIT 1",
-    [path]
-  );
+  const { rows } = await statefulPool.query("SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE path = $1 LIMIT 1", [path]);
   if (rows.length === 0) return null;
   return rows[0];
 }
@@ -820,10 +693,7 @@ async function getEndpointSchema(statefulPool, originId) {
 // Lấy base_schema qua endpointId; thêm required nếu method là POST/PUT
 async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
   // 1) Lấy folder_id + method từ endpoints
-  const { rows: endpointRows } = await statelessPool.query(
-    `SELECT folder_id, method FROM endpoints WHERE id = $1 LIMIT 1`,
-    [endpointId]
-  );
+  const { rows: endpointRows } = await statelessPool.query(`SELECT folder_id, method FROM endpoints WHERE id = $1 LIMIT 1`, [endpointId]);
   if (endpointRows.length === 0) throw new Error("Endpoint not found");
 
   const folderId = endpointRows[0].folder_id;
@@ -831,10 +701,7 @@ async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
   const isMutating = method === "POST" || method === "PUT";
 
   // 2) Lấy base_schema (kiểu dữ liệu: JSON/JSONB hoặc TEXT JSON)
-  const { rows: folderRows } = await statelessPool.query(
-    `SELECT base_schema FROM folders WHERE id = $1 LIMIT 1`,
-    [folderId]
-  );
+  const { rows: folderRows } = await statelessPool.query(`SELECT base_schema FROM folders WHERE id = $1 LIMIT 1`, [folderId]);
   if (folderRows.length === 0) throw new Error("Folder not found");
 
   let schemaObj = folderRows[0].base_schema ?? null;
@@ -856,7 +723,7 @@ async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
   // 3) Map fields: luôn có name + type; chỉ thêm required khi POST/PUT
   const fields = Object.entries(schemaObj).map(([name, def]) => {
     const t = def && typeof def === "object" ? def.type : undefined;
-    const type = t === "number" ? "integer" : (t || "string");
+    const type = t === "number" ? "integer" : t || "string";
     if (isMutating) {
       const required = !!(def && typeof def === "object" && def.required === true);
       return { name, type, required };
@@ -887,27 +754,18 @@ async function deleteByOriginIds(originIds = []) {
       WHERE e.id = ANY($1::int[])`,
     [ids]
   );
-  const nameMap = new Map(nameRows.map(r => [r.origin_id, { ws: r.workspace_name, pj: r.project_name }]));
+  const nameMap = new Map(nameRows.map((r) => [r.origin_id, { ws: r.workspace_name, pj: r.project_name }]));
 
   // 2) Load endpoints_ful and paths in STATEFUL PG
-  const { rows: sfRows } = await statefulPool.query(
-   `SELECT id, origin_id, path FROM endpoints_ful WHERE origin_id = ANY($1::int[])`,
-    [ids]
-  );
-  const statefulIds = sfRows.map(r => r.id);
+  const { rows: sfRows } = await statefulPool.query(`SELECT id, origin_id, path FROM endpoints_ful WHERE origin_id = ANY($1::int[])`, [ids]);
+  const statefulIds = sfRows.map((r) => r.id);
 
   // 3) Delete STATEFUL PG in a tx: responses first, then endpoints_ful
   await statefulPool.query("BEGIN");
   try {
     if (statefulIds.length > 0) {
-      await statefulPool.query(
-      `DELETE FROM endpoint_responses_ful WHERE endpoint_id = ANY($1::int[])`,
-        [statefulIds]
-      );
-      await statefulPool.query(
-        `DELETE FROM endpoints_ful WHERE id = ANY($1::int[])`,
-        [statefulIds]
-      );
+      await statefulPool.query(`DELETE FROM endpoint_responses_ful WHERE endpoint_id = ANY($1::int[])`, [statefulIds]);
+      await statefulPool.query(`DELETE FROM endpoints_ful WHERE id = ANY($1::int[])`, [statefulIds]);
     }
     await statefulPool.query("COMMIT");
   } catch (e) {
@@ -929,8 +787,6 @@ async function deleteByOriginIds(originIds = []) {
 
   return { statefulEndpoints: statefulIds.length, mongoDropped: dropped };
 }
-
-
 
 // ------------------------
 // Exports (function-based)
