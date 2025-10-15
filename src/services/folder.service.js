@@ -156,7 +156,7 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
          is_public = COALESCE($3, is_public),
          updated_at = CURRENT_TIMESTAMP
      WHERE id = $4
-     RETURNING id, project_id, user_id, name, description, is_public, base_schema, created_at, updated_at`,
+     RETURNING id, project_id, name, description, is_public, base_schema, created_at, updated_at`,
     [name, description, is_public, id]
   );
 
