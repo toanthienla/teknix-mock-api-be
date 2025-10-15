@@ -29,19 +29,7 @@ async function logRequest(dbPool, log) {
     )
     RETURNING id;
   `;
-  const values = [
-    log.projectId || null,
-    log.endpointId || null,
-    log.endpointResponseId || null,
-    log.method,
-    log.path,
-    log.headers || {},
-    log.body || {},
-    log.statusCode,
-    log.responseBody || {},
-    log.ip || null,
-    log.latencyMs || 0,
-  ];
+  const values = [log.projectId || null, log.endpointId || null, log.endpointResponseId || null, log.method, log.path, log.headers || {}, log.body || {}, log.statusCode, log.responseBody || {}, log.ip || null, log.latencyMs || 0];
   const { rows } = await dbPool.query(query, values);
   return rows[0].id;
 }

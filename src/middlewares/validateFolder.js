@@ -6,8 +6,8 @@ module.exports = function validateFolder(req, res, next) {
   const errors = [];
 
   // project_id là bắt buộc khi tạo mới (POST)
-  if (req.method === 'POST') {
-    if (typeof project_id === 'undefined') {
+  if (req.method === "POST") {
+    if (typeof project_id === "undefined") {
       errors.push({ field: "project_id", message: "project_id is required" });
     } else if (Number.isNaN(parseInt(project_id, 10))) {
       errors.push({ field: "project_id", message: "project_id must be an integer" });
@@ -15,8 +15,8 @@ module.exports = function validateFolder(req, res, next) {
   }
 
   // Validate 'name' (bắt buộc cho cả POST và PUT nếu có)
-  if (req.method === 'POST' || (req.method === 'PUT' && typeof name !== 'undefined')) {
-    if (typeof name !== 'string' || name.trim() === "") {
+  if (req.method === "POST" || (req.method === "PUT" && typeof name !== "undefined")) {
+    if (typeof name !== "string" || name.trim() === "") {
       errors.push({ field: "name", message: "Folder name cannot be empty" });
     } else {
       if (name.length > 50) {
@@ -25,7 +25,7 @@ module.exports = function validateFolder(req, res, next) {
       if (!isValidName(name)) {
         errors.push({
           field: "name",
-          message: "Folder name must start with a letter and can only contain letters, numbers, spaces, - or _"
+          message: "Folder name must start with a letter and can only contain letters, numbers, spaces, - or _",
         });
       }
     }

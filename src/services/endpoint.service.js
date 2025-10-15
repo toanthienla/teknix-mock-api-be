@@ -33,26 +33,17 @@ async function getEndpoints(dbPool, { project_id, folder_id } = {}) {
 
 // Get endpoint by id
 async function getEndpointById(dbPool, endpointId) {
-  const { rows } = await dbPool.query(
-    "SELECT * FROM endpoints WHERE id=$1 LIMIT 1",
-    [endpointId]
-  );
+  const { rows } = await dbPool.query("SELECT * FROM endpoints WHERE id=$1 LIMIT 1", [endpointId]);
   return rows[0] || null;
 }
 
 // Create endpoint
 // services/endpoint.service.js
-async function createEndpoint(
-  dbPool,
-  { folder_id, name, method, path, is_active, is_stateful }
-) {
+async function createEndpoint(dbPool, { folder_id, name, method, path, is_active, is_stateful }) {
   const errors = [];
 
   // 0) Kiểm tra folder_id hợp lệ và lấy project_id
-  const { rows: folderRows } = await dbPool.query(
-    `SELECT id, project_id FROM folders WHERE id = $1`,
-    [folder_id]
-  );
+  const { rows: folderRows } = await dbPool.query(`SELECT id, project_id FROM folders WHERE id = $1`, [folder_id]);
   const folder = folderRows[0];
   if (!folder) {
     return {
@@ -140,21 +131,12 @@ async function createEndpoint(
   return { success: true, data: endpoint };
 }
 
-
 // Update endpoint (Stateless + Stateful)
-async function updateEndpoint(
-  clientStateless,
-  clientStateful,
-  endpointId,
-  { name, method, path, is_active, is_stateful, schema }
-) {
+async function updateEndpoint(clientStateless, clientStateful, endpointId, { name, method, path, is_active, is_stateful, schema }) {
   const errors = [];
 
   // 1️⃣ Lấy endpoint hiện tại từ DB stateless
-  const { rows: currentRows } = await clientStateless.query(
-    "SELECT * FROM endpoints WHERE id=$1",
-    [endpointId]
-  );
+  const { rows: currentRows } = await clientStateless.query("SELECT * FROM endpoints WHERE id=$1", [endpointId]);
   const current = currentRows[0];
   if (!current) return { success: false, message: "Endpoint not found" };
 
@@ -178,22 +160,13 @@ async function updateEndpoint(
     }
 
     // Nếu dữ liệu không thay đổi
-    if (
-      newName === current.name &&
-      newMethod === current.method &&
-      newPath === current.path &&
-      finalIsActive === current.is_active &&
-      finalIsStateful === current.is_stateful
-    ) {
+    if (newName === current.name && newMethod === current.method && newPath === current.path && finalIsActive === current.is_active && finalIsStateful === current.is_stateful) {
       return { success: true, data: current };
     }
 
     // Kiểm tra trùng name
     if (newName.toLowerCase() !== current.name.toLowerCase()) {
-      const { rows: nameRows } = await clientStateless.query(
-        "SELECT id FROM endpoints WHERE id<>$1 AND folder_id=$2 AND LOWER(name)=LOWER($3)",
-        [endpointId, current.folder_id, newName]
-      );
+      const { rows: nameRows } = await clientStateless.query("SELECT id FROM endpoints WHERE id<>$1 AND folder_id=$2 AND LOWER(name)=LOWER($3)", [endpointId, current.folder_id, newName]);
       if (nameRows.length > 0) {
         errors.push({
           field: "name",
@@ -203,14 +176,8 @@ async function updateEndpoint(
     }
 
     // Kiểm tra path + method
-    if (
-      newPath !== current.path ||
-      newMethod.toUpperCase() !== current.method.toUpperCase()
-    ) {
-      const { rows: samePathRows } = await clientStateless.query(
-        "SELECT method FROM endpoints WHERE id<>$1 AND folder_id=$2 AND path=$3",
-        [endpointId, current.folder_id, newPath]
-      );
+    if (newPath !== current.path || newMethod.toUpperCase() !== current.method.toUpperCase()) {
+      const { rows: samePathRows } = await clientStateless.query("SELECT method FROM endpoints WHERE id<>$1 AND folder_id=$2 AND path=$3", [endpointId, current.folder_id, newPath]);
 
       const usedMethods = samePathRows.map((r) => r.method.toUpperCase());
       const newMethodUpper = newMethod.toUpperCase();
@@ -255,14 +222,11 @@ async function updateEndpoint(
       const keys = Object.keys(schema);
       isGetSchema = hasFields && keys.length === 1;
       // Rules schema: có ít nhất 1 value là object có 'type' hoặc 'required'
-      isRulesSchema = Object.values(schema).some(
-        (v) => v && typeof v === "object" && ("type" in v || "required" in v)
-      );
+      isRulesSchema = Object.values(schema).some((v) => v && typeof v === "object" && ("type" in v || "required" in v));
       if (isGetSchema && isRulesSchema) {
         return {
           success: false,
-          message:
-            "Schema is ambiguous: use either {fields:[...]} for GET or a rules map for POST/PUT.",
+          message: "Schema is ambiguous: use either {fields:[...]} for GET or a rules map for POST/PUT.",
         };
       }
 
@@ -277,8 +241,7 @@ async function updateEndpoint(
       if ((m === "POST" || m === "PUT") && !isRulesSchema) {
         return {
           success: false,
-          message:
-            "For POST/PUT endpoints, schema must be a rules map (with type/required).",
+          message: "For POST/PUT endpoints, schema must be a rules map (with type/required).",
         };
       }
       // Các method khác (DELETE, PATCH, ...) → hiện không cho cập nhật schema
@@ -318,10 +281,7 @@ async function updateEndpoint(
       RETURNING *;
     `;
 
-    const { rows: updatedRows } = await clientStateful.query(
-      updateQuery,
-      values
-    );
+    const { rows: updatedRows } = await clientStateful.query(updateQuery, values);
     const updated = updatedRows[0];
 
     // ---------------------------------------------
@@ -331,32 +291,25 @@ async function updateEndpoint(
     // - CHỈ THÊM field CHƯA CÓ
     // - KHÔNG XOÁ, KHÔNG GHI ĐÈ
     if (schema && isRulesSchema) {
-      const { rows: folderRows } = await clientStateless.query(
-        "SELECT base_schema FROM folders WHERE id = $1",
-        [current.folder_id]
-      );
+      const { rows: folderRows } = await clientStateless.query("SELECT base_schema FROM folders WHERE id = $1", [current.folder_id]);
       // base_schema có thể null → mặc định {}
       let baseSchema = folderRows[0]?.base_schema || {};
       let baseChanged = false;
 
       // Thêm các field chưa có vào base_schema (không đụng field đã có)
-     for (const [name, rule] of Object.entries(schema)) {
+      for (const [name, rule] of Object.entries(schema)) {
         // Không có __order nữa, nhưng vẫn phòng ngừa:
         if (name === "__order") continue;
         if (!Object.prototype.hasOwnProperty.call(baseSchema, name)) {
           const type = rule?.type ?? "string";
-          const required =
-            typeof rule?.required === "boolean" ? rule.required : true;
+          const required = typeof rule?.required === "boolean" ? rule.required : true;
           baseSchema[name] = { type, required };
           baseChanged = true;
         }
       }
 
       if (baseChanged) {
-        await clientStateless.query(
-          "UPDATE folders SET base_schema = $1::jsonb WHERE id = $2",
-          [JSON.stringify(baseSchema), current.folder_id]
-        );
+        await clientStateless.query("UPDATE folders SET base_schema = $1::jsonb WHERE id = $2", [JSON.stringify(baseSchema), current.folder_id]);
       }
     }
 
@@ -378,9 +331,7 @@ async function deleteEndpoint(dbPool, endpointId) {
   // Nếu là stateful, gọi service xóa của stateful
   if (endpoint.is_stateful === true) {
     // Tìm stateful endpoint bằng origin_id
-    const statefulEndpoint = await statefulEndpointSvc.findByOriginId(
-      endpoint.id
-    );
+    const statefulEndpoint = await statefulEndpointSvc.findByOriginId(endpoint.id);
     if (statefulEndpoint) {
       await statefulEndpointSvc.deleteById(statefulEndpoint.id);
     }

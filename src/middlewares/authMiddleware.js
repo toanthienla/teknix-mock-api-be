@@ -1,5 +1,5 @@
 // middlewares/authMiddleware.js
-const { verifyAccessToken } = require('../utils/jwt');
+const { verifyAccessToken } = require("../utils/jwt");
 
 /**
  * Middleware kiểm tra JWT access token trong cookie hoặc header
@@ -12,8 +12,8 @@ function authMiddleware(req, res, next) {
     // 1) Lấy token từ cookie hoặc header Authorization
     let token = req.cookies?.access_token;
     if (!token) {
-      const authz = req.headers['authorization'] || req.headers['Authorization'];
-      if (typeof authz === 'string') {
+      const authz = req.headers["authorization"] || req.headers["Authorization"];
+      if (typeof authz === "string") {
         // chấp nhận "Bearer <token>" hoặc token trần
         const parts = authz.trim().split(/\s+/);
         token = parts.length === 2 && /^Bearer$/i.test(parts[0]) ? parts[1] : authz;
@@ -21,32 +21,27 @@ function authMiddleware(req, res, next) {
     }
 
     if (!token) {
-      return res.status(401).json({ error: 'Unauthorized: Missing access token' });
+      return res.status(401).json({ error: "Unauthorized: Missing access token" });
     }
 
     // 2) Xác thực token (verifyAccessToken có thể trả null hoặc throw)
     const decoded = verifyAccessToken(token);
     if (!decoded) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
+      return res.status(401).json({ error: "Unauthorized: Invalid or expired token" });
     }
 
     // 3) Chuẩn hoá user
     //    Ưu tiên decoded.user_id; nếu payload dùng sub/id thì fallback
-    const rawUid =
-      decoded.user_id ??
-      decoded.id ??
-      decoded.sub ??
-      decoded.userId ??
-      null;
+    const rawUid = decoded.user_id ?? decoded.id ?? decoded.sub ?? decoded.userId ?? null;
 
     const uidNum = Number(rawUid);
     if (!Number.isFinite(uidNum)) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid user id in token' });
+      return res.status(401).json({ error: "Unauthorized: Invalid user id in token" });
     }
 
     const user = {
-      id: uidNum,                 // <— cái statefulHandler đọc
-      user_id: uidNum,            // <— tương thích các nơi khác
+      id: uidNum, // <— cái statefulHandler đọc
+      user_id: uidNum, // <— tương thích các nơi khác
       username: decoded.username ?? decoded.name ?? null,
       roles: decoded.roles ?? decoded.role ?? null,
       // giữ lại toàn bộ payload (an toàn cho logging/debug nếu cần)
@@ -62,8 +57,8 @@ function authMiddleware(req, res, next) {
 
     return next();
   } catch (err) {
-    console.error('Auth middleware error:', err?.message || err);
-    return res.status(401).json({ error: 'Unauthorized' });
+    console.error("Auth middleware error:", err?.message || err);
+    return res.status(401).json({ error: "Unauthorized" });
   }
 }
 

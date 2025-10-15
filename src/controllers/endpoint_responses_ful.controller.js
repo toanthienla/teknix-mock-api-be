@@ -7,9 +7,7 @@ exports.listResponsesForEndpoint = async (req, res) => {
     return res.status(400).json({ error: "endpoint_id là bắt buộc." });
   }
 
-  const responses = await ResponseStatefulService.findByEndpointId(
-    parseInt(endpoint_id, 10)
-  );
+  const responses = await ResponseStatefulService.findByEndpointId(parseInt(endpoint_id, 10));
   const result = responses.map((r) => ({ ...r, is_stateful: true }));
 
   res.status(200).json(result);
@@ -51,8 +49,8 @@ exports.updateById = async (req, res) => {
     }
 
     const updated = await ResponseSvc.update(
-      req.db.stateless,   // pool stateless
-      req.db.stateful,    // pool stateful
+      req.db.stateless, // pool stateless
+      req.db.stateful, // pool stateful
       id,
       {
         name: normalized.name,
@@ -67,7 +65,6 @@ exports.updateById = async (req, res) => {
     return res.status(400).json({ error: err.message });
   }
 };
-
 
 //  Xóa một stateful response
 exports.deleteResponseById = async (req, res) => {

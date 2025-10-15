@@ -3,9 +3,7 @@
 // Hàm stringify an toàn: tránh lỗi vòng tham chiếu/BigInt khi convert sang JSON cho cột JSONB
 function safeStringify(value) {
   try {
-    return JSON.stringify(value, (_, v) =>
-      typeof v === "bigint" ? v.toString() : v
-    );
+    return JSON.stringify(value, (_, v) => (typeof v === "bigint" ? v.toString() : v));
   } catch (e) {
     // Fallback: wrap as string message
     return JSON.stringify({
@@ -22,19 +20,7 @@ function safeStringify(value) {
 // response_status_code, response_body (jsonb), ip_address, latency_ms, created_at
 
 async function insertLog(dbPool, payload) {
-  const {
-    project_id,
-    endpoint_id,
-    endpoint_response_id = null,
-    request_method,
-    request_path,
-    request_headers = {},
-    request_body = {},
-    response_status_code,
-    response_body = {},
-    ip_address,
-    latency_ms = null,
-  } = payload;
+  const { project_id, endpoint_id, endpoint_response_id = null, request_method, request_path, request_headers = {}, request_body = {}, response_status_code, response_body = {}, ip_address, latency_ms = null } = payload;
 
   // Ghi 1 dòng log request/response thực tế
   const { rows } = await dbPool.query(
@@ -81,8 +67,7 @@ async function nullifyEndpointResponseRef(dbPool, endpointResponseId) {
 // NULL hoá tham chiếu endpoint_id và toàn bộ endpoint_response_id thuộc 1 endpoint (để có thể xoá endpoint mà vẫn giữ log)
 async function nullifyEndpointAndResponses(dbPool, endpointId) {
   const eid = Number(endpointId);
-  if (!Number.isInteger(eid))
-    return { clearedEndpoint: 0, clearedResponses: 0 };
+  if (!Number.isInteger(eid)) return { clearedEndpoint: 0, clearedResponses: 0 };
 
   // 1) Bỏ tham chiếu endpoint_id
   const r1 = await dbPool.query(
@@ -114,8 +99,7 @@ async function nullifyEndpointAndResponses(dbPool, endpointId) {
 // ✅ SỬA: nullify toàn bộ tham chiếu theo workspace (qua folders → projects)
 async function nullifyWorkspaceTree(dbPool, workspaceId) {
   const wid = Number(workspaceId);
-  if (!Number.isInteger(wid))
-    return { clearedProjects: 0, clearedEndpoints: 0, clearedResponses: 0 };
+  if (!Number.isInteger(wid)) return { clearedProjects: 0, clearedEndpoints: 0, clearedResponses: 0 };
 
   // 1) Bỏ tham chiếu project_id
   const p = await dbPool.query(
@@ -166,8 +150,7 @@ async function nullifyWorkspaceTree(dbPool, workspaceId) {
 // ✅ SỬA: nullify toàn bộ tham chiếu theo project
 async function nullifyProjectTree(dbPool, projectId) {
   const pid = Number(projectId);
-  if (!Number.isInteger(pid))
-    return { clearedProject: 0, clearedEndpoints: 0, clearedResponses: 0 };
+  if (!Number.isInteger(pid)) return { clearedProject: 0, clearedEndpoints: 0, clearedResponses: 0 };
 
   // 1) Bỏ tham chiếu project_id
   const p = await dbPool.query(
@@ -214,8 +197,7 @@ async function nullifyProjectTree(dbPool, projectId) {
 // ✅ MỚI: nullify theo folder (để xoá folder không vướng FK)
 async function nullifyFolderTree(dbPool, folderId) {
   const fid = Number(folderId);
-  if (!Number.isInteger(fid))
-    return { clearedEndpoints: 0, clearedResponses: 0 };
+  if (!Number.isInteger(fid)) return { clearedEndpoints: 0, clearedResponses: 0 };
 
   // Bỏ tham chiếu endpoint_id cho toàn bộ endpoint trong folder
   const e = await dbPool.query(
@@ -247,21 +229,7 @@ async function nullifyFolderTree(dbPool, folderId) {
 }
 
 // Lấy danh sách log theo filter (bắt buộc project_id; còn lại tùy chọn)
-async function listLogs(
-  dbPool,
-  {
-    project_id,
-    folder_id,
-    endpoint_id,
-    method,
-    path,
-    status_code,
-    from,
-    to,
-    limit = 100,
-    offset = 0,
-  }
-) {
+async function listLogs(dbPool, { project_id, folder_id, endpoint_id, method, path, status_code, from, to, limit = 100, offset = 0 }) {
   // Khởi tạo query và các mảng điều kiện, tham số
   let query = "SELECT l.* FROM project_request_logs l";
   const conds = [];
@@ -269,14 +237,14 @@ async function listLogs(
   let idx = 0;
 
   // Nếu có project_id, chúng ta cần JOIN với bảng folders
-   if (project_id) {
+  if (project_id) {
     idx += 1;
     conds.push(`project_id = $${idx}`);
     params.push(project_id);
   } else {
     // Nếu không có project_id, trả về mảng rỗng hoặc ném lỗi
     // tùy theo yêu cầu nghiệp vụ. Ở đây ta trả về mảng rỗng.
-    return []; 
+    return [];
   }
 
   // Thêm các điều kiện lọc khác một cách linh hoạt
@@ -333,10 +301,7 @@ async function listLogs(
 
 async function getLogById(dbPool, id) {
   // Lấy chi tiết 1 log theo id
-  const { rows } = await dbPool.query(
-    "SELECT * FROM project_request_logs WHERE id = $1",
-    [id]
-  );
+  const { rows } = await dbPool.query("SELECT * FROM project_request_logs WHERE id = $1", [id]);
   return rows[0] || null;
 }
 
@@ -346,7 +311,7 @@ module.exports = {
   nullifyEndpointAndResponses,
   nullifyWorkspaceTree,
   nullifyProjectTree,
-  nullifyFolderTree, 
+  nullifyFolderTree,
   listLogs,
   getLogById,
 };

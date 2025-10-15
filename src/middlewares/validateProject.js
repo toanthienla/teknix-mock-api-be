@@ -8,7 +8,7 @@ module.exports = function validateProject(req, res, next) {
   const errors = [];
 
   // workspace_id is required when creating a project
-  if (req.method === 'POST' && !workspace_id) {
+  if (req.method === "POST" && !workspace_id) {
     errors.push({ field: "workspace_id", message: "workspace_id is required" });
   }
 
@@ -26,7 +26,7 @@ module.exports = function validateProject(req, res, next) {
   if (name && !isValidName(name)) {
     errors.push({
       field: "name",
-      message: "Project name must start with a letter (Unicode supported) and can only contain letters, numbers, spaces, - or _"
+      message: "Project name must start with a letter (Unicode supported) and can only contain letters, numbers, spaces, - or _",
     });
   }
 

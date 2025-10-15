@@ -5,20 +5,10 @@ const { success, error } = require("../utils/response");
 // GET /project_request_logs?project_id=..&endpoint_id=..&method=GET&path=/users&status_code=200&from=...&to=...&limit=50&offset=0
 async function list(req, res) {
   try {
-    const {
-      project_id,
-      endpoint_id,
-      method,
-      path,
-      status_code,
-      from,
-      to,
-      limit,
-      offset,
-    } = req.query;
+    const { project_id, endpoint_id, method, path, status_code, from, to, limit, offset } = req.query;
 
     // Yêu cầu người dùng cung cấp ít nhất project_id hoặc folder_id
-if (!project_id) {
+    if (!project_id) {
       return error(res, 400, "Cần cung cấp query parameter project_id");
     }
 
