@@ -117,6 +117,19 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
     );
 
     const updatedFolder = rows[0];
+    // 🔄 3️⃣ Cập nhật toàn bộ schema của endpoints_ful trong folder này
+    try {
+      await dbStateful.query(
+        `UPDATE endpoints_ful
+         SET schema = $1::jsonb,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE folder_id = $2`,
+        [JSON.stringify(base_schema), id]
+      );
+      console.log(`✅ Updated schema for all endpoints_ful in folder ${id}`);
+    } catch (err) {
+      console.error("⚠️ Failed to sync schema to endpoints_ful:", err);
+    }
 
     // 🔍 3️⃣ Sau khi update, kiểm tra xem có endpoint nào đã được chuyển stateful chưa
     const { rows: endpoints } = await dbStateless.query("SELECT id, path FROM endpoints WHERE folder_id = $1", [id]);
