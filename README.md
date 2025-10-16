@@ -3,11 +3,13 @@
 Mock API quản lý workspace → project → endpoint → endpoint_response và runtime giả lập API, kèm hệ thống lưu log request/response (PostgreSQL JSONB).
 
 ## 1) Yêu cầu hệ thống
+
 - Node.js >= 18
 - PostgreSQL >= 13
 - Windows PowerShell (khuyến nghị) hoặc CMD
 
 ## 2) Cài đặt nhanh (Windows PowerShell)
+
 1. Tạo file môi trường `.env` ở thư mục gốc (cùng cấp `package.json`):
 
 ```env
@@ -42,34 +44,36 @@ npm start
 Server mặc định chạy tại http://localhost:3000
 
 ## 3) Cấu hình package.json (đã có sẵn)
+
 ```json
 {
-	"name": "texnik-mock_api",
-	"version": "1.0.0",
-	"description": "Simple API quản lý workspace và project",
-	"main": "src/server.js",
-	"scripts": {
-		"start": "node src/server.js",
-		"dev": "nodemon src/server.js",
-		"test": "echo \"Error: no test specified\" && exit 1"
-	},
-	"dependencies": {
-		"dotenv": "^17.2.2",
-		"express": "^5.1.0",
-		"pg": "^8.16.3",
-		"path-to-regexp": "^6.3.0"
-	},
-	"devDependencies": {
-		"nodemon": "^3.1.10"
-	}
+  "name": "teknix-mock_api",
+  "version": "1.0.0",
+  "description": "Simple API quản lý workspace và project",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "pg": "^8.16.3",
+    "path-to-regexp": "^6.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
 }
 ```
 
 - Scripts dùng nhiều:
-	- `npm run dev`: chạy dev bằng nodemon (auto-reload, hỗ trợ `rs` để restart nhanh)
-	- `npm start`: chạy bình thường bằng node
+  - `npm run dev`: chạy dev bằng nodemon (auto-reload, hỗ trợ `rs` để restart nhanh)
+  - `npm start`: chạy bình thường bằng node
 
 ## 4) Khởi tạo database (DDL mẫu)
+
 Tối thiểu cần các bảng sau để chạy toàn bộ tính năng. Bạn có thể điều chỉnh tên schema/constraint cho phù hợp hệ thống hiện tại.
 
 ```sql
@@ -136,52 +140,59 @@ CREATE TABLE IF NOT EXISTS project_request_logs (
 ```
 
 Ghi chú:
+
 - Các cột JSONB (headers/body) dùng kiểu JSONB để query/filter hiệu quả.
 - Không dùng ON DELETE CASCADE cho log: khi xoá dữ liệu chính, app sẽ tự `SET NULL` các FK trong log để GIỮ lịch sử log.
 
 ## 5) API chính (tóm tắt)
+
 - Workspaces: `GET /workspaces`, `GET /workspaces/:id`, `POST /workspaces`, `PUT /workspaces/:id`, `DELETE /workspaces/:id`
 - Projects: `GET /projects`, `GET /projects/:id`, `POST /projects`, `PUT /projects/:id`, `DELETE /projects/:id`
 - Endpoints: `GET /endpoints`, `GET /endpoints/:id`, `POST /endpoints`, `PUT /endpoints/:id`, `DELETE /endpoints/:id`
 - Endpoint responses:
-	- `GET /endpoint_responses?endpoint_id=...`
-	- `GET /endpoint_responses/:id`
-	- `POST /endpoint_responses`
-	- `PUT /endpoint_responses/:id`
-	- `PUT /endpoint_responses/:id/set_default`
-	- `PUT /endpoint_responses/priority` (payload là MẢNG item)
-	- `DELETE /endpoint_responses/:id`
+  - `GET /endpoint_responses?endpoint_id=...`
+  - `GET /endpoint_responses/:id`
+  - `POST /endpoint_responses`
+  - `PUT /endpoint_responses/:id`
+  - `PUT /endpoint_responses/:id/set_default`
+  - `PUT /endpoint_responses/priority` (payload là MẢNG item)
+  - `DELETE /endpoint_responses/:id`
 - Mock runtime: định tuyến động dựa theo endpoints + endpoint_responses, render response_body + delay
 
 ## 6) Hệ thống ghi log (project_request_logs)
+
 Khi nào ghi log?
+
 - Mock runtime: mọi request thực tế đến endpoint mock (bao gồm latency, response chọn)
 - Admin (endpoint_responses):
-	- `PUT /endpoint_responses/priority`: nếu response là mảng → ghi N dòng (mỗi phần tử 1 dòng)
-	- Trường hợp payload sai định dạng (400) vẫn ghi log để truy vết
-	- `PUT /endpoint_responses/:id/set_default`: có log (qua middleware)
+  - `PUT /endpoint_responses/priority`: nếu response là mảng → ghi N dòng (mỗi phần tử 1 dòng)
+  - Trường hợp payload sai định dạng (400) vẫn ghi log để truy vết
+  - `PUT /endpoint_responses/:id/set_default`: có log (qua middleware)
 - Delete hành động: theo yêu cầu hiện tại
-	- KHÔNG ghi log khi xoá endpoint, project, workspace
-	- Xoá endpoint_response: cho phép ghi 1 dòng log xoá (endpoint_response_id=null) — có thể tắt nếu bạn cần
+  - KHÔNG ghi log khi xoá endpoint, project, workspace
+  - Xoá endpoint_response: cho phép ghi 1 dòng log xoá (endpoint_response_id=null) — có thể tắt nếu bạn cần
 
 Khi nào KHÔNG ghi log (mặc định)?
+
 - `GET /endpoint_responses` và `GET /endpoint_responses/:id` (tránh phình log quản trị)
 - `PUT /endpoint_responses/priority` đã bỏ qua ở middleware để tránh TRÙNG vì controller ghi chi tiết
 - Có thể cưỡng bức ghi log GET bằng header `x-force-log: 1`
 
 Xử lý khoá ngoại khi xoá (giữ lịch sử log, không sửa schema):
+
 - Xoá endpoint_response: `SET endpoint_response_id = NULL` cho các log đang tham chiếu
 - Xoá endpoint: `SET endpoint_id = NULL` và `SET endpoint_response_id = NULL` cho các log thuộc endpoint
 - Xoá project: `SET project_id = NULL`, `SET endpoint_id = NULL`, `SET endpoint_response_id = NULL` cho các log thuộc project
 - Xoá workspace: `SET project_id/endpoint_id/endpoint_response_id = NULL` cho toàn bộ cây dữ liệu thuộc workspace
 
 ## 7) Ví dụ Postman
+
 - Cập nhật priority (mảng item):
 
 ```json
 [
-	{ "id": 11, "endpoint_id": 13, "priority": 100 },
-	{ "id": 12, "endpoint_id": 13, "priority": 90 }
+  { "id": 11, "endpoint_id": 13, "priority": 100 },
+  { "id": 12, "endpoint_id": 13, "priority": 90 }
 ]
 ```
 
@@ -192,14 +203,13 @@ Sai định dạng (ví dụ) sẽ trả 400 và vẫn ghi log:
 ```
 
 ## 8) Khắc phục sự cố (Troubleshooting)
+
 - Lỗi Postgres: `invalid input syntax for type json`
-	- App đã stringify an toàn trước khi insert JSONB. Đảm bảo các cột là JSONB.
+  - App đã stringify an toàn trước khi insert JSONB. Đảm bảo các cột là JSONB.
 - Không thấy log cho priority:
-	- Payload phải là MẢNG item có đủ `id, endpoint_id, priority`.
+  - Payload phải là MẢNG item có đủ `id, endpoint_id, priority`.
 - Bị log trùng cho priority:
-	- Middleware đã bỏ qua `/endpoint_responses/priority`; controller ghi 1 dòng/item.
+  - Middleware đã bỏ qua `/endpoint_responses/priority`; controller ghi 1 dòng/item.
 - Restart nhanh server: trong terminal nodemon gõ `rs`.
 
-
 ---
-

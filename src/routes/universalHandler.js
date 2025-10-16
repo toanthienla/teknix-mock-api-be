@@ -84,7 +84,11 @@ router.use(async (req, res, next) => {
     const cached = cacheGet(ck);
     if (cached) {
       req.universal = cached.meta;
-      return runHandler(cached.mode === "stateful" ? statefulHandler : statelessHandler, req, res, next);
+      // Nếu stateless, chỉ chuyển subPath (/cat, /cat/1, ...)
+      if (cached.mode === "stateless") {
+        return runHandler(statelessHandler, req, res, next);
+      }
+      return runHandler(statefulHandler, req, res, next);
     }
 
     const { rows: epRows } = await req.db.stateless.query(
@@ -149,17 +153,25 @@ router.use(async (req, res, next) => {
         });
       }
 
+      // Tạo meta cho handler
+      // subPath: phần sau /:workspace/:project, VD "/cat/1"
+      const segments = req.path.split("/").filter(Boolean);
+      const subPath = "/" + segments.slice(2).join("/");
       const meta = {
-        mode: "stateful",
         method,
+        basePath,
         rawPath: normPath,
-        basePath: matchedPath,
-        idInUrl,
-        statelessId: matchedStateless.id,
-        statefulId: st.rows[0].id,
+        subPath, // 👈 thêm subPath để stateless xử lý
+        projectId, // 👈 lưu projectId đã resolve từ :project
+        statelessId: ep.id,
+        statefulId: st?.id || null,
       };
+      const mode = ep.is_stateful ? "stateful" : "stateless";
+      cacheSet(ck, { mode, meta });
       req.universal = meta;
-      cacheSet(ck, { mode: "stateful", meta });
+      if (mode === "stateless") {
+        return runHandler(statelessHandler, req, res, next);
+      }
       return runHandler(statefulHandler, req, res, next);
     }
 
