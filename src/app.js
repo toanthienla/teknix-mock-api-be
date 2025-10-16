@@ -5,6 +5,12 @@ const app = express();
 const cors = require('cors');
 const auth = require('./middlewares/authMiddleware');
 
+app.use(
+  cors({
+    origin: ["http://localhost:5173", "http://localhost:8080"],
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(cookieParser());
 
@@ -19,13 +25,6 @@ app.use((req, res, next) => {
   };
   next();
 });
-
-app.use(
-  cors({
-    origin: "http://localhost:5173",
-    credentials: true,
-  })
-);
 
 // ===== IMPORT ROUTES JWT =====
 const authRoutes = require('./routes/auth.routes');
