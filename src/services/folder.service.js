@@ -204,32 +204,28 @@ async function resetMongoCollectionsByFolder(folderId, dbStateless) {
   for (const ep of endpoints.rows) {
     const collection = getCollection2(ep.path, ep.workspace_name, ep.project_name);
 
-    let fields = [];
     try {
+      // Parse base_schema (vẫn giữ phòng khi bạn cần logic khác sau này)
       const schema = typeof ep.base_schema === "string" ? JSON.parse(ep.base_schema) : ep.base_schema;
-
-      if (schema && typeof schema === "object") {
-        // chấp nhận cả dạng có "properties" hoặc không
-        const base = schema.properties || schema;
-        fields = Object.keys(base);
+      if (!schema || typeof schema !== "object") {
+        console.warn(`⚠️ Base schema không hợp lệ cho endpoint ${ep.path}.`);
+        continue;
       }
+
+      // ✅ Xóa dữ liệu trong 2 trường data_default và data_current
+      await collection.updateOne(
+        {},
+        { $set: { data_default: [], data_current: [] } },
+        { upsert: true }
+      );
+
+      console.log(`✅ Đã reset collection "${ep.path}.${ep.workspace_name}.${ep.project_name}" thành rỗng`);
     } catch (err) {
-      console.warn(`⚠️ Base schema không hợp lệ cho endpoint ${ep.path}:`, err.message);
-      continue;
+      console.warn(`⚠️ Lỗi khi xử lý endpoint ${ep.path}:`, err.message);
     }
-
-    // Tạo document mẫu: tất cả field = null, id = 1
-//    const baseDoc = { id: 1 };
-//    for (const f of fields) {
-//      if (f !== "id") baseDoc[f] = null;
-//    }
-
-//    // Ghi vào Mongo (upsert)
-//    await collection.updateOne({}, { $set: { data_default: [baseDoc], data_current: [baseDoc] } }, { upsert: true });
-
-    console.log(`✅ Reset collection "${ep.path}.${ep.workspace_name}.${ep.project_name}" thành công`);
   }
 }
+
 
 // Delete folder and handle related logs inside a transaction
 async function deleteFolderAndHandleLogs(db, folderId) {
