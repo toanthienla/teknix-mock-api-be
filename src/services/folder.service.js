@@ -219,13 +219,13 @@ async function resetMongoCollectionsByFolder(folderId, dbStateless) {
     }
 
     // Tạo document mẫu: tất cả field = null, id = 1
-    const baseDoc = { id: 1 };
-    for (const f of fields) {
-      if (f !== "id") baseDoc[f] = null;
-    }
+//    const baseDoc = { id: 1 };
+//    for (const f of fields) {
+//      if (f !== "id") baseDoc[f] = null;
+//    }
 
-    // Ghi vào Mongo (upsert)
-    await collection.updateOne({}, { $set: { data_default: [baseDoc], data_current: [baseDoc] } }, { upsert: true });
+//    // Ghi vào Mongo (upsert)
+//    await collection.updateOne({}, { $set: { data_default: [baseDoc], data_current: [baseDoc] } }, { upsert: true });
 
     console.log(`✅ Reset collection "${ep.path}.${ep.workspace_name}.${ep.project_name}" thành công`);
   }
