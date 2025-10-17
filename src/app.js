@@ -4,9 +4,16 @@ const cookieParser = require("cookie-parser");
 const app = express();
 const cors = require("cors");
 const auth = require("./middlewares/authMiddleware");
+const path = require("path");
 
 app.use(express.json());
 app.use(cookieParser());
+
+// Serve static files from the "public" directory
+app.use(express.static(path.join(__dirname, "..", "public")));
+// app.use(express.static('public')); // nếu không dùng path
+app.use("/api", require("./centrifugo/centrifugo-auth.routes"));
+app.use("/api", require("./centrifugo/notify.routes"));
 
 // Import DB pools
 const { statelessPool, statefulPool } = require("./config/db");
@@ -22,7 +29,7 @@ app.use((req, res, next) => {
 
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: ["http://localhost:3000", "http://127.0.0.1:3000", "http://127.0.0.1:5500", "http://localhost:5173"],
     credentials: true,
   })
 );
