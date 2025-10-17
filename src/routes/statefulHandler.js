@@ -449,9 +449,112 @@ module.exports = async function statefulHandler(req, res, next) {
         return;
       }
 
+      // 🧩 Kiểm tra collection có tồn tại không (dùng col lấy db)
+      const mongoDb = col.db;
+      const existingCollections = await mongoDb.listCollections({ name: collectionName }).toArray();
+      const exists = existingCollections.some((c) => c.name === collectionName);
+      if (!exists) {
+        const status = 404;
+        const body = { message: `Collection ${collectionName} does not exist.` };
+        await insertLogSafely(req, {
+          projectId,
+          originId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          endpointResponseId: null,
+          started,
+          payload: req.body,
+        });
+        return res.status(status).json(body);
+      }
+
       const payload = req.body || {};
       const endpointSchema = schema || {};
 
+      // 🧩 Kiểm tra thứ tự field so với schema (schemaOrder được khai báo rõ ràng)
+      const schemaKeys = Object.keys(endpointSchema); // order from schema
+      const payloadOrder = Object.keys(payload);
+      // If schema doesn't define all keys, still require payload follows schemaKeys order exactly and length equal:
+      const sameOrder =
+        schemaKeys.length === payloadOrder.length &&
+        schemaKeys.every((k, i) => k === payloadOrder[i]);
+      if (!sameOrder) {
+        const status = 400;
+        const body = { message: "Invalid data: field order does not match schema." };
+        await insertLogSafely(req, {
+          projectId,
+          originId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          endpointResponseId: null,
+          started,
+          payload,
+        });
+        return res.status(status).json(body);
+      }
+
+      // 🧩 Kiểm tra type chặt chẽ hơn
+      for (const [key, rule] of Object.entries(endpointSchema)) {
+        const val = payload[key];
+        if (val === undefined || val === null) continue;
+
+        if (rule.type === "number" && typeof val !== "number") {
+          const status = 400;
+          const body = { message: `Invalid type for ${key}: expected number.` };
+          await insertLogSafely(req, {
+            projectId,
+            originId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            endpointResponseId: null,
+            started,
+            payload,
+          });
+          return res.status(status).json(body);
+        }
+
+        if (rule.type === "string" && typeof val !== "string") {
+          const status = 400;
+          const body = { message: `Invalid type for ${key}: expected string.` };
+          await insertLogSafely(req, {
+            projectId,
+            originId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            endpointResponseId: null,
+            started,
+            payload,
+          });
+          return res.status(status).json(body);
+        }
+
+        if (rule.type === "boolean" && typeof val !== "boolean") {
+          const status = 400;
+          const body = { message: `Invalid type for ${key}: expected boolean.` };
+          await insertLogSafely(req, {
+            projectId,
+            originId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            endpointResponseId: null,
+            started,
+            payload,
+          });
+          return res.status(status).json(body);
+        }
+      }
+
+      // 🔁 Phần logic POST cũ giữ nguyên validate/sanitize
       const { ok } = validateAndSanitizePayload(endpointSchema, payload, {
         allowMissingRequired: false,
         rejectUnknown: true,
@@ -547,16 +650,24 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(rendered);
       }
 
+      // --- Xây dựng newObj theo đúng thứ tự schema ---
+      // schemaKeys đã lấy ở trên (Object.keys(endpointSchema))
+      // Nếu có các trường trong unionKeys mà schema không khai báo, append vào cuối theo thứ tự unionKeys
+      const schemaKeysForInsert = Object.keys(endpointSchema);
+      const extraKeys = unionKeys.filter((k) => !schemaKeysForInsert.includes(k) && k !== "id");
+      const schemaOrder = [...schemaKeysForInsert, ...extraKeys];
+
       const newObj = {};
-      for (const k of unionKeys) {
-        if (k === "id") continue;
-        if (Object.prototype.hasOwnProperty.call(payload, k)) {
-          newObj[k] = payload[k];
+      for (const key of schemaOrder) {
+        if (key === "id") {
+          newObj.id = newId;
+        } else if (Object.prototype.hasOwnProperty.call(payload, key)) {
+          newObj[key] = payload[key];
         } else {
-          newObj[k] = null;
+          newObj[key] = null;
         }
       }
-      newObj.id = newId;
+      // Cuối cùng thêm user_id
       newObj.user_id = Number(userId);
 
       const updated = [...current, newObj];
@@ -586,6 +697,7 @@ module.exports = async function statefulHandler(req, res, next) {
       return res.status(status).json(rendered);
     }
 
+
     // =================== PUT ===================
     if (method === "PUT") {
       const userId = requireAuth(req, res);
@@ -602,6 +714,27 @@ module.exports = async function statefulHandler(req, res, next) {
           payload: req.body,
         });
         return;
+      }
+
+      // 🧩 Kiểm tra collection tồn tại
+      const mongoDb = col.db;
+      const existingCollections = await mongoDb.listCollections({ name: collectionName }).toArray();
+      const exists = existingCollections.some((c) => c.name === collectionName);
+      if (!exists) {
+        const status = 404;
+        const body = { message: `Collection ${collectionName} does not exist.` };
+        await insertLogSafely(req, {
+          projectId,
+          originId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          endpointResponseId: null,
+          started,
+          payload: req.body,
+        });
+        return res.status(status).json(body);
       }
 
       if (!hasId) {
@@ -679,41 +812,87 @@ module.exports = async function statefulHandler(req, res, next) {
       const payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
-      // Đổi id → check conflict (URL id vs body id)
-      const targetId = payload.id;
-      if (targetId !== undefined && Number(targetId) !== idFromUrl) {
-        const exists = current.some((x) => Number(x?.id) === Number(targetId));
-        if (exists) {
-          const status = 409;
-          const { rendered, responseId } = selectAndRenderResponseAdv(
-            responsesBucket,
-            status,
-            { params: { id: idFromUrl, id_conflict: Number(targetId) } },
-            {
-              fallback: {
-                message: "Update id {{params.id}} conflict: {Path} id {{params.id}} in request body already exists.",
-              },
-              requireParamId: true,
-              paramsIdOccurrences: 2,
-              logicalPath,
-            }
-          );
+      // 🧩 Kiểm tra thứ tự field (schemaKeys khai báo rõ ràng)
+      const schemaKeys = Object.keys(schema || {});
+      const payloadOrder = Object.keys(payload);
+      const sameOrder =
+        schemaKeys.length === payloadOrder.length &&
+        schemaKeys.every((k, i) => k === payloadOrder[i]);
+      if (!sameOrder) {
+        const status = 400;
+        const body = { message: "Invalid data: field order does not match schema." };
+        await insertLogSafely(req, {
+          projectId,
+          originId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          endpointResponseId: null,
+          started,
+          payload,
+        });
+        return res.status(status).json(body);
+      }
+
+      // 🧩 Kiểm tra type chặt chẽ
+      for (const [key, rule] of Object.entries(schema || {})) {
+        const val = payload[key];
+        if (val === undefined || val === null) continue;
+
+        if (rule.type === "number" && typeof val !== "number") {
+          const status = 400;
+          const body = { message: `Invalid type for ${key}: expected number.` };
           await insertLogSafely(req, {
             projectId,
             originId,
             method,
             path: rawPath,
             status,
-            responseBody: rendered,
-            endpointResponseId: responseId,
+            responseBody: body,
+            endpointResponseId: null,
             started,
-            payload: req.body,
+            payload,
           });
-          return res.status(status).json(rendered);
+          return res.status(status).json(body);
+        }
+
+        if (rule.type === "string" && typeof val !== "string") {
+          const status = 400;
+          const body = { message: `Invalid type for ${key}: expected string.` };
+          await insertLogSafely(req, {
+            projectId,
+            originId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            endpointResponseId: null,
+            started,
+            payload,
+          });
+          return res.status(status).json(body);
+        }
+
+        if (rule.type === "boolean" && typeof val !== "boolean") {
+          const status = 400;
+          const body = { message: `Invalid type for ${key}: expected boolean.` };
+          await insertLogSafely(req, {
+            projectId,
+            originId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            endpointResponseId: null,
+            started,
+            payload,
+          });
+          return res.status(status).json(body);
         }
       }
 
-      // Validate payload: thiếu required/unknown/string rỗng → 400
+      // 🔁 Giữ nguyên logic PUT cũ từ đây (nhưng xây dựng updatedItem theo thứ tự schema)
       const { ok } = validateAndSanitizePayload(schema, payload, {
         allowMissingRequired: false,
         rejectUnknown: true,
@@ -745,7 +924,25 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(rendered);
       }
 
-      const updatedItem = { ...current[idx], ...payload, user_id: ownerId };
+      // Tạo updatedItem theo thứ tự schema (nếu schema không chứa một vài trường, append các trường cũ còn lại)
+      const schemaKeysForUpdate = Object.keys(schema || {});
+      const extraKeysForUpdate = Object.keys(current[idx] || {}).filter((k) => !schemaKeysForUpdate.includes(k) && k !== "user_id");
+      const schemaOrderForUpdate = [...schemaKeysForUpdate, ...extraKeysForUpdate];
+
+      const updatedItem = {};
+      for (const key of schemaOrderForUpdate) {
+        if (key === "id") {
+          updatedItem.id = idFromUrl; // id từ URL
+        } else if (Object.prototype.hasOwnProperty.call(payload, key)) {
+          updatedItem[key] = payload[key];
+        } else {
+          // giữ nguyên giá trị cũ nếu có, ngược lại null
+          updatedItem[key] = current[idx]?.[key] ?? null;
+        }
+      }
+      // Cuối cùng thêm user_id
+      updatedItem.user_id = ownerId;
+
       const updated = current.slice();
       updated[idx] = updatedItem;
       await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
@@ -796,6 +993,28 @@ module.exports = async function statefulHandler(req, res, next) {
         return;
       }
 
+      // 🧩 Kiểm tra collection có tồn tại không
+      const mongoDb = col.db; // vì getCollection(collectionName) đã trả về collection hợp lệ
+      const existingCollections = await mongoDb.listCollections({ name: collectionName }).toArray();
+      const exists = existingCollections.some(c => c.name === collectionName);
+      if (!exists) {
+        const status = 404;
+        const body = { message: `Collection ${collectionName} does not exist.` };
+        await insertLogSafely(req, {
+          projectId,
+          originId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          endpointResponseId: null,
+          started,
+          payload: req.body,
+        });
+        return res.status(status).json(body);
+      }
+
+
       if (hasId) {
         const idx = current.findIndex((x) => Number(x?.id) === idFromUrl);
         if (idx === -1) {
@@ -826,6 +1045,7 @@ module.exports = async function statefulHandler(req, res, next) {
           });
           return res.status(status).json(rendered);
         }
+
         const ownerId = Number(current[idx]?.user_id);
         if (ownerId !== Number(userId)) {
           const status = 403;
@@ -844,6 +1064,7 @@ module.exports = async function statefulHandler(req, res, next) {
           return res.status(status).json(body);
         }
 
+        // Xóa phần tử theo id
         const updated = current.slice();
         updated.splice(idx, 1);
         await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
@@ -876,6 +1097,7 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(rendered);
       }
 
+      // Xóa toàn bộ theo user_id
       const keep = current.filter((x) => Number(x?.user_id) !== Number(userId));
       await col.updateOne({}, { $set: { data_current: keep } }, { upsert: true });
 
