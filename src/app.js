@@ -6,6 +6,12 @@ const cors = require("cors");
 const auth = require("./middlewares/authMiddleware");
 const path = require("path");
 
+app.use(
+  cors({
+    origin: ["http://localhost:5173", "http://localhost:8080"],
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(cookieParser());
 
