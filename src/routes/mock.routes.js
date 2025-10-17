@@ -112,6 +112,10 @@ router.use(async (req, res, next) => {
   try {
     const method = req.method.toUpperCase();
 
+    // Nếu gọi qua /:workspace/:project/... thì universal đã gắn subPath & projectId
+    // subPath là phần sau /:workspace/:project, ví dụ "/cat" hoặc "/cat/1"
+    const pathForMatch = req.universal && req.universal.subPath ? req.universal.subPath : req.path;
+
     const { rows: endpoints } = await req.db.stateless.query(
       `SELECT e.id, e.method, e.path, e.folder_id, e.is_stateful, e.is_active, f.project_id
     FROM endpoints e
@@ -120,19 +124,20 @@ router.use(async (req, res, next) => {
       [method]
     );
 
-    let ep = endpoints.find((e) => {
+    // Tập ứng viên khớp path (dùng subPath nếu có)
+    let matches = endpoints.filter((e) => {
       try {
         const fn = getMatcher(e.path);
-        return Boolean(fn(req.path));
+        return Boolean(fn(pathForMatch));
       } catch (_) {
         return false;
       }
     });
 
-    // Fallback: thử thêm/bớt dấu "/" cuối
-    if (!ep) {
-      const altPath = req.path.endsWith("/") ? req.path.slice(0, -1) : req.path + "/";
-      ep = endpoints.find((e) => {
+    // Fallback: thử thêm/bớt dấu "/" cuối cho pathForMatch
+    if (matches.length === 0) {
+      const altPath = pathForMatch.endsWith("/") ? pathForMatch.slice(0, -1) : pathForMatch + "/";
+      matches = endpoints.filter((e) => {
         try {
           const fn = getMatcher(e.path);
           return Boolean(fn(altPath));
@@ -141,6 +146,41 @@ router.use(async (req, res, next) => {
         }
       });
     }
+
+    // Ưu tiên endpoint đúng project nếu universal cung cấp projectId,
+    // còn nếu không có projectId (gọi thẳng /cat) thì chọn ứng viên "tốt nhất":
+    // stateless trước, active trước, và có response trước.
+    let ep = null;
+    if (matches.length > 0) {
+      if (req.universal && req.universal.projectId) {
+        ep = matches.find((e) => e.project_id === req.universal.projectId) || matches[0];
+      } else {
+        // Lấy danh sách id để kiểm tra có response hay không
+        const ids = matches.map((m) => m.id);
+        const { rows: respCounts } = await req.db.stateless.query(
+          `SELECT endpoint_id, COUNT(*)::int AS cnt
+             FROM endpoint_responses
+            WHERE endpoint_id = ANY($1)
+            GROUP BY endpoint_id`,
+          [ids]
+        );
+        const countMap = new Map(respCounts.map((r) => [Number(r.endpoint_id), Number(r.cnt)]));
+        // xếp hạng: stateless > active > có response
+        matches.sort((a, b) => {
+          const sa = a.is_stateful ? 1 : 0;
+          const sb = b.is_stateful ? 1 : 0;
+          if (sa !== sb) return sa - sb; // stateless (0) trước stateful (1)
+          const aa = a.is_active ? 1 : 0;
+          const ab = b.is_active ? 1 : 0;
+          if (aa !== ab) return ab - aa; // active (1) trước inactive (0)
+          const ca = countMap.get(a.id) || 0;
+          const cb = countMap.get(b.id) || 0;
+          return cb - ca; // nhiều response trước
+        });
+        ep = matches[0];
+      }
+    }
+
     if (!ep) return next();
     // Nếu endpoint vẫn stateless nhưng đã inactive ⇒ không phục vụ
     if (!ep.is_stateful && ep.is_active === false) {
@@ -201,8 +241,7 @@ router.use(async (req, res, next) => {
       const schema = schRows?.[0]?.schema || null;
 
       const method = req.method.toUpperCase();
-      const matchFn = getMatcher(ep.path);
-      const matchRes = matchFn(req.path);
+      const matchRes = getMatcher(ep.path)(pathForMatch);
       const params = (matchRes && matchRes.params) || {};
 
       switch (method) {
@@ -282,9 +321,8 @@ router.use(async (req, res, next) => {
       //  kết thúc xử lý stateful
     }
 
-    // Logic cho stateless endpoints
-    const matchFn = getMatcher(ep.path);
-    const matchRes = matchFn(req.path);
+    // Logic cho stateless endpoints    const matchFn = getMatcher(ep.path);
+    const matchRes = getMatcher(ep.path)(pathForMatch);
     const params = (matchRes && matchRes.params) || {};
     const hasParams = Object.keys(params).length > 0;
 

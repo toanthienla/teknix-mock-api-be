@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Centrifugo Demo</title>
+  </head>
+  <body>
+    <h1>Centrifugo Demo</h1>
+    <pre id="log" style="white-space: pre-wrap; border: 1px solid #ddd; padding: 8px"></pre>
+
+    <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.min.js"></script>
+    <script>
+      const log = (...a) => (document.getElementById("log").textContent += a.join(" ") + "\n");
+
+      (async function () {
+        try {
+          log("fetching token...");
+          const TOKEN_URL = location.origin.includes("127.0.0.1:5500") ? "http://localhost:3000/api/centrifugo/token" : "/api/centrifugo/token";
+          const r = await fetch(TOKEN_URL);
+          if (!r.ok) throw new Error("token endpoint HTTP " + r.status);
+          const { token } = await r.json();
+          log("got token:", token.slice(0, 16) + "...");
+
+          const c = new Centrifuge("ws://127.0.0.1:8000/connection/websocket", { token });
+
+          c.on("connecting", (ctx) => log("connecting", JSON.stringify(ctx)));
+          c.on("connected", async (ctx) => {
+            log("connected", JSON.stringify(ctx));
+
+            // Tạo subscription rồi ĐĂNG KÝ ngay sau khi đã connected
+            const sub = c.newSubscription("news");
+
+            sub.on("subscribing", (sctx) => log("subscribing", JSON.stringify(sctx)));
+            sub.on("subscribed", () => log("subscribed to news"));
+            sub.on("publication", (pctx) => log("message:", JSON.stringify(pctx.data)));
+            sub.on("error", (err) => log("sub error", JSON.stringify(err)));
+
+            try {
+              log("calling sub.subscribe() ...");
+              await sub.subscribe();
+              log("subscribe() resolved");
+            } catch (e) {
+              log("subscribe() failed:", e.message || e);
+            }
+          });
+
+          c.on("disconnected", (ctx) => log("disconnected", JSON.stringify(ctx)));
+          c.on("error", (err) => log("client error", JSON.stringify(err)));
+          c.connect();
+        } catch (e) {
+          log("FATAL:", e.message || e);
+        }
+      })();
+
+      window.addEventListener("error", (e) => log("window error:", e.message));
+      window.addEventListener("unhandledrejection", (e) => log("promise reject:", e.reason));
+    </script>
+  </body>
+</html>
