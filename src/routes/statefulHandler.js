@@ -331,6 +331,18 @@ module.exports = async function statefulHandler(req, res, next) {
     if (method === "GET") {
       const userIdMaybe = pickUserIdFromRequest(req);
 
+      // 🔹 Lấy is_public từ bảng folders trong DB stateless
+      let isPublic = false;
+      try {
+        const folderRow = await req.db.stateless.query(
+          "SELECT is_public FROM folders WHERE id = $1 LIMIT 1",
+          [folder_id]
+        );
+        isPublic = folderRow.rows[0]?.is_public ?? false;
+      } catch (err) {
+        console.error("Error fetching folder.is_public:", err);
+      }
+
       const pickForGET = (obj) => {
         const fieldsArray = Array.isArray(schema?.fields) ? schema.fields : [];
         if (fieldsArray.length === 0) {
@@ -346,33 +358,40 @@ module.exports = async function statefulHandler(req, res, next) {
         return out;
       };
 
-      let currentScoped = [];
-      if (isPublic) {
-        currentScoped = userIdMaybe == null ? [] : current; // public, chưa login → ko lấy current
-      } else {
-        currentScoped = userIdMaybe == null ? [] : current.filter((x) => Number(x?.user_id) === Number(userIdMaybe));
+      // ==============================
+      // CASE 1: folder PRIVATE
+      // ==============================
+      if (!isPublic) {
+        // Trả toàn bộ data_current
+        const all = current.map(pickForGET);
+        await insertLogSafely(req, {
+          projectId,
+          originId,
+          method,
+          path: rawPath,
+          status: 200,
+          responseBody: all,
+          endpointResponseId: null,
+          started,
+          payload: req.body,
+        });
+        return res.status(200).json(all);
       }
 
+      // ==============================
+      // CASE 2: folder PUBLIC
+      // ==============================
+      const defaultRecords = current.filter(x => x.user_id == null || x.user_id === undefined);
+      const userRecords = userIdMaybe == null ? [] : current.filter(x => Number(x?.user_id) === Number(userIdMaybe));
+
       if (hasId) {
-        const foundCurrent = currentScoped.find((x) => Number(x?.id) === idFromUrl);
-        if (foundCurrent) {
-          const body = pickForGET(foundCurrent);
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status: 200,
-            responseBody: body,
-            endpointResponseId: null,
-            started,
-            payload: req.body,
-          });
-          return res.status(200).json(body);
-        }
-        const foundDefault = defaults.find((x) => Number(x).id === idFromUrl) || defaults.find((x) => Number(x?.id) === idFromUrl);
-        if (foundDefault) {
-          const body = pickForGET(foundDefault);
+        const foundUser = userRecords.find(x => Number(x?.id) === idFromUrl);
+        const foundDefault = defaultRecords.find(x => Number(x?.id) === idFromUrl);
+        const foundOldDefault = defaults.find(x => Number(x?.id) === idFromUrl);
+
+        const target = foundUser || foundDefault || foundOldDefault;
+        if (target) {
+          const body = pickForGET(target);
           await insertLogSafely(req, {
             projectId,
             originId,
@@ -393,7 +412,7 @@ module.exports = async function statefulHandler(req, res, next) {
           status,
           { params: { id: idFromUrl } },
           {
-            fallback: { message: "{Path} with id {id} not found." },
+            fallback: { message: "{Path} with id {{params.id}} not found." },
             requireParamId: true,
             paramsIdOccurrences: 1,
             logicalPath,
@@ -413,9 +432,10 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(rendered);
       }
 
-      const defaultsOut = defaults.map(pickForGET);
-      const currentOut = currentScoped.map(pickForGET);
-      const combined = [...defaultsOut, ...currentOut];
+      // Không có id => public: trả default + user data
+      const defaultsOut = defaultRecords.map(pickForGET);
+      const userOut = userRecords.map(pickForGET);
+      const combined = [...defaultsOut, ...userOut];
 
       await insertLogSafely(req, {
         projectId,
@@ -430,6 +450,7 @@ module.exports = async function statefulHandler(req, res, next) {
       });
       return res.status(200).json(combined);
     }
+
 
     // =================== POST ===================
     if (method === "POST") {
