@@ -336,17 +336,21 @@ router.use(async (req, res, next) => {
     if (responses.length === 0) {
       const status = req.method.toUpperCase() === "GET" ? 200 : 501;
       const body = req.method.toUpperCase() === "GET" ? (hasParams ? {} : []) : { error: { message: "No response configured" } };
-
-      // await logSvc.insertLog(req.db.stateless, {
-      //   project_id: ep.project_id || null,
-      //   endpoint_id: ep.id,
-      //   request_method: method,
-      //   request_path: req.path,
-      //   response_status_code: status,
-      //   response_body: body,
-      //   ip_address: getClientIp(req),
-      //   latency_ms: Date.now() - started,
-      // });
+      try {
+        await logSvc.insertLog(req.db.stateless, {
+          project_id: ep.project_id || null,
+          endpoint_id: ep.id,
+          endpoint_response_id: null,
+          request_method: method,
+          request_path: req.path,
+          request_headers: req.headers || {},
+          request_body: req.body || {},
+          response_status_code: status,
+          response_body: body,
+          ip_address: getClientIp(req),
+          latency_ms: Date.now() - started,
+        });
+      } catch (_) {}
       return res.status(status).json(body);
     }
 
@@ -413,19 +417,19 @@ router.use(async (req, res, next) => {
               raw_body: String(proxyResp.data ?? ""),
             };
           }
-          // await logSvc.insertLog(req.db.stateless, {
-          //   project_id: ep.project_id || null,
-          //   endpoint_id: ep.id,
-          //   endpoint_response_id: r.id || null,
-          //   request_method: method,
-          //   request_path: req.path,
-          //   request_headers: req.headers || {},
-          //   request_body: req.body || {},
-          //   response_status_code: proxyResp.status,
-          //   response_body: safeResponseBody,
-          //   ip_address: getClientIp(req),
-          //   latency_ms: finished - started,
-          // });
+          await logSvc.insertLog(req.db.stateless, {
+            project_id: ep.project_id || null,
+            endpoint_id: ep.id,
+            endpoint_response_id: r.id || null,
+            request_method: method,
+            request_path: req.path,
+            request_headers: req.headers || {},
+            request_body: req.body || {},
+            response_status_code: proxyResp.status,
+            response_body: safeResponseBody,
+            ip_address: getClientIp(req),
+            latency_ms: finished - started,
+          });
           return res.status(proxyResp.status).set(proxyResp.headers).send(proxyResp.data);
         } catch (err) {
           return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
@@ -447,19 +451,19 @@ router.use(async (req, res, next) => {
       }
       const sendResponse = async () => {
         const finished = Date.now();
-        // await logSvc.insertLog(req.db.stateless, {
-        //   project_id: ep.project_id || null,
-        //   endpoint_id: ep.id,
-        //   endpoint_response_id: r.id || null,
-        //   request_method: method,
-        //   request_path: req.path,
-        //   request_headers: req.headers || {},
-        //   request_body: req.body || {},
-        //   response_status_code: status,
-        //   response_body: body,
-        //   ip_address: getClientIp(req),
-        //   latency_ms: finished - started,
-        // });
+        await logSvc.insertLog(req.db.stateless, {
+          project_id: ep.project_id || null,
+          endpoint_id: ep.id,
+          endpoint_response_id: r.id || null,
+          request_method: method,
+          request_path: req.path,
+          request_headers: req.headers || {},
+          request_body: req.body || {},
+          response_status_code: status,
+          response_body: body,
+          ip_address: getClientIp(req),
+          latency_ms: finished - started,
+        });
         if (body && typeof body === "object") {
           return res.status(status).json(body);
         }
@@ -473,16 +477,16 @@ router.use(async (req, res, next) => {
     }
   } catch (err) {
     try {
-      // await logSvc.insertLog(req.db.stateless, {
-      //   project_id: null,
-      //   endpoint_id: null,
-      //   request_method: req.method?.toUpperCase?.() || "",
-      //   request_path: req.path || req.originalUrl || "",
-      //   response_status_code: 500,
-      //   response_body: { error: "Internal Server Error", message: err.message },
-      //   ip_address: getClientIp(req),
-      //   latency_ms: Date.now() - started,
-      // });
+      await logSvc.insertLog(req.db.stateless, {
+        project_id: null,
+        endpoint_id: null,
+        request_method: req.method?.toUpperCase?.() || "",
+        request_path: req.path || req.originalUrl || "",
+        response_status_code: 500,
+        response_body: { error: "Internal Server Error", message: err.message },
+        ip_address: getClientIp(req),
+        latency_ms: Date.now() - started,
+      });
     } catch (logErr) {
       console.error("CRITICAL: Failed to log an unexpected error.", logErr);
     }

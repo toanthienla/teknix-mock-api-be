@@ -1,11 +1,10 @@
+// src/routes/project_request_log.routes.js
 const express = require("express");
-const router = express.Router();
-const ctrl = require("../controllers/project_request_log.controller");
-const asyncHandler = require("../middlewares/asyncHandler");
+const controller = require("../controllers/project_request_log.controller");
 
-// Routes cho Project Request Logs
-// Mục đích: cung cấp API xem log theo project và chi tiết 1 log
-router.get("/project_request_logs", asyncHandler(ctrl.list));
-router.get("/project_request_logs/:id", asyncHandler(ctrl.getById));
+const router = express.Router();
+
+router.get("/", controller.listLogs);
+router.get("/:id", controller.getLogById);
 
 module.exports = router;
