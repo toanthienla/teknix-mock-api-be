@@ -159,3 +159,92 @@ exports.getLogById = async (pool, id) => {
   );
   return rows[0] || null;
 };
+
+exports.nullifyFolderTree = async (client, folderId) => {
+  // Lấy danh sách endpoint trong folder này
+  const { rows: endpoints } = await client.query(
+    `SELECT id FROM endpoints WHERE folder_id = $1`,
+    [folderId]
+  );
+
+  if (endpoints.length === 0) {
+    console.log(`🟡 Folder ${folderId} không có endpoint nào, bỏ qua nullify logs.`);
+    return;
+  }
+
+  const endpointIds = endpoints.map((e) => e.id);
+
+  // Xóa tham chiếu endpoint_id khỏi logs
+  await client.query(
+    `UPDATE project_request_logs
+     SET endpoint_id = NULL, endpoint_response_id = NULL
+     WHERE endpoint_id = ANY($1)`,
+    [endpointIds]
+  );
+
+  console.log(`🧹 Đã nullify logs cho folder ${folderId} (liên quan ${endpointIds.length} endpoint).`);
+};
+
+exports.nullifyWorkspaceTree = async (client, workspaceId) => {
+  // Lấy tất cả project trong workspace
+  const { rows: projects } = await client.query(
+    `SELECT id FROM projects WHERE workspace_id = $1`,
+    [workspaceId]
+  );
+
+  if (projects.length === 0) {
+    console.log(`🟡 Workspace ${workspaceId} không có project nào.`);
+    return;
+  }
+
+  for (const p of projects) {
+    await exports.nullifyProjectTree(client, p.id);
+  }
+
+  console.log(`🧹 Đã nullify logs cho toàn bộ workspace ${workspaceId}`);
+};
+
+
+exports.nullifyProjectTree = async (client, projectId) => {
+  // Lấy tất cả folder trong project
+  const { rows: folders } = await client.query(
+    `SELECT id FROM folders WHERE project_id = $1`,
+    [projectId]
+  );
+
+  if (folders.length === 0) {
+    console.log(`🟡 Project ${projectId} không có folder nào.`);
+    return;
+  }
+
+  for (const f of folders) {
+    await exports.nullifyFolderTree(client, f.id);
+  }
+
+  // Ngoài ra, nullify trực tiếp các endpoint không thuộc folder nào (nếu có)
+  const { rows: endpointsNoFolder } = await client.query(
+    `SELECT id FROM endpoints WHERE project_id = $1 AND folder_id IS NULL`,
+    [projectId]
+  );
+  if (endpointsNoFolder.length > 0) {
+    const endpointIds = endpointsNoFolder.map(e => e.id);
+    await client.query(
+      `UPDATE project_request_logs
+       SET endpoint_id = NULL, endpoint_response_id = NULL
+       WHERE endpoint_id = ANY($1)`,
+      [endpointIds]
+    );
+  }
+
+  console.log(`🧹 Đã nullify logs cho project ${projectId}`);
+};
+
+exports.nullifyEndpointTree = async (client, endpointId) => {
+  await client.query(
+    `UPDATE project_request_logs
+     SET endpoint_id = NULL, endpoint_response_id = NULL
+     WHERE endpoint_id = $1`,
+    [endpointId]
+  );
+  console.log(`🧹 Đã nullify logs cho endpoint ${endpointId}`);
+};
