@@ -44,15 +44,23 @@ exports.listLogs = async (req, res) => {
   }
 };
 
-exports.getLogById = async (req, res) => {
+exports.getLogsByProjectId = async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });
-    const row = await service.getLogById(req.db.stateless, id);
-    if (!row) return res.status(404).json({ message: "Not found" });
-    return res.status(200).json(row);
+    const projectId = toInt(req.params.id);
+    if (!projectId) {
+      return res.status(400).json({ message: "Invalid project id" });
+    }
+
+    const logs = await service.getLogsByProjectId(req.db.stateless, projectId);
+
+    return res.status(200).json({
+      count: logs.length,
+      items: logs,
+    });
   } catch (err) {
-    console.error("[project_request_logs] getOne error:", err);
-    return res.status(500).json({ message: "Internal Server Error", error: err.message });
+    console.error("[project_request_logs] getLogsByProjectId error:", err);
+    return res
+      .status(500)
+      .json({ message: "Internal Server Error", error: err.message });
   }
 };
