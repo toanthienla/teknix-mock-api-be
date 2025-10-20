@@ -82,7 +82,7 @@ app.use("/", mockRoutes);
 // });
 
 // Các route logs khác
-app.use("/", projectRequestLogRoutes);
+app.use("/project_request_logs", projectRequestLogRoutes);
 
 // ✅ MOUNT UNIVERSAL HANDLER CUỐI CÙNG + CÓ AUTH  // CHANGED
 // Mọi request động (/:workspace/:project/...) sẽ đi qua đây, có req.user
