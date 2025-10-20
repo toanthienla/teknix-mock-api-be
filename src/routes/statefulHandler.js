@@ -386,7 +386,6 @@ module.exports = async function statefulHandler(req, res, next) {
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
       return res.status(status).json(body);
     }
-
     /* ===== POST ===== */
     if (method === "POST") {
       const userId = requireAuth(req, res);
@@ -394,7 +393,8 @@ module.exports = async function statefulHandler(req, res, next) {
 
       // doc đã seed
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
+        .some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
         const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
@@ -404,76 +404,93 @@ module.exports = async function statefulHandler(req, res, next) {
 
       const payload = req.body || {};
       const endpointSchema = schema || {};
+      const errors = [];
+      const newObj = {};
 
-      // kiểm tra thứ tự fields
-      const schemaKeys = Object.keys(endpointSchema);
-      const payloadKeys = Object.keys(payload);
-      const sameOrder = schemaKeys.length === payloadKeys.length && schemaKeys.every((k, i) => k === payloadKeys[i]);
-      if (!sameOrder) {
+      // ✅ Duyệt tất cả field trong schema
+      for (const [key, rule] of Object.entries(endpointSchema)) {
+        const hasValue = Object.prototype.hasOwnProperty.call(payload, key);
+        const value = payload[key];
+
+        // Nếu required mà không có → lỗi
+        if (rule.required === true && !hasValue) {
+          errors.push(`Missing required field: ${key}`);
+          continue;
+        }
+
+        // Nếu có → check type
+        if (hasValue && value !== null && value !== undefined) {
+          if (!isTypeOK(rule.type, value)) {
+            errors.push(`Invalid type for ${key}: expected ${rule.type}`);
+            continue;
+          }
+          newObj[key] = value;
+        } else {
+          // Không có trong payload → null
+          newObj[key] = null;
+        }
+      }
+
+      // Nếu có lỗi → trả về 400
+      if (errors.length > 0) {
         const status = 400;
-        const body = { message: "Invalid data: field order does not match schema." };
+        const body = { message: "Invalid data: " + errors.join(", ") };
         await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
         return res.status(status).json(body);
       }
 
-      for (const [k, rule] of Object.entries(endpointSchema)) {
-        const v = payload[k];
-        if (v === undefined || v === null) continue;
-        if (rule.type === "number" && typeof v !== "number") return res.status(400).json({ message: `Invalid type for ${k}: expected number.` });
-        if (rule.type === "string" && typeof v !== "string") return res.status(400).json({ message: `Invalid type for ${k}: expected string.` });
-        if (rule.type === "boolean" && typeof v !== "boolean") return res.status(400).json({ message: `Invalid type for ${k}: expected boolean.` });
-      }
-
-      const { ok } = validateAndSanitizePayload(endpointSchema, payload, { allowMissingRequired: false, rejectUnknown: true });
-      if (!ok) {
-        const status = 400;
-        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Invalid data: request does not match {path} object schema." }, logicalPath });
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload, statefulResponseId: responseId });
-        return res.status(status).json(rendered);
-      }
-
-      const baseKeys = Object.keys(baseSchema || {});
-      const schemaKeysForInsert = Object.keys(endpointSchema);
-      const unionKeys = Array.from(new Set([...baseKeys, ...schemaKeysForInsert])).filter((k) => k !== "user_id");
-
-      // id rule
+      // 🔹 Xử lý ID
       const idRule = endpointSchema?.id || {};
       let newId = payload.id;
+
       if (idRule?.required === true && (newId === undefined || newId === null)) {
-        const status = 400;
-        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Invalid data: request does not match {path} object schema." }, logicalPath });
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload, statefulResponseId: responseId });
-        return res.status(status).json(rendered);
+        errors.push("Missing required field: id");
       }
-      if (idRule?.required === false && (newId === undefined || newId === null)) {
-        const maxId = current.reduce((m, x) => Math.max(m, Number(x?.id) || 0), 0);
+
+      if ((idRule?.required === false || idRule?.required === undefined) &&
+        (newId === undefined || newId === null)) {
+        const numericIds = current
+          .map((x) => Number(x?.id))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        const maxId = numericIds.length ? Math.max(...numericIds) : 0;
         newId = maxId + 1;
       }
+
       if (newId !== undefined && current.some((x) => Number(x?.id) === Number(newId))) {
         const status = 409;
-        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: newId } }, { fallback: { message: "{Path} {{params.id}} conflict: {{params.id}} already exists." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
+        const { rendered, responseId } = selectAndRenderResponseAdv(
+          responsesBucket,
+          status,
+          { params: { id: newId } },
+          {
+            fallback: { message: "{Path} {{params.id}} conflict: {{params.id}} already exists." },
+            requireParamId: true,
+            paramsIdOccurrences: 1,
+            logicalPath,
+          }
+        );
         await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload, statefulResponseId: responseId });
         return res.status(status).json(rendered);
       }
 
-      const extraKeys = unionKeys.filter((k) => !schemaKeysForInsert.includes(k) && k !== "id");
-      const insertOrder = [...schemaKeysForInsert, ...extraKeys];
-      const newObj = {};
-      for (const k of insertOrder) {
-        if (k === "id") newObj.id = newId;
-        else if (Object.prototype.hasOwnProperty.call(payload, k)) newObj[k] = payload[k];
-        else newObj[k] = null;
-      }
+      // ✅ Hoàn thiện object
+      newObj.id = newId;
       newObj.user_id = Number(userId);
 
       const updated = [...current, newObj];
       await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 201;
-      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "New {path} item added successfully." }, logicalPath });
+      const { rendered, responseId } = selectAndRenderResponseAdv(
+        responsesBucket,
+        status,
+        {},
+        { fallback: { message: "New {path} item added successfully." }, logicalPath }
+      );
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }
+
 
     /* ===== PUT ===== */
     if (method === "PUT") {
@@ -481,7 +498,8 @@ module.exports = async function statefulHandler(req, res, next) {
       if (userId == null) return;
 
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
+        .some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
         const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
@@ -515,42 +533,38 @@ module.exports = async function statefulHandler(req, res, next) {
       const payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
-      const schemaKeys = Object.keys(schema || {});
-      const payloadKeys = Object.keys(payload);
-      const sameOrder = schemaKeys.length === payloadKeys.length && schemaKeys.every((k, i) => k === payloadKeys[i]);
-      if (!sameOrder) {
+      const endpointSchema = schema || {};
+      const errors = [];
+      const updatedItem = {};
+
+      for (const [key, rule] of Object.entries(endpointSchema)) {
+        const hasValue = Object.prototype.hasOwnProperty.call(payload, key);
+        const value = payload[key];
+
+        if (rule.required === true && !hasValue) {
+          errors.push(`Missing required field: ${key}`);
+          continue;
+        }
+
+        if (hasValue && value !== null && value !== undefined) {
+          if (!isTypeOK(rule.type, value)) {
+            errors.push(`Invalid type for ${key}: expected ${rule.type}`);
+            continue;
+          }
+          updatedItem[key] = value;
+        } else {
+          updatedItem[key] = current[idx]?.[key] ?? null;
+        }
+      }
+
+      if (errors.length > 0) {
         const status = 400;
-        const body = { message: "Invalid data: field order does not match schema." };
+        const body = { message: "Invalid data: " + errors.join(", ") };
         await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
         return res.status(status).json(body);
       }
 
-      for (const [k, rule] of Object.entries(schema || {})) {
-        const v = payload[k];
-        if (v === undefined || v === null) continue;
-        if (rule.type === "number" && typeof v !== "number") return res.status(400).json({ message: `Invalid type for ${k}: expected number.` });
-        if (rule.type === "string" && typeof v !== "string") return res.status(400).json({ message: `Invalid type for ${k}: expected string.` });
-        if (rule.type === "boolean" && typeof v !== "boolean") return res.status(400).json({ message: `Invalid type for ${k}: expected boolean.` });
-      }
-
-      const { ok } = validateAndSanitizePayload(schema, payload, { allowMissingRequired: false, rejectUnknown: true });
-      if (!ok) {
-        const status = 400;
-        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Invalid data: request does not match {path} schema." }, logicalPath });
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-        return res.status(status).json(rendered);
-      }
-
-      const schemaKeysForUpdate = Object.keys(schema || {});
-      const extraKeys = Object.keys(current[idx] || {}).filter((k) => !schemaKeysForUpdate.includes(k) && k !== "user_id");
-      const updateOrder = [...schemaKeysForUpdate, ...extraKeys];
-
-      const updatedItem = {};
-      for (const k of updateOrder) {
-        if (k === "id") updatedItem.id = idFromUrl;
-        else if (Object.prototype.hasOwnProperty.call(payload, k)) updatedItem[k] = payload[k];
-        else updatedItem[k] = current[idx]?.[k] ?? null;
-      }
+      updatedItem.id = idFromUrl;
       updatedItem.user_id = ownerId;
 
       const updated = current.slice();
@@ -558,7 +572,12 @@ module.exports = async function statefulHandler(req, res, next) {
       await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 200;
-      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} updated successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
+      const { rendered, responseId } = selectAndRenderResponseAdv(
+        responsesBucket,
+        status,
+        { params: { id: idFromUrl } },
+        { fallback: { message: "{Path} with id {{params.id}} updated successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath }
+      );
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }
