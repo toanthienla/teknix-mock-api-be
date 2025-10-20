@@ -393,8 +393,7 @@ module.exports = async function statefulHandler(req, res, next) {
 
       // doc đã seed
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
-        .some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
         const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
@@ -447,11 +446,8 @@ module.exports = async function statefulHandler(req, res, next) {
         errors.push("Missing required field: id");
       }
 
-      if ((idRule?.required === false || idRule?.required === undefined) &&
-        (newId === undefined || newId === null)) {
-        const numericIds = current
-          .map((x) => Number(x?.id))
-          .filter((n) => Number.isFinite(n) && n > 0);
+      if ((idRule?.required === false || idRule?.required === undefined) && (newId === undefined || newId === null)) {
+        const numericIds = current.map((x) => Number(x?.id)).filter((n) => Number.isFinite(n) && n > 0);
         const maxId = numericIds.length ? Math.max(...numericIds) : 0;
         newId = maxId + 1;
       }
@@ -481,16 +477,10 @@ module.exports = async function statefulHandler(req, res, next) {
       await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 201;
-      const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket,
-        status,
-        {},
-        { fallback: { message: "New {path} item added successfully." }, logicalPath }
-      );
+      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "New {path} item added successfully." }, logicalPath });
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }
-
 
     /* ===== PUT ===== */
     if (method === "PUT") {
@@ -498,8 +488,7 @@ module.exports = async function statefulHandler(req, res, next) {
       if (userId == null) return;
 
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
-        .some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
         const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
@@ -572,12 +561,7 @@ module.exports = async function statefulHandler(req, res, next) {
       await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 200;
-      const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket,
-        status,
-        { params: { id: idFromUrl } },
-        { fallback: { message: "{Path} with id {{params.id}} updated successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath }
-      );
+      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} updated successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }
