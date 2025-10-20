@@ -248,3 +248,28 @@ exports.nullifyEndpointTree = async (client, endpointId) => {
   );
   console.log(`🧹 Đã nullify logs cho endpoint ${endpointId}`);
 };
+
+exports.nullifyEndpointAndResponses = async (client, endpointId) => {
+  try {
+    // 1️⃣ Nullify logs liên quan đến endpoint
+    await client.query(
+      `UPDATE project_request_logs
+       SET endpoint_id = NULL, endpoint_response_id = NULL
+       WHERE endpoint_id = $1`,
+      [endpointId]
+    );
+
+    // 2️⃣ Xóa toàn bộ response của endpoint này
+    const { rowCount } = await client.query(
+      `DELETE FROM endpoint_responses WHERE endpoint_id = $1`,
+      [endpointId]
+    );
+
+    console.log(
+      `🧹 Đã nullify logs và xóa ${rowCount} endpoint_responses cho endpoint ${endpointId}`
+    );
+  } catch (err) {
+    console.error(`❌ Lỗi khi xóa endpoint_responses cho endpoint ${endpointId}:`, err);
+    throw err;
+  }
+};
