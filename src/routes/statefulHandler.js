@@ -2,28 +2,9 @@
 const { getCollection } = require("../config/db");
 const logSvc = require("../services/project_request_log.service");
 
-// ============ Generic helpers ============
+/* ========== Utils ========== */
 function getClientIp(req) {
   return req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.connection?.remoteAddress || req.ip || null;
-}
-function getByPath(obj, path) {
-  if (!obj || !path) return undefined;
-  return path.split(".").reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
-}
-function renderTemplateDeep(value, ctx) {
-  if (typeof value === "string") {
-    return value.replace(/\{\{\s*([a-zA-Z0-9_\.]+)\s*\}\}/g, (_, path) => {
-      const v = getByPath(ctx, path);
-      return v === undefined || v === null ? "" : String(v);
-    });
-  }
-  if (Array.isArray(value)) return value.map((v) => renderTemplateDeep(v, ctx));
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = renderTemplateDeep(v, ctx);
-    return out;
-  }
-  return value;
 }
 function normalizeJsonb(x) {
   if (x == null) return x;
@@ -36,7 +17,10 @@ function normalizeJsonb(x) {
   }
   return x;
 }
-// Title-case cho {Path} và lower cho {path}
+function getByPath(obj, path) {
+  if (!obj || !path) return undefined;
+  return path.split(".").reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
+}
 function humanizePath(logicalPath) {
   const seg =
     String(logicalPath || "")
@@ -53,58 +37,37 @@ function expandStaticPlaceholders(str, logicalPath) {
   return str.replace(/\{Path\}/g, h.title).replace(/\{path\}/g, h.lower);
 }
 
-// ============ endpoint_responses_ful bucket ============
-async function loadResponsesBucket(db, endpointId) {
-  const { rows } = await db.query(
-    `SELECT id, status_code, response_body
-       FROM endpoint_responses_ful
-      WHERE endpoint_id = $1
-      ORDER BY id ASC`,
-    [endpointId]
-  );
-  const bucket = new Map();
-  for (const r of rows) {
-    const body = normalizeJsonb(r.response_body);
-    const key = Number(r.status_code);
-    if (!bucket.has(key)) bucket.set(key, []);
-    bucket.get(key).push({ id: Number(r.id), body });
-  }
-  return bucket;
+/* ========== Template helpers ========== */
+function getByPathSafe(obj, path) {
+  if (!obj || !path) return undefined;
+  return path.split(".").reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
 }
-
-// --- Response picking & templating with ordered {{params.id}} ---
 function renderTemplateWithOrderedParamsId(tpl, ctx) {
   if (typeof tpl !== "string") return tpl;
-  // Nếu có id_conflict → thay 2 lần {{params.id}}: lần 1 = id, lần 2 = id_conflict
   if (ctx?.params && ctx.params.id_conflict != null) {
     let count = 0;
     let out = tpl.replace(/\{\{\s*params\.id\s*\}\}/g, () => {
       count += 1;
       return String(count === 1 ? ctx.params.id : ctx.params.id_conflict);
     });
-    // Render các token khác
     out = out.replace(/\{\{\s*([a-zA-Z0-9_\.]+)\s*\}\}/g, (_, path) => {
-      if (path === "params.id") return ""; // nếu còn sót
-      const v = getByPath(ctx, path);
+      if (path === "params.id") return "";
+      const v = getByPathSafe(ctx, path);
       return v == null ? "" : String(v);
     });
     return out;
   }
-  return renderTemplateDeep(tpl, ctx);
+  return tpl.replace(/\{\{\s*([a-zA-Z0-9_\.]+)\s*\}\}/g, (_, path) => {
+    const v = getByPathSafe(ctx, path);
+    return v == null ? "" : String(v);
+  });
 }
-// 🔧 đệ quy theo thứ tự cho mọi string bên trong object/array
 function renderTemplateDeepOrdered(value, ctx) {
-  if (typeof value === "string") {
-    return renderTemplateWithOrderedParamsId(value, ctx);
-  }
-  if (Array.isArray(value)) {
-    return value.map((v) => renderTemplateDeepOrdered(v, ctx));
-  }
+  if (typeof value === "string") return renderTemplateWithOrderedParamsId(value, ctx);
+  if (Array.isArray(value)) return value.map((v) => renderTemplateDeepOrdered(v, ctx));
   if (value && typeof value === "object") {
     const out = {};
-    for (const [k, v] of Object.entries(value)) {
-      out[k] = renderTemplateDeepOrdered(v, ctx);
-    }
+    for (const [k, v] of Object.entries(value)) out[k] = renderTemplateDeepOrdered(v, ctx);
     return out;
   }
   return value;
@@ -114,29 +77,53 @@ function countParamsIdOccurrences(body) {
   const m = s.match(/\{\{\s*params\.id\s*\}\}/g);
   return m ? m.length : 0;
 }
+
+/* ========== Responses bucket (STATEFUL DB) ========== */
+async function loadResponsesBucket(statefulDb, endpointId) {
+  const { rows } = await statefulDb.query(
+    `SELECT id, status_code, response_body
+       FROM endpoint_responses_ful
+      WHERE endpoint_id = $1
+      ORDER BY id ASC`,
+    [endpointId]
+  );
+  const bucket = new Map();
+  for (const r of rows) {
+    const key = Number(r.status_code);
+    const body = normalizeJsonb(r.response_body);
+    if (!bucket.has(key)) bucket.set(key, []);
+    bucket.get(key).push({ id: Number(r.id), body });
+  }
+  return bucket;
+}
 function pickResponseEntryAdv(bucket, status, { requireParamId = null, paramsIdOccurrences = null } = {}) {
   const arr = bucket.get(status) || [];
   if (arr.length === 0) return undefined;
 
   let candidates = arr;
-  if (requireParamId === true) {
-    candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) >= 1);
-  } else if (requireParamId === false) {
-    candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) === 0);
-  }
+  if (requireParamId === true) candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) >= 1);
+  else if (requireParamId === false) candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) === 0);
   if (paramsIdOccurrences != null) {
     const exact = candidates.filter((e) => countParamsIdOccurrences(e.body) === paramsIdOccurrences);
     if (exact.length) candidates = exact;
   }
   return candidates[0] || arr[0];
 }
+function pickAnyResponseEntry(bucket) {
+  for (const [, list] of bucket.entries()) {
+    if (list && list.length) return list[0];
+  }
+  return undefined;
+}
+/** Trả về { rendered, responseId } */
 function selectAndRenderResponseAdv(bucket, status, ctx, { fallback, requireParamId, paramsIdOccurrences, logicalPath } = {}) {
-  const entry = pickResponseEntryAdv(bucket, status, {
-    requireParamId,
-    paramsIdOccurrences,
-  });
+  let entry = pickResponseEntryAdv(bucket, status, { requireParamId, paramsIdOccurrences });
+  const found = !!entry;
   const raw = entry?.body ?? fallback ?? { message: `HTTP ${status}` };
-
+  if (!found && !entry) {
+    const any = pickAnyResponseEntry(bucket);
+    if (any) entry = any; // dùng id để log nếu có
+  }
   let rendered;
   if (typeof raw === "string") {
     rendered = renderTemplateWithOrderedParamsId(raw, ctx);
@@ -148,7 +135,7 @@ function selectAndRenderResponseAdv(bucket, status, ctx, { fallback, requirePara
   return { rendered, responseId: entry?.id ?? null };
 }
 
-// ============ Auth & Schema ============
+/* ========== Auth/Schema ========== */
 function pickUserIdFromRequest(req) {
   const localsUser = req.res?.locals?.user;
   const uid = req.user?.id ?? req.user?.user_id ?? localsUser?.id ?? localsUser?.user_id ?? (req.headers["x-mock-user-id"] != null ? Number(req.headers["x-mock-user-id"]) : null);
@@ -162,11 +149,9 @@ function requireAuth(req, res) {
   }
   return uid;
 }
-
 function isTypeOK(expected, value) {
   if (value === undefined) return true;
   if (expected === "number") return typeof value === "number" && !Number.isNaN(value);
-  // ⬇️ reject string rỗng / toàn space
   if (expected === "string") return typeof value === "string" && value.trim() !== "";
   if (expected === "boolean") return typeof value === "boolean";
   if (expected === "object") return value && typeof value === "object" && !Array.isArray(value);
@@ -179,8 +164,8 @@ function validateAndSanitizePayload(schema, payload, { allowMissingRequired = fa
   const schemaFields = Object.keys(schema || {});
 
   if (rejectUnknown) {
-    const unknownKeys = Object.keys(payload || {}).filter((k) => !schemaFields.includes(k) && k !== "user_id");
-    if (unknownKeys.length) errors.push(`Unknown fields: ${unknownKeys.join(", ")}`);
+    const unknown = Object.keys(payload || {}).filter((k) => !schemaFields.includes(k) && k !== "user_id");
+    if (unknown.length) errors.push(`Unknown fields: ${unknown.join(", ")}`);
   }
 
   for (const key of schemaFields) {
@@ -196,29 +181,40 @@ function validateAndSanitizePayload(schema, payload, { allowMissingRequired = fa
       errors.push(`Invalid type for ${key}: expected ${rule.type}`);
       continue;
     }
-    if (has && val !== null && val !== undefined) {
-      sanitized[key] = val;
-    }
+    if (has && val !== null && val !== undefined) sanitized[key] = val;
   }
-  if (schemaFields.includes("id") && payload.id !== undefined) {
-    sanitized.id = payload.id;
-  }
+  if (schemaFields.includes("id") && payload.id !== undefined) sanitized.id = payload.id;
   return { ok: errors.length === 0, errors, sanitized };
 }
 
-// ============ Logging util ============
-async function insertLogSafely(req, { projectId, originId, method, path, status, responseBody, endpointResponseId = null, started, payload }) {
+/* ========== Resolve ResponseId bảo đảm có id để log ========== */
+async function resolveStatefulResponseId(statefulDb, statefulId, providedId) {
+  if (providedId != null) return providedId;
+  if (statefulId == null) return null;
   try {
+    const r = await statefulDb.query("SELECT id FROM endpoint_responses_ful WHERE endpoint_id = $1 ORDER BY id ASC LIMIT 1", [statefulId]);
+    return r.rows?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/* ========== Logging (ghi vào DB stateless) ========== */
+async function logWithStatefulResponse(req, { projectId, originId, statefulId, method, path, status, responseBody, started, payload, statefulResponseId = null }) {
+  try {
+    const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId);
     await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
-      endpoint_id: originId ?? null,
+      endpoint_id: originId ?? null, // stateless endpoints.id
+      endpoint_response_id: null, // NULL trong flow stateful
+      stateful_endpoint_id: statefulId ?? null, // endpoints_ful.id (no FK)
+      stateful_endpoint_response_id: finalResponseId ?? null, // endpoint_responses_ful.id (no FK)
       request_method: method,
       request_path: path,
       request_headers: req.headers || {},
       request_body: payload || {},
       response_status_code: status,
       response_body: responseBody,
-      endpoint_response_id: endpointResponseId,
       ip_address: getClientIp(req),
       latency_ms: Date.now() - started,
     });
@@ -227,588 +223,284 @@ async function insertLogSafely(req, { projectId, originId, method, path, status,
   }
 }
 
-// ============ Handler ============
+/* ========== Mongo helpers ========== */
+function buildCollectionName(logicalPath, workspaceName, projectName) {
+  const sanitize = (s) =>
+    String(s ?? "")
+      .replace(/\u0000/g, "")
+      .replace(/^\.+|\.+$/g, "");
+  const logicalRest = String(logicalPath || "").replace(/^\/+/, "");
+  return `${sanitize(logicalRest)}.${sanitize(workspaceName)}.${sanitize(projectName)}`;
+}
+async function loadInitializedDoc(col) {
+  const seeded = await col.findOne({ data_current: { $exists: true } });
+  if (seeded) return seeded;
+  return null;
+}
+
+/* ========== MAIN ========== */
 module.exports = async function statefulHandler(req, res, next) {
   const started = Date.now();
 
-  // ⚠️ Nhận meta từ universalHandler
   const meta = req.universal || {};
   const method = (meta.method || req.method || "GET").toUpperCase();
-  const basePath = meta.basePath || req.path; // "/orders" hoặc "/orders/:id"
-  const rawPath = meta.rawPath || req.originalUrl || req.path; // "/orders/4" hoặc "/orders"
-  const idInUrl = meta.idInUrl; // number | null
+  const basePath = meta.basePath || req.path;
+  const rawPath = meta.rawPath || req.originalUrl || req.path;
+  const idInUrl = meta.idInUrl;
   const hasId = idInUrl != null;
   const idFromUrl = hasId ? Number(idInUrl) : undefined;
+  const logicalPath = String(basePath || "").replace(/\/:id$/, "");
 
-  // workspace/project từ baseUrl (giữ logic cũ)
   const baseSegs = (req.baseUrl || "").split("/").filter(Boolean);
   const workspaceName = baseSegs[0] || null;
   const projectName = baseSegs[1] || null;
 
-  // logicalPath (bỏ "/:id" nếu có trong basePath)
-  const logicalPath = String(basePath || "").replace(/\/:id$/, "");
-
   if (!workspaceName || !projectName || !basePath) {
-    const body = {
-      message: "Full route required: /{workspaceName}/{projectName}/{path}",
-      detail: { method, path: rawPath },
-    };
-    return res.status(400).json(body);
+    const status = 400;
+    const body = { message: "Full route required: /{workspaceName}/{projectName}/{path}", detail: { method, path: rawPath } };
+    await logWithStatefulResponse(req, { projectId: null, originId: null, statefulId: null, method, path: rawPath, status, responseBody: body, started, payload: req.body, statefulResponseId: null });
+    return res.status(status).json(body);
   }
 
-  const statefulId = meta.statefulId || null;
-  let originId = meta.statelessId || null;
+  const statefulId = meta.statefulId || null; // endpoints_ful.id
+  let originId = meta.statelessId || null; // endpoints.id (stateless)
+  let folderId = null;
   let projectId = null;
   let isPublic = false;
 
   try {
     if (!statefulId) {
       const status = 404;
-      const body = {
-        message: "Endpoint not found",
-        detail: { method, path: rawPath },
-      };
-      await insertLogSafely(req, {
-        projectId,
-        originId,
-        method,
-        path: rawPath,
-        status,
-        responseBody: body,
-        started,
-        payload: req.body,
-      });
+      const body = { message: "Endpoint not found", detail: { method, path: rawPath } };
+      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body, statefulResponseId: null });
       return res.status(status).json(body);
     }
 
-    // --- Fetch endpoints_ful info (origin_id, folder_id) ---
-    let folderId = null;
+    /* 1) LẤY origin_id, folder_id Ở DB STATEFUL */
     {
-      const efRow = await req.db.stateful.query("SELECT origin_id, folder_id FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
-      if (efRow.rows[0]) {
-        originId = originId || efRow.rows[0].origin_id || null;
-        folderId = efRow.rows[0].folder_id || null;
+      const ef = await req.db.stateful.query("SELECT origin_id, folder_id FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
+      if (!ef.rows[0]) {
+        const status = 404;
+        const body = { message: "Stateful endpoint not found", detail: { statefulId } };
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+        return res.status(status).json(body);
       }
-      if (folderId) {
-        const prj = await req.db.stateless.query("SELECT project_id, is_public FROM folders WHERE id = $1 LIMIT 1", [folderId]);
-        projectId = prj.rows[0]?.project_id ?? null;
-        isPublic = Boolean(prj.rows[0]?.is_public);
-      }
+      originId = originId || ef.rows[0].origin_id || null;
+      folderId = ef.rows[0].folder_id || null;
     }
 
-    // --- Collection & data ---
-    const collectionName = (function () {
-      const sanitize = (s) =>
-        String(s ?? "")
-          .replace(/\u0000/g, "")
-          .replace(/^\.+|\.+$/g, "");
-      const logicalRest = String(logicalPath || "").replace(/^\/+/, "");
-      return `${sanitize(logicalRest)}.${sanitize(workspaceName)}.${sanitize(projectName)}`;
-    })();
-    const col = getCollection(collectionName);
-    const doc = (await col.findOne({})) || {
-      data_current: [],
-      data_default: [],
-    };
-    const current = Array.isArray(doc.data_current) ? doc.data_current : doc.data_current ? [doc.data_current] : [];
-    const defaults = Array.isArray(doc.data_default) ? doc.data_default : doc.data_default ? [doc.data_default] : [];
+    /* 2) TỪ folder_id → LẤY project_id, is_public Ở DB STATELESS */
+    if (folderId != null) {
+      const prj = await req.db.stateless.query("SELECT project_id, is_public FROM folders WHERE id = $1 LIMIT 1", [folderId]);
+      projectId = prj.rows[0]?.project_id ?? null;
+      isPublic = !!prj.rows[0]?.is_public;
+    }
 
-    // --- Endpoint schema ---
+    /* 3) LOAD MONGO DOC */
+    const collectionName = buildCollectionName(logicalPath, workspaceName, projectName);
+    const col = getCollection(collectionName);
+    const doc = await loadInitializedDoc(col);
+    if (!doc) {
+      const status = 404;
+      const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
+      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+      return res.status(status).json(body);
+    }
+    const docId = doc._id;
+    const current = Array.isArray(doc.data_current) ? doc.data_current : doc.data_current ? [doc.data_current] : [];
+
+    /* 4) LOAD SCHEMA Ở DB STATEFUL */
     const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
     const schema = normalizeJsonb(schRows?.[0]?.schema) || {};
 
-    // --- Folder base_schema ---
+    /* 5) BASE SCHEMA Ở DB STATELESS (Dùng folderId đã lấy) */
     let baseSchema = {};
-    if (folderId) {
+    if (folderId != null) {
       const { rows: baseRows } = await req.db.stateless.query("SELECT base_schema FROM folders WHERE id = $1 LIMIT 1", [folderId]);
       baseSchema = normalizeJsonb(baseRows?.[0]?.base_schema) || {};
     }
 
-    // --- Responses bucket ---
+    /* 6) LOAD RESPONSE BUCKET Ở DB STATEFUL */
     const responsesBucket = await loadResponsesBucket(req.db.stateful, statefulId);
 
-    // =================== GET ===================
+    /* ===== GET ===== */
     if (method === "GET") {
       const userIdMaybe = pickUserIdFromRequest(req);
 
-      // 🔹 Lấy is_public từ bảng folders trong DB stateless
-      let isPublic = false;
-      try {
-        const folderRow = await req.db.stateless.query(
-          "SELECT is_public FROM folders WHERE id = $1 LIMIT 1",
-          [folder_id]
-        );
-        isPublic = folderRow.rows[0]?.is_public ?? false;
-      } catch (err) {
-        console.error("Error fetching folder.is_public:", err);
-      }
-
       const pickForGET = (obj) => {
-        const fieldsArray = Array.isArray(schema?.fields) ? schema.fields : [];
-        if (fieldsArray.length === 0) {
+        const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+        if (fields.length === 0) {
           const { user_id, ...rest } = obj || {};
           return rest;
         }
         const out = {};
-        for (const k of fieldsArray) {
+        for (const k of fields) {
           if (k === "user_id") continue;
           out[k] = Object.prototype.hasOwnProperty.call(obj || {}, k) ? obj[k] : null;
         }
-        if (hasId && !fieldsArray.includes("id")) out.id = obj?.id ?? null;
         return out;
       };
 
-      // ==============================
-      // CASE 1: folder PRIVATE
-      // ==============================
-      if (!isPublic) {
-        // Trả toàn bộ data_current
+      if (isPublic) {
+        if (hasId) {
+          const any = current.find((x) => Number(x?.id) === Number(idFromUrl));
+          if (any) {
+            const body = pickForGET(any);
+            const status = 200;
+            await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+            return res.status(status).json(body);
+          }
+          const status = 404;
+          const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} not found." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
+          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
+          return res.status(status).json(rendered);
+        }
         const all = current.map(pickForGET);
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status: 200,
-          responseBody: all,
-          endpointResponseId: null,
-          started,
-          payload: req.body,
-        });
-        return res.status(200).json(all);
+        const status = 200;
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: all, started, payload: req.body });
+        return res.status(status).json(all);
       }
 
-      // ==============================
-      // CASE 2: folder PUBLIC
-      // ==============================
-      const defaultRecords = current.filter(x => x.user_id == null || x.user_id === undefined);
-      const userRecords = userIdMaybe == null ? [] : current.filter(x => Number(x?.user_id) === Number(userIdMaybe));
-
+      // PRIVATE
       if (hasId) {
-        const foundUser = userRecords.find(x => Number(x?.id) === idFromUrl);
-        const foundDefault = defaultRecords.find(x => Number(x?.id) === idFromUrl);
-        const foundOldDefault = defaults.find(x => Number(x?.id) === idFromUrl);
-
-        const target = foundUser || foundDefault || foundOldDefault;
-        if (target) {
-          const body = pickForGET(target);
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status: 200,
-            responseBody: body,
-            endpointResponseId: null,
-            started,
-            payload: req.body,
-          });
-          return res.status(200).json(body);
+        const uid = pickUserIdFromRequest(req);
+        const rec = current.find((x) => Number(x?.id) === Number(idFromUrl));
+        const allowed = rec && (rec.user_id == null || (uid != null && Number(rec.user_id) === Number(uid)));
+        if (allowed) {
+          const body = pickForGET(rec);
+          const status = 200;
+          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+          return res.status(status).json(body);
         }
-
         const status = 404;
-        const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          { params: { id: idFromUrl } },
-          {
-            fallback: { message: "{Path} with id {{params.id}} not found." },
-            requireParamId: true,
-            paramsIdOccurrences: 1,
-            logicalPath,
-          }
-        );
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: rendered,
-          endpointResponseId: responseId,
-          started,
-          payload: req.body,
-        });
+        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} not found." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
         return res.status(status).json(rendered);
       }
 
-      // Không có id => public: trả default + user data
-      const defaultsOut = defaultRecords.map(pickForGET);
-      const userOut = userRecords.map(pickForGET);
-      const combined = [...defaultsOut, ...userOut];
-
-      await insertLogSafely(req, {
-        projectId,
-        originId,
-        method,
-        path: rawPath,
-        status: 200,
-        responseBody: combined,
-        endpointResponseId: null,
-        started,
-        payload: req.body,
-      });
-      return res.status(200).json(combined);
+      const uid = pickUserIdFromRequest(req);
+      const defaults = current.filter((x) => x.user_id == null || x.user_id === undefined).map(pickForGET);
+      const mine = uid == null ? [] : current.filter((x) => Number(x?.user_id) === Number(uid)).map(pickForGET);
+      const body = [...defaults, ...mine];
+      const status = 200;
+      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+      return res.status(status).json(body);
     }
 
-
-    // =================== POST ===================
+    /* ===== POST ===== */
     if (method === "POST") {
       const userId = requireAuth(req, res);
-      if (userId == null) {
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status: 403,
-          responseBody: { error: "Unauthorized: login required." },
-          endpointResponseId: null,
-          started,
-          payload: req.body,
-        });
-        return;
-      }
+      if (userId == null) return;
 
-      // 🧩 Kiểm tra collection có tồn tại không (dùng col lấy db)
-      const mongoDb = col.db;
-      const existingCollections = await mongoDb.listCollections({ name: collectionName }).toArray();
-      const exists = existingCollections.some((c) => c.name === collectionName);
-      if (!exists) {
+      // doc đã seed
+      const mongoDb = col.s.db;
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
+      if (!exists || !docId) {
         const status = 404;
-        const body = { message: `Collection ${collectionName} does not exist.` };
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: body,
-          endpointResponseId: null,
-          started,
-          payload: req.body,
-        });
+        const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
         return res.status(status).json(body);
       }
 
       const payload = req.body || {};
       const endpointSchema = schema || {};
 
-      // 🧩 Kiểm tra thứ tự field so với schema (schemaOrder được khai báo rõ ràng)
-      const schemaKeys = Object.keys(endpointSchema); // order from schema
-      const payloadOrder = Object.keys(payload);
-      // If schema doesn't define all keys, still require payload follows schemaKeys order exactly and length equal:
-      const sameOrder =
-        schemaKeys.length === payloadOrder.length &&
-        schemaKeys.every((k, i) => k === payloadOrder[i]);
+      // kiểm tra thứ tự fields
+      const schemaKeys = Object.keys(endpointSchema);
+      const payloadKeys = Object.keys(payload);
+      const sameOrder = schemaKeys.length === payloadKeys.length && schemaKeys.every((k, i) => k === payloadKeys[i]);
       if (!sameOrder) {
         const status = 400;
         const body = { message: "Invalid data: field order does not match schema." };
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: body,
-          endpointResponseId: null,
-          started,
-          payload,
-        });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
         return res.status(status).json(body);
       }
 
-      // 🧩 Kiểm tra type chặt chẽ hơn
-      for (const [key, rule] of Object.entries(endpointSchema)) {
-        const val = payload[key];
-        if (val === undefined || val === null) continue;
-
-        if (rule.type === "number" && typeof val !== "number") {
-          const status = 400;
-          const body = { message: `Invalid type for ${key}: expected number.` };
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status,
-            responseBody: body,
-            endpointResponseId: null,
-            started,
-            payload,
-          });
-          return res.status(status).json(body);
-        }
-
-        if (rule.type === "string" && typeof val !== "string") {
-          const status = 400;
-          const body = { message: `Invalid type for ${key}: expected string.` };
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status,
-            responseBody: body,
-            endpointResponseId: null,
-            started,
-            payload,
-          });
-          return res.status(status).json(body);
-        }
-
-        if (rule.type === "boolean" && typeof val !== "boolean") {
-          const status = 400;
-          const body = { message: `Invalid type for ${key}: expected boolean.` };
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status,
-            responseBody: body,
-            endpointResponseId: null,
-            started,
-            payload,
-          });
-          return res.status(status).json(body);
-        }
+      for (const [k, rule] of Object.entries(endpointSchema)) {
+        const v = payload[k];
+        if (v === undefined || v === null) continue;
+        if (rule.type === "number" && typeof v !== "number") return res.status(400).json({ message: `Invalid type for ${k}: expected number.` });
+        if (rule.type === "string" && typeof v !== "string") return res.status(400).json({ message: `Invalid type for ${k}: expected string.` });
+        if (rule.type === "boolean" && typeof v !== "boolean") return res.status(400).json({ message: `Invalid type for ${k}: expected boolean.` });
       }
 
-      // 🔁 Phần logic POST cũ giữ nguyên validate/sanitize
-      const { ok } = validateAndSanitizePayload(endpointSchema, payload, {
-        allowMissingRequired: false,
-        rejectUnknown: true,
-      });
+      const { ok } = validateAndSanitizePayload(endpointSchema, payload, { allowMissingRequired: false, rejectUnknown: true });
       if (!ok) {
         const status = 400;
-        const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          {},
-          {
-            fallback: {
-              message: "Invalid data: request does not match {path} object schema.",
-            },
-            logicalPath,
-          }
-        );
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: rendered,
-          endpointResponseId: responseId,
-          started,
-          payload,
-        });
+        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Invalid data: request does not match {path} object schema." }, logicalPath });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload, statefulResponseId: responseId });
         return res.status(status).json(rendered);
       }
 
-      const unionKeys = Array.from(new Set([...Object.keys(baseSchema || {}), ...Object.keys(endpointSchema || {})])).filter((k) => k !== "user_id");
+      const baseKeys = Object.keys(baseSchema || {});
+      const schemaKeysForInsert = Object.keys(endpointSchema);
+      const unionKeys = Array.from(new Set([...baseKeys, ...schemaKeysForInsert])).filter((k) => k !== "user_id");
 
+      // id rule
       const idRule = endpointSchema?.id || {};
       let newId = payload.id;
       if (idRule?.required === true && (newId === undefined || newId === null)) {
         const status = 400;
-        const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          {},
-          {
-            fallback: {
-              message: "Invalid data: request does not match {path} object schema.",
-            },
-            logicalPath,
-          }
-        );
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: rendered,
-          endpointResponseId: responseId,
-          started,
-          payload,
-        });
+        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Invalid data: request does not match {path} object schema." }, logicalPath });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload, statefulResponseId: responseId });
         return res.status(status).json(rendered);
       }
       if (idRule?.required === false && (newId === undefined || newId === null)) {
         const maxId = current.reduce((m, x) => Math.max(m, Number(x?.id) || 0), 0);
         newId = maxId + 1;
       }
-
       if (newId !== undefined && current.some((x) => Number(x?.id) === Number(newId))) {
         const status = 409;
-        const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          { params: { id: newId } },
-          {
-            fallback: {
-              message: "{Path} {{params.id}} conflict: {{params.id}} already exists.",
-            },
-            requireParamId: true,
-            paramsIdOccurrences: 1,
-            logicalPath,
-          }
-        );
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: rendered,
-          endpointResponseId: responseId,
-          started,
-          payload,
-        });
+        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: newId } }, { fallback: { message: "{Path} {{params.id}} conflict: {{params.id}} already exists." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload, statefulResponseId: responseId });
         return res.status(status).json(rendered);
       }
 
-      // --- Xây dựng newObj theo đúng thứ tự schema ---
-      // schemaKeys đã lấy ở trên (Object.keys(endpointSchema))
-      // Nếu có các trường trong unionKeys mà schema không khai báo, append vào cuối theo thứ tự unionKeys
-      const schemaKeysForInsert = Object.keys(endpointSchema);
       const extraKeys = unionKeys.filter((k) => !schemaKeysForInsert.includes(k) && k !== "id");
-      const schemaOrder = [...schemaKeysForInsert, ...extraKeys];
-
+      const insertOrder = [...schemaKeysForInsert, ...extraKeys];
       const newObj = {};
-      for (const key of schemaOrder) {
-        if (key === "id") {
-          newObj.id = newId;
-        } else if (Object.prototype.hasOwnProperty.call(payload, key)) {
-          newObj[key] = payload[key];
-        } else {
-          newObj[key] = null;
-        }
+      for (const k of insertOrder) {
+        if (k === "id") newObj.id = newId;
+        else if (Object.prototype.hasOwnProperty.call(payload, k)) newObj[k] = payload[k];
+        else newObj[k] = null;
       }
-      // Cuối cùng thêm user_id
       newObj.user_id = Number(userId);
 
       const updated = [...current, newObj];
-      await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
+      await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 201;
-      const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket,
-        status,
-        {},
-        {
-          fallback: { message: "New {path} item added successfully." },
-          logicalPath,
-        }
-      );
-      await insertLogSafely(req, {
-        projectId,
-        originId,
-        method,
-        path: rawPath,
-        status,
-        responseBody: rendered,
-        endpointResponseId: responseId,
-        started,
-        payload,
-      });
+      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "New {path} item added successfully." }, logicalPath });
+      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }
 
-
-    // =================== PUT ===================
+    /* ===== PUT ===== */
     if (method === "PUT") {
       const userId = requireAuth(req, res);
-      if (userId == null) {
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status: 403,
-          responseBody: { error: "Unauthorized: login required." },
-          endpointResponseId: null,
-          started,
-          payload: req.body,
-        });
-        return;
-      }
+      if (userId == null) return;
 
-      // 🧩 Kiểm tra collection tồn tại
-      const mongoDb = col.db;
-      const existingCollections = await mongoDb.listCollections({ name: collectionName }).toArray();
-      const exists = existingCollections.some((c) => c.name === collectionName);
-      if (!exists) {
+      const mongoDb = col.s.db;
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
+      if (!exists || !docId) {
         const status = 404;
-        const body = { message: `Collection ${collectionName} does not exist.` };
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: body,
-          endpointResponseId: null,
-          started,
-          payload: req.body,
-        });
+        const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
         return res.status(status).json(body);
       }
 
       if (!hasId) {
         const status = 404;
-        const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          {},
-          {
-            fallback: { message: "Not found." },
-            requireParamId: false,
-            logicalPath,
-          }
-        );
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: rendered,
-          endpointResponseId: responseId,
-          started,
-          payload: req.body,
-        });
+        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Not found." }, requireParamId: false, logicalPath });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
         return res.status(status).json(rendered);
       }
 
-      const idx = current.findIndex((x) => Number(x?.id) === idFromUrl);
+      const idx = current.findIndex((x) => Number(x?.id) === Number(idFromUrl));
       if (idx === -1) {
         const status = 404;
-        const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          { params: { id: idFromUrl } },
-          {
-            fallback: { message: "{Path} with id {{params.id}} not found." },
-            requireParamId: true,
-            paramsIdOccurrences: 1,
-            logicalPath,
-          }
-        );
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: rendered,
-          endpointResponseId: responseId,
-          started,
-          payload: req.body,
-        });
+        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} not found." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
         return res.status(status).json(rendered);
       }
 
@@ -816,254 +508,81 @@ module.exports = async function statefulHandler(req, res, next) {
       if (ownerId !== Number(userId)) {
         const status = 403;
         const body = { error: "Forbidden" };
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: body,
-          endpointResponseId: null,
-          started,
-          payload: req.body,
-        });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
         return res.status(status).json(body);
       }
 
       const payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
-      // 🧩 Kiểm tra thứ tự field (schemaKeys khai báo rõ ràng)
       const schemaKeys = Object.keys(schema || {});
-      const payloadOrder = Object.keys(payload);
-      const sameOrder =
-        schemaKeys.length === payloadOrder.length &&
-        schemaKeys.every((k, i) => k === payloadOrder[i]);
+      const payloadKeys = Object.keys(payload);
+      const sameOrder = schemaKeys.length === payloadKeys.length && schemaKeys.every((k, i) => k === payloadKeys[i]);
       if (!sameOrder) {
         const status = 400;
         const body = { message: "Invalid data: field order does not match schema." };
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: body,
-          endpointResponseId: null,
-          started,
-          payload,
-        });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
         return res.status(status).json(body);
       }
 
-      // 🧩 Kiểm tra type chặt chẽ
-      for (const [key, rule] of Object.entries(schema || {})) {
-        const val = payload[key];
-        if (val === undefined || val === null) continue;
-
-        if (rule.type === "number" && typeof val !== "number") {
-          const status = 400;
-          const body = { message: `Invalid type for ${key}: expected number.` };
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status,
-            responseBody: body,
-            endpointResponseId: null,
-            started,
-            payload,
-          });
-          return res.status(status).json(body);
-        }
-
-        if (rule.type === "string" && typeof val !== "string") {
-          const status = 400;
-          const body = { message: `Invalid type for ${key}: expected string.` };
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status,
-            responseBody: body,
-            endpointResponseId: null,
-            started,
-            payload,
-          });
-          return res.status(status).json(body);
-        }
-
-        if (rule.type === "boolean" && typeof val !== "boolean") {
-          const status = 400;
-          const body = { message: `Invalid type for ${key}: expected boolean.` };
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status,
-            responseBody: body,
-            endpointResponseId: null,
-            started,
-            payload,
-          });
-          return res.status(status).json(body);
-        }
+      for (const [k, rule] of Object.entries(schema || {})) {
+        const v = payload[k];
+        if (v === undefined || v === null) continue;
+        if (rule.type === "number" && typeof v !== "number") return res.status(400).json({ message: `Invalid type for ${k}: expected number.` });
+        if (rule.type === "string" && typeof v !== "string") return res.status(400).json({ message: `Invalid type for ${k}: expected string.` });
+        if (rule.type === "boolean" && typeof v !== "boolean") return res.status(400).json({ message: `Invalid type for ${k}: expected boolean.` });
       }
 
-      // 🔁 Giữ nguyên logic PUT cũ từ đây (nhưng xây dựng updatedItem theo thứ tự schema)
-      const { ok } = validateAndSanitizePayload(schema, payload, {
-        allowMissingRequired: false,
-        rejectUnknown: true,
-      });
+      const { ok } = validateAndSanitizePayload(schema, payload, { allowMissingRequired: false, rejectUnknown: true });
       if (!ok) {
         const status = 400;
-        const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          {},
-          {
-            fallback: {
-              message: "Invalid data: request does not match {path} schema.",
-            },
-            logicalPath,
-          }
-        );
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: rendered,
-          endpointResponseId: responseId,
-          started,
-          payload: req.body,
-        });
+        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Invalid data: request does not match {path} schema." }, logicalPath });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
         return res.status(status).json(rendered);
       }
 
-      // Tạo updatedItem theo thứ tự schema (nếu schema không chứa một vài trường, append các trường cũ còn lại)
       const schemaKeysForUpdate = Object.keys(schema || {});
-      const extraKeysForUpdate = Object.keys(current[idx] || {}).filter((k) => !schemaKeysForUpdate.includes(k) && k !== "user_id");
-      const schemaOrderForUpdate = [...schemaKeysForUpdate, ...extraKeysForUpdate];
+      const extraKeys = Object.keys(current[idx] || {}).filter((k) => !schemaKeysForUpdate.includes(k) && k !== "user_id");
+      const updateOrder = [...schemaKeysForUpdate, ...extraKeys];
 
       const updatedItem = {};
-      for (const key of schemaOrderForUpdate) {
-        if (key === "id") {
-          updatedItem.id = idFromUrl; // id từ URL
-        } else if (Object.prototype.hasOwnProperty.call(payload, key)) {
-          updatedItem[key] = payload[key];
-        } else {
-          // giữ nguyên giá trị cũ nếu có, ngược lại null
-          updatedItem[key] = current[idx]?.[key] ?? null;
-        }
+      for (const k of updateOrder) {
+        if (k === "id") updatedItem.id = idFromUrl;
+        else if (Object.prototype.hasOwnProperty.call(payload, k)) updatedItem[k] = payload[k];
+        else updatedItem[k] = current[idx]?.[k] ?? null;
       }
-      // Cuối cùng thêm user_id
       updatedItem.user_id = ownerId;
 
       const updated = current.slice();
       updated[idx] = updatedItem;
-      await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
+      await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 200;
-      const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket,
-        status,
-        { params: { id: idFromUrl } },
-        {
-          fallback: {
-            message: "{Path} with id {{params.id}} updated successfully.",
-          },
-          requireParamId: true,
-          paramsIdOccurrences: 1,
-          logicalPath,
-        }
-      );
-      await insertLogSafely(req, {
-        projectId,
-        originId,
-        method,
-        path: rawPath,
-        status,
-        responseBody: rendered,
-        endpointResponseId: responseId,
-        started,
-        payload: req.body,
-      });
+      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} updated successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
+      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }
 
-    // =================== DELETE ===================
+    /* ===== DELETE ===== */
     if (method === "DELETE") {
       const userId = requireAuth(req, res);
-      if (userId == null) {
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status: 403,
-          responseBody: { error: "Unauthorized: login required." },
-          endpointResponseId: null,
-          started,
-          payload: req.body,
-        });
-        return;
-      }
+      if (userId == null) return;
 
-      // 🧩 Kiểm tra collection có tồn tại không
-      const mongoDb = col.db; // vì getCollection(collectionName) đã trả về collection hợp lệ
-      const existingCollections = await mongoDb.listCollections({ name: collectionName }).toArray();
-      const exists = existingCollections.some(c => c.name === collectionName);
-      if (!exists) {
+      const mongoDb = col.s.db;
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
+      if (!exists || !docId) {
         const status = 404;
-        const body = { message: `Collection ${collectionName} does not exist.` };
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: body,
-          endpointResponseId: null,
-          started,
-          payload: req.body,
-        });
+        const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
         return res.status(status).json(body);
       }
 
-
       if (hasId) {
-        const idx = current.findIndex((x) => Number(x?.id) === idFromUrl);
+        const idx = current.findIndex((x) => Number(x?.id) === Number(idFromUrl));
         if (idx === -1) {
           const status = 404;
-          const { rendered, responseId } = selectAndRenderResponseAdv(
-            responsesBucket,
-            status,
-            { params: { id: idFromUrl } },
-            {
-              fallback: {
-                message: "{Path} with id {{params.id}} to delete not found.",
-              },
-              requireParamId: true,
-              paramsIdOccurrences: 1,
-              logicalPath,
-            }
-          );
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status,
-            responseBody: rendered,
-            endpointResponseId: responseId,
-            started,
-            payload: req.body,
-          });
+          const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} to delete not found." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
+          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
           return res.status(status).json(rendered);
         }
 
@@ -1071,115 +590,43 @@ module.exports = async function statefulHandler(req, res, next) {
         if (ownerId !== Number(userId)) {
           const status = 403;
           const body = { error: "Forbidden" };
-          await insertLogSafely(req, {
-            projectId,
-            originId,
-            method,
-            path: rawPath,
-            status,
-            responseBody: body,
-            endpointResponseId: null,
-            started,
-            payload: req.body,
-          });
+          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
           return res.status(status).json(body);
         }
 
-        // Xóa phần tử theo id
         const updated = current.slice();
         updated.splice(idx, 1);
-        await col.updateOne({}, { $set: { data_current: updated } }, { upsert: true });
+        await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
         const status = 200;
-        const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          { params: { id: idFromUrl } },
-          {
-            fallback: {
-              message: "{Path} with id {{params.id}} deleted successfully.",
-            },
-            requireParamId: true,
-            paramsIdOccurrences: 1,
-            logicalPath,
-          }
-        );
-        await insertLogSafely(req, {
-          projectId,
-          originId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: rendered,
-          endpointResponseId: responseId,
-          started,
-          payload: req.body,
-        });
+        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} deleted successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
+        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
         return res.status(status).json(rendered);
       }
 
-      // Xóa toàn bộ theo user_id
-      const keep = current.filter((x) => Number(x?.user_id) !== Number(userId));
-      await col.updateOne({}, { $set: { data_current: keep } }, { upsert: true });
+      // Xoá toàn bộ data của user hiện tại
+      const uid = pickUserIdFromRequest(req);
+      const keep = current.filter((x) => Number(x?.user_id) !== Number(uid));
+      await col.updateOne({ _id: docId }, { $set: { data_current: keep } }, { upsert: false });
 
       const status = 200;
-      const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket,
-        status,
-        {},
-        {
-          fallback: { message: "Delete all data with {Path} successfully." },
-          requireParamId: false,
-          paramsIdOccurrences: 0,
-          logicalPath,
-        }
-      );
-      await insertLogSafely(req, {
-        projectId,
-        originId,
-        method,
-        path: rawPath,
-        status,
-        responseBody: rendered,
-        endpointResponseId: responseId,
-        started,
-        payload: req.body,
-      });
+      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Delete all data with {Path} successfully." }, requireParamId: false, paramsIdOccurrences: 0, logicalPath });
+      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }
 
-    // =================== Method khác ===================
+    /* ===== Others ===== */
     {
       const status = 405;
-      const body = { message: "Method Not Allowed" };
-      await insertLogSafely(req, {
-        projectId,
-        originId,
-        method,
-        path: rawPath,
-        status,
-        responseBody: body,
-        endpointResponseId: null,
-        started,
-        payload: req.body,
-      });
-      return res.status(status).json(body);
+      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Method Not Allowed" }, logicalPath });
+      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
+      return res.status(status).json(rendered);
     }
   } catch (err) {
     console.error("[statefulHandler] error:", err);
     const status = 500;
-    const body = { message: "Internal Server Error", error: err.message };
-    await insertLogSafely(req, {
-      projectId: null,
-      originId: null,
-      method,
-      path: rawPath,
-      status,
-      responseBody: body,
-      endpointResponseId: null,
-      started,
-      payload: req.body,
-    });
-    return res.status(status).json(body);
+    const rendered = { message: "Internal Server Error", error: err.message };
+    await logWithStatefulResponse(req, { projectId: null, originId: null, statefulId: null, method, path: rawPath, status, responseBody: rendered, started, payload: req.body });
+    return res.status(status).json(rendered);
   }
 };

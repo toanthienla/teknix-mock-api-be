@@ -73,10 +73,7 @@ router.use(async (req, res, next) => {
     const normPath = normalizePath(req.path || req.originalUrl || "/");
     const { base: baseCandidate, id: idCandidate } = splitBaseAndNumericId(normPath);
 
-    const candidates =
-      idCandidate !== null && baseCandidate !== normPath
-        ? [normPath, baseCandidate]
-        : [normPath];
+    const candidates = idCandidate !== null && baseCandidate !== normPath ? [normPath, baseCandidate] : [normPath];
 
     const ck = cacheKeyOf(method, normPath);
     const cached = cacheGet(ck);
@@ -101,9 +98,7 @@ router.use(async (req, res, next) => {
       return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
     }
 
-    const matchedStateless =
-      epRows.find((r) => normalizePath(r.path) === normPath) ||
-      epRows.find((r) => normalizePath(r.path) === baseCandidate);
+    const matchedStateless = epRows.find((r) => normalizePath(r.path) === normPath) || epRows.find((r) => normalizePath(r.path) === baseCandidate);
 
     if (!matchedStateless) {
       return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
@@ -186,10 +181,11 @@ router.use(async (req, res, next) => {
         projectName,
         statelessId: matchedStateless.id,
         statefulId: st.rows[0]?.id || null,
+        idInUrl, // ✅ thêm dòng này
       };
 
       const mode = matchedStateless.is_stateful ? "stateful" : "stateless";
-      cacheSet(ck, { mode, meta });
+      cacheSet(ck, { mode: "stateful", meta });
       req.universal = meta;
 
       if (mode === "stateless") {
