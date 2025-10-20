@@ -132,7 +132,7 @@ exports.listLogs = async (pool, opts = {}) => {
   };
 };
 
-exports.getLogById = async (pool, id) => {
+exports.getLogsByProjectId = async (pool, projectId) => {
   const { rows } = await pool.query(
     `
       SELECT
@@ -152,13 +152,15 @@ exports.getLogById = async (pool, id) => {
         l.latency_ms,
         l.created_at
       FROM project_request_logs l
-      WHERE l.id = $1
-      LIMIT 1
+      WHERE l.project_id = $1
+      ORDER BY l.created_at DESC
     `,
-    [id]
+    [projectId]
   );
-  return rows[0] || null;
+
+  return rows; // Trả về danh sách log
 };
+
 
 exports.nullifyFolderTree = async (client, folderId) => {
   // Lấy danh sách endpoint trong folder này

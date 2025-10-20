@@ -5,6 +5,6 @@ const controller = require("../controllers/project_request_log.controller");
 const router = express.Router();
 
 router.get("/", controller.listLogs);
-router.get("/:id", controller.getLogById);
+router.get("/:id", controller.getLogsByProjectId);
 
 module.exports = router;
