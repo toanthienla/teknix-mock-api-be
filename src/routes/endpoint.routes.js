@@ -24,4 +24,8 @@ router.put('/:id', validateEndpoint, asyncHandler(ctrl.updateEndpoint));
 // DELETE /endpoints/:id
 router.delete('/:id', asyncHandler(ctrl.deleteEndpoint));
 
+// 2 Routes mới về chức năng AdvancedConfig gồm GET và PUT
+router.get("/advanced/:id", EndpointStatefulController.getAdvancedConfig);
+router.put("/advanced/:id", EndpointStatefulController.updateAdvancedConfig);
+
 module.exports = router;
