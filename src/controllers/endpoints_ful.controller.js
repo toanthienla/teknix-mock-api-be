@@ -134,6 +134,65 @@ async function getBaseSchemaByEndpoint(req, res) {
   }
 }
 
+async function getAdvancedConfig(req, res) {
+  try {
+    const { id: originId } = req.params;
+    if (!originId) {
+      return res.status(400).json({ error: "origin_id là bắt buộc." });
+    }
+
+    const endpoint = await EndpointStatefulService.findByOriginIdRaw(originId);
+    if (!endpoint) {
+      return res.status(404).json({ error: "Không tìm thấy endpoint stateful với origin_id này." });
+    }
+
+    return res.status(200).json({
+      id: endpoint.id,
+      origin_id: endpoint.origin_id,
+      advanced_config: endpoint.advanced_config || null,
+    });
+  } catch (err) {
+    console.error("⚠️ Lỗi khi lấy advanced_config:", err);
+    return res.status(500).json({ error: "Lỗi máy chủ khi lấy advanced_config." });
+  }
+}
+
+/**
+ * PUT /endpoints/advanced/:originId
+ * → Cập nhật advanced_config (JSONB)
+ */
+async function updateAdvancedConfig(req, res) {
+  try {
+    const { id: originId } = req.params;
+    const { advanced_config } = req.body || {};
+
+    if (!originId) {
+      return res.status(400).json({ error: "origin_id là bắt buộc." });
+    }
+
+    if (!advanced_config || typeof advanced_config !== "object") {
+      return res.status(400).json({ error: "Trường 'advanced_config' phải là object JSON hợp lệ." });
+    }
+
+    const result = await EndpointStatefulService.updateAdvancedConfigByOriginId(originId, advanced_config);
+    if (result.notFound) {
+      return res.status(404).json({ error: "Không tìm thấy endpoint stateful với origin_id này." });
+    }
+
+    return res.status(200).json({
+      message: "Cập nhật advanced_config thành công.",
+      data: {
+        id: result.id,
+        origin_id: originId,
+        advanced_config: result.advanced_config,
+      },
+    });
+  } catch (err) {
+    console.error("⚠️ Lỗi khi cập nhật advanced_config:", err);
+    return res.status(500).json({ error: "Lỗi máy chủ khi cập nhật advanced_config." });
+  }
+}
+
 // --- Export tất cả các hàm ra ngoài tại một nơi duy nhất ---
 
 module.exports = {
@@ -145,4 +204,6 @@ module.exports = {
   updateEndpointResponse,
   getEndpointSchema,
   getBaseSchemaByEndpoint,
+  getAdvancedConfig,
+  updateAdvancedConfig,
 };

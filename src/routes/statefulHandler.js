@@ -404,56 +404,112 @@ module.exports = async function statefulHandler(req, res, next) {
 
       const payload = req.body || {};
       const endpointSchema = schema || {};
+      const baseKeys = Object.keys(baseSchema || {});
+      const schemaKeys = Object.keys(endpointSchema);
+      const payloadKeys = Object.keys(payload);
       const errors = [];
-      const newObj = {};
 
-      // ✅ Duyệt tất cả field trong schema
+      // 🧩 1️⃣ Kiểm tra thứ tự field phải đúng như schema (subsequence check)
+      let lastIndex = -1;
+      for (const k of payloadKeys) {
+        const idx = schemaKeys.indexOf(k);
+        if (idx === -1) {
+          const status = 400;
+          const body = { message: `Invalid data: unknown field '${k}'.` };
+          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          return res.status(status).json(body);
+        }
+        if (idx <= lastIndex) {
+          const status = 400;
+          const body = { message: "Invalid data: field order does not follow schema." };
+          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          return res.status(status).json(body);
+        }
+        lastIndex = idx;
+      }
+
+      // 🧩 2️⃣ Kiểm tra required và type
       for (const [key, rule] of Object.entries(endpointSchema)) {
         const hasValue = Object.prototype.hasOwnProperty.call(payload, key);
         const value = payload[key];
 
-        // Nếu required mà không có → lỗi
+        // Nếu required mà không có trong payload → lỗi
         if (rule.required === true && !hasValue) {
           errors.push(`Missing required field: ${key}`);
           continue;
         }
 
-        // Nếu có → check type
+        // Nếu có field thì kiểm tra type strict
         if (hasValue && value !== null && value !== undefined) {
           if (!isTypeOK(rule.type, value)) {
             errors.push(`Invalid type for ${key}: expected ${rule.type}`);
             continue;
           }
-          newObj[key] = value;
-        } else {
-          // Không có trong payload → null
-          newObj[key] = null;
         }
       }
 
-      // Nếu có lỗi → trả về 400
       if (errors.length > 0) {
         const status = 400;
         const body = { message: "Invalid data: " + errors.join(", ") };
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+        await logWithStatefulResponse(req, {
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload,
+        });
         return res.status(status).json(body);
       }
 
-      // 🔹 Xử lý ID
+      // 🧩 3️⃣ Xử lý id
       const idRule = endpointSchema?.id || {};
       let newId = payload.id;
 
       if (idRule?.required === true && (newId === undefined || newId === null)) {
-        errors.push("Missing required field: id");
+        const status = 400;
+        const body = { message: "Invalid data: missing required field: id" };
+        await logWithStatefulResponse(req, {
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload,
+        });
+        return res.status(status).json(body);
       }
 
       if ((idRule?.required === false || idRule?.required === undefined) &&
         (newId === undefined || newId === null)) {
         const numericIds = current
           .map((x) => Number(x?.id))
-          .filter((n) => Number.isFinite(n) && n > 0);
+          .filter((n) => Number.isFinite(n) && n >= 0);
         const maxId = numericIds.length ? Math.max(...numericIds) : 0;
         newId = maxId + 1;
+      }
+
+      if (newId !== undefined && typeof newId !== "number") {
+        const status = 400;
+        const body = { message: "Invalid data: id must be a number." };
+        await logWithStatefulResponse(req, {
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload,
+        });
+        return res.status(status).json(body);
       }
 
       if (newId !== undefined && current.some((x) => Number(x?.id) === Number(newId))) {
@@ -469,12 +525,40 @@ module.exports = async function statefulHandler(req, res, next) {
             logicalPath,
           }
         );
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload, statefulResponseId: responseId });
+        await logWithStatefulResponse(req, {
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: rendered,
+          started,
+          payload,
+          statefulResponseId: responseId,
+        });
         return res.status(status).json(rendered);
       }
 
-      // ✅ Hoàn thiện object
-      newObj.id = newId;
+      // 🧩 4️⃣ Build object lưu theo base_schema
+      const endpointExtra = Object.keys(endpointSchema || {}).filter(
+        (k) => !baseKeys.includes(k) && k !== "user_id"
+      );
+      const insertOrder = [...baseKeys, ...endpointExtra];
+      const newObj = {};
+
+      for (const k of insertOrder) {
+        if (k === "id") {
+          newObj.id = newId;
+          continue;
+        }
+        if (Object.prototype.hasOwnProperty.call(payload, k)) {
+          newObj[k] = payload[k];
+        } else {
+          newObj[k] = null;
+        }
+      }
+
       newObj.user_id = Number(userId);
 
       const updated = [...current, newObj];
@@ -487,7 +571,18 @@ module.exports = async function statefulHandler(req, res, next) {
         {},
         { fallback: { message: "New {path} item added successfully." }, logicalPath }
       );
-      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
+      await logWithStatefulResponse(req, {
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        status,
+        responseBody: rendered,
+        started,
+        payload: req.body,
+        statefulResponseId: responseId,
+      });
       return res.status(status).json(rendered);
     }
 
@@ -530,30 +625,51 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(body);
       }
 
-      const payload = req.body || {};
+      let payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
       const endpointSchema = schema || {};
+      const baseKeys = Object.keys(baseSchema || {});
+      const schemaKeys = Object.keys(endpointSchema);
       const errors = [];
-      const updatedItem = {};
 
+      // Order check for PUT: payload keys must appear in endpoint schema in same relative order (subsequence)
+      const payloadKeys = Object.keys(payload);
+      let lastIndex = -1;
+      for (const k of payloadKeys) {
+        const i = schemaKeys.indexOf(k);
+        if (i === -1) {
+          const status = 400;
+          const body = { message: `Invalid data: Unknown field ${k}` };
+          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          return res.status(status).json(body);
+        }
+        if (i <= lastIndex) {
+          const status = 400;
+          const body = { message: "Invalid data: field order does not follow schema." };
+          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          return res.status(status).json(body);
+        }
+        lastIndex = i;
+      }
+
+      // Required check: endpointSchema required fields MUST be present in payload for PUT (per your spec)
       for (const [key, rule] of Object.entries(endpointSchema)) {
-        const hasValue = Object.prototype.hasOwnProperty.call(payload, key);
-        const value = payload[key];
-
-        if (rule.required === true && !hasValue) {
+        if (rule.required === true && !Object.prototype.hasOwnProperty.call(payload, key)) {
           errors.push(`Missing required field: ${key}`);
+        }
+      }
+
+      // Type check for fields provided in payload
+      for (const [key, rule] of Object.entries(endpointSchema)) {
+        if (!Object.prototype.hasOwnProperty.call(payload, key)) continue;
+        const value = payload[key];
+        if (value === null || value === undefined) {
+          // if required true this was already caught; if not required then null is acceptable
           continue;
         }
-
-        if (hasValue && value !== null && value !== undefined) {
-          if (!isTypeOK(rule.type, value)) {
-            errors.push(`Invalid type for ${key}: expected ${rule.type}`);
-            continue;
-          }
-          updatedItem[key] = value;
-        } else {
-          updatedItem[key] = current[idx]?.[key] ?? null;
+        if (!isTypeOK(rule.type, value)) {
+          errors.push(`Invalid type for ${key}: expected ${rule.type}`);
         }
       }
 
@@ -564,7 +680,25 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(body);
       }
 
-      updatedItem.id = idFromUrl;
+      // Build updated item preserving base_schema order; fields sent in payload replace current, others preserve current value
+      const endpointExtra = Object.keys(endpointSchema || {}).filter((k) => !baseKeys.includes(k) && k !== "user_id");
+      const updateOrder = [...baseKeys, ...endpointExtra];
+
+      const updatedItem = {};
+      for (const k of updateOrder) {
+        if (k === "id") {
+          updatedItem.id = idFromUrl;
+          continue;
+        }
+        if (Object.prototype.hasOwnProperty.call(payload, k)) {
+          // user provided field -> use payload (already validated)
+          updatedItem[k] = payload[k];
+        } else {
+          // not provided -> keep existing if any, else null (do not overwrite existing null)
+          updatedItem[k] = current[idx]?.[k] ?? null;
+        }
+      }
+
       updatedItem.user_id = ownerId;
 
       const updated = current.slice();
