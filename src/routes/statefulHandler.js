@@ -586,7 +586,6 @@ module.exports = async function statefulHandler(req, res, next) {
       return res.status(status).json(rendered);
     }
 
-
     /* ===== PUT ===== */
     if (method === "PUT") {
       const userId = requireAuth(req, res);
@@ -617,13 +616,32 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(rendered);
       }
 
-      const ownerId = Number(current[idx]?.user_id);
-      if (ownerId !== Number(userId)) {
+      // ----- Owner check: allow edits to data_default (user_id == null) by anyone -----
+      // ownerId: null => data_default (public/default data)
+      // if ownerId is null -> allow any authenticated user to modify
+      // if ownerId is set -> only the original owner can modify
+      const rawOwner = current[idx]?.user_id;
+      const ownerId = rawOwner == null ? null : Number(rawOwner);
+
+      // If the item has an owner and current user is not the owner -> forbidden with clearer message
+      if (ownerId !== null && ownerId !== Number(userId)) {
         const status = 403;
-        const body = { error: "Forbidden" };
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+        const body = { error: "Forbidden: you are not the author of this item." };
+        await logWithStatefulResponse(req, {
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
+        });
         return res.status(status).json(body);
       }
+      // If ownerId === null -> allow (any authenticated user can update data_default)
+
 
       let payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
