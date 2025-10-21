@@ -74,18 +74,16 @@ async function updateFolder(req, res) {
     if (Number.isNaN(id)) {
       return error(res, 400, "id must be an integer");
     }
-
-    // 🧩 Phân biệt loại update
+    // 🧩 Phân biệt loại update (dựa vào sự tồn tại của key)
     const payload = req.body;
-    let result;
+    const hasSchemaKey = Object.prototype.hasOwnProperty.call(payload, 'base_schema');
 
-    if (payload.base_schema) {
-      // Cập nhật base_schema → cần cả stateful DB
-      result = await svc.updateFolder(req.db.stateless, req.db.stateful, id, payload);
-    } else {
-      // Cập nhật thông tin cơ bản → chỉ dùng stateless DB
-      result = await svc.updateFolder(req.db.stateless, null, id, payload);
-    }
+    const result = await svc.updateFolder(
+      req.db.stateless,
+      hasSchemaKey ? req.db.stateful : null,
+      id,
+      payload
+    );
 
     if (result.notFound) {
       return error(res, 404, "Folder not found");

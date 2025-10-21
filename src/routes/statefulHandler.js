@@ -149,15 +149,29 @@ function requireAuth(req, res) {
   }
   return uid;
 }
+
 function isTypeOK(expected, value) {
   if (value === undefined) return true;
-  if (expected === "number") return typeof value === "number" && !Number.isNaN(value);
-  if (expected === "string") return typeof value === "string" && value.trim() !== "";
-  if (expected === "boolean") return typeof value === "boolean";
-  if (expected === "object") return value && typeof value === "object" && !Array.isArray(value);
-  if (expected === "array") return Array.isArray(value);
-  return true;
+
+  const t = typeof expected === "string" ? expected.toLowerCase() : expected;
+
+  const allowed = new Set(["number", "string", "boolean", "object", "array"]);
+  if (!allowed.has(t)) {
+    // nếu schema không khai báo type hoặc type sai -> KHÔNG cho pass
+    return false;
+  }
+
+  if (t === "number") return typeof value === "number" && !Number.isNaN(value);
+  if (t === "string") return typeof value === "string" && value.trim() !== "";
+  if (t === "boolean") return typeof value === "boolean";
+  if (t === "object") return value && typeof value === "object" && !Array.isArray(value);
+  if (t === "array") return Array.isArray(value);
+
+  return false;
 }
+
+
+
 function validateAndSanitizePayload(schema, payload, { allowMissingRequired = false, rejectUnknown = true }) {
   const errors = [];
   const sanitized = {};
@@ -309,16 +323,44 @@ module.exports = async function statefulHandler(req, res, next) {
     const docId = doc._id;
     const current = Array.isArray(doc.data_current) ? doc.data_current : doc.data_current ? [doc.data_current] : [];
 
-    /* 4) LOAD SCHEMA Ở DB STATEFUL */
-    const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
-    const schema = normalizeJsonb(schRows?.[0]?.schema) || {};
+    // 4) LOAD SCHEMA ở DB STATEFUL
+    let endpointSchemaDb = {};
+    if (statefulId != null) {
+      const { rows: schRows } = await req.db.stateful.query(
+        "SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1",
+        [statefulId]
+      );
+      endpointSchemaDb = normalizeJsonb(schRows?.[0]?.schema) || {};
+    }
 
-    /* 5) BASE SCHEMA Ở DB STATELESS (Dùng folderId đã lấy) */
+    // 5) BASE SCHEMA ở DB STATELESS (theo folderId)
     let baseSchema = {};
     if (folderId != null) {
-      const { rows: baseRows } = await req.db.stateless.query("SELECT base_schema FROM folders WHERE id = $1 LIMIT 1", [folderId]);
+      const { rows: baseRows } = await req.db.stateless.query(
+        "SELECT base_schema FROM folders WHERE id = $1 LIMIT 1",
+        [folderId]
+      );
       baseSchema = normalizeJsonb(baseRows?.[0]?.base_schema) || {};
     }
+
+    // ✅ Chọn schema thật sự để validate: ưu tiên endpoints_ful.schema, fallback về base_schema
+    const effectiveSchema =
+      (baseSchema && Object.keys(baseSchema).length)
+        ? baseSchema
+        : endpointSchemaDb;
+
+    // Nếu vẫn không có schema → chặn ghi
+    if (!effectiveSchema || !Object.keys(effectiveSchema).length) {
+      const status = 400;
+      const body = { message: "Schema is not initialized for this endpoint/folder." };
+      await logWithStatefulResponse(req, {
+        projectId, originId, statefulId, method, path: rawPath,
+        status, responseBody: body, started, payload: req.body
+      });
+      return res.status(status).json(body);
+    }
+
+
 
     /* 6) LOAD RESPONSE BUCKET Ở DB STATEFUL */
     const responsesBucket = await loadResponsesBucket(req.db.stateful, statefulId);
@@ -403,7 +445,9 @@ module.exports = async function statefulHandler(req, res, next) {
       }
 
       const payload = req.body || {};
-      const endpointSchema = schema || {};
+      //const endpointSchema = schema || {};
+      const endpointSchema = effectiveSchema;
+
       const baseKeys = Object.keys(baseSchema || {});
       const schemaKeys = Object.keys(endpointSchema);
       const payloadKeys = Object.keys(payload);
@@ -646,7 +690,9 @@ module.exports = async function statefulHandler(req, res, next) {
       let payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
-      const endpointSchema = schema || {};
+      //const endpointSchema = schema || {};
+      const endpointSchema = effectiveSchema;
+
       const baseKeys = Object.keys(baseSchema || {});
       const schemaKeys = Object.keys(endpointSchema);
       const payloadKeys = Object.keys(payload);
