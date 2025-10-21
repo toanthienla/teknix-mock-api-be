@@ -586,7 +586,6 @@ module.exports = async function statefulHandler(req, res, next) {
       return res.status(status).json(rendered);
     }
 
-
     /* ===== PUT ===== */
     if (method === "PUT") {
       const userId = requireAuth(req, res);
@@ -617,13 +616,32 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(rendered);
       }
 
-      const ownerId = Number(current[idx]?.user_id);
-      if (ownerId !== Number(userId)) {
+      // ----- Owner check: allow edits to data_default (user_id == null) by anyone -----
+      // ownerId: null => data_default (public/default data)
+      // if ownerId is null -> allow any authenticated user to modify
+      // if ownerId is set -> only the original owner can modify
+      const rawOwner = current[idx]?.user_id;
+      const ownerId = rawOwner == null ? null : Number(rawOwner);
+
+      // If the item has an owner and current user is not the owner -> forbidden with clearer message
+      if (ownerId !== null && ownerId !== Number(userId)) {
         const status = 403;
-        const body = { error: "Forbidden" };
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+        const body = { error: "Forbidden: you are not the author of this item." };
+        await logWithStatefulResponse(req, {
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
+        });
         return res.status(status).json(body);
       }
+      // If ownerId === null -> allow (any authenticated user can update data_default)
+
 
       let payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
@@ -631,44 +649,36 @@ module.exports = async function statefulHandler(req, res, next) {
       const endpointSchema = schema || {};
       const baseKeys = Object.keys(baseSchema || {});
       const schemaKeys = Object.keys(endpointSchema);
+      const payloadKeys = Object.keys(payload);
       const errors = [];
 
-      // Order check for PUT: payload keys must appear in endpoint schema in same relative order (subsequence)
-      const payloadKeys = Object.keys(payload);
+      // 1️⃣ Field order validation
       let lastIndex = -1;
       for (const k of payloadKeys) {
-        const i = schemaKeys.indexOf(k);
-        if (i === -1) {
-          const status = 400;
-          const body = { message: `Invalid data: Unknown field ${k}` };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
-          return res.status(status).json(body);
+        const idxSchema = schemaKeys.indexOf(k);
+        if (idxSchema === -1) {
+          errors.push(`Unknown field: ${k}`);
+          continue;
         }
-        if (i <= lastIndex) {
-          const status = 400;
-          const body = { message: "Invalid data: field order does not follow schema." };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
-          return res.status(status).json(body);
+        if (idxSchema <= lastIndex) {
+          errors.push("Invalid data: field order does not follow schema.");
+          break;
         }
-        lastIndex = i;
+        lastIndex = idxSchema;
       }
 
-      // Required check: endpointSchema required fields MUST be present in payload for PUT (per your spec)
+      // 2️⃣ Required field check
       for (const [key, rule] of Object.entries(endpointSchema)) {
         if (rule.required === true && !Object.prototype.hasOwnProperty.call(payload, key)) {
           errors.push(`Missing required field: ${key}`);
         }
       }
 
-      // Type check for fields provided in payload
+      // 3️⃣ Type check
       for (const [key, rule] of Object.entries(endpointSchema)) {
         if (!Object.prototype.hasOwnProperty.call(payload, key)) continue;
         const value = payload[key];
-        if (value === null || value === undefined) {
-          // if required true this was already caught; if not required then null is acceptable
-          continue;
-        }
-        if (!isTypeOK(rule.type, value)) {
+        if (value !== null && value !== undefined && !isTypeOK(rule.type, value)) {
           errors.push(`Invalid type for ${key}: expected ${rule.type}`);
         }
       }
@@ -680,7 +690,7 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(body);
       }
 
-      // Build updated item preserving base_schema order; fields sent in payload replace current, others preserve current value
+      // 4️⃣ Merge update (preserve existing fields)
       const endpointExtra = Object.keys(endpointSchema || {}).filter((k) => !baseKeys.includes(k) && k !== "user_id");
       const updateOrder = [...baseKeys, ...endpointExtra];
 
@@ -690,13 +700,9 @@ module.exports = async function statefulHandler(req, res, next) {
           updatedItem.id = idFromUrl;
           continue;
         }
-        if (Object.prototype.hasOwnProperty.call(payload, k)) {
-          // user provided field -> use payload (already validated)
-          updatedItem[k] = payload[k];
-        } else {
-          // not provided -> keep existing if any, else null (do not overwrite existing null)
-          updatedItem[k] = current[idx]?.[k] ?? null;
-        }
+        updatedItem[k] = Object.prototype.hasOwnProperty.call(payload, k)
+          ? payload[k]
+          : current[idx]?.[k] ?? null;
       }
 
       updatedItem.user_id = ownerId;
@@ -715,6 +721,7 @@ module.exports = async function statefulHandler(req, res, next) {
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }
+
 
     /* ===== DELETE ===== */
     if (method === "DELETE") {

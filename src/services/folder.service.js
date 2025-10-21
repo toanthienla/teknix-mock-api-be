@@ -89,7 +89,10 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
   }
 
   // 🧱 1️⃣ Kiểm tra folder có tồn tại không
-  const { rows: currentRows } = await dbStateless.query("SELECT * FROM folders WHERE id = $1", [id]);
+  const { rows: currentRows } = await dbStateless.query(
+    "SELECT * FROM folders WHERE id = $1",
+    [id]
+  );
   if (currentRows.length === 0) {
     return { success: false, notFound: true };
   }
@@ -106,7 +109,7 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
       return { success: false, message: "Invalid base_schema format" };
     }
 
-    // ✅ Cập nhật base_schema trước
+    // ✅ Cập nhật base_schema lần đầu
     const { rows } = await dbStateless.query(
       `UPDATE folders
        SET base_schema = $1::jsonb,
@@ -117,8 +120,20 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
     );
 
     const updatedFolder = rows[0];
+
+    // ⚡️ Trick: cập nhật lại base_schema lần 2 để ép PostgreSQL reload JSONB và sync cache
+    await dbStateless.query(
+      `UPDATE folders
+       SET base_schema = base_schema,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [id]
+    );
+    console.log(`🔁 Refreshed base_schema for folder ${id}`);
+
     // 🔄 3️⃣ Cập nhật toàn bộ schema của endpoints_ful trong folder này
     try {
+      // Lần 1: cập nhật schema chính xác theo base_schema
       await dbStateful.query(
         `UPDATE endpoints_ful
          SET schema = $1::jsonb,
@@ -126,17 +141,33 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
          WHERE folder_id = $2`,
         [JSON.stringify(base_schema), id]
       );
-      console.log(`✅ Updated schema for all endpoints_ful in folder ${id}`);
+
+      // ⚡️ Trick: lần 2 để ép Postgres & connection pool reload JSONB thật
+      await dbStateful.query(
+        `UPDATE endpoints_ful
+         SET schema = schema,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE folder_id = $1`,
+        [id]
+      );
+
+      console.log(`✅ Updated & refreshed schema for all endpoints_ful in folder ${id}`);
     } catch (err) {
       console.error("⚠️ Failed to sync schema to endpoints_ful:", err);
     }
 
-    // 🔍 3️⃣ Sau khi update, kiểm tra xem có endpoint nào đã được chuyển stateful chưa
-    const { rows: endpoints } = await dbStateless.query("SELECT id, path FROM endpoints WHERE folder_id = $1", [id]);
+    // 🔍 4️⃣ Sau khi update, kiểm tra xem có endpoint nào đã được chuyển stateful chưa
+    const { rows: endpoints } = await dbStateless.query(
+      "SELECT id, path FROM endpoints WHERE folder_id = $1",
+      [id]
+    );
 
     if (endpoints.length > 0) {
       const endpointIds = endpoints.map((e) => e.id);
-      const { rows: used } = await dbStateful.query("SELECT id, origin_id FROM endpoints_ful WHERE origin_id = ANY($1)", [endpointIds]);
+      const { rows: used } = await dbStateful.query(
+        "SELECT id, origin_id FROM endpoints_ful WHERE origin_id = ANY($1)",
+        [endpointIds]
+      );
 
       // ⚙️ Nếu có endpoint stateful → gọi reset Mongo collections
       if (used.length > 0) {
@@ -151,13 +182,21 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
     return { success: true, data: updatedFolder };
   }
 
-  // 🧱 4️⃣ Nếu không có base_schema → giữ nguyên logic cũ
+  // 🧱 5️⃣ Nếu không có base_schema → giữ nguyên logic cũ
   if (name) {
-    const { rows: existRows } = await dbStateless.query("SELECT id FROM folders WHERE project_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3", [folder.project_id, name, id]);
+    const { rows: existRows } = await dbStateless.query(
+      "SELECT id FROM folders WHERE project_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3",
+      [folder.project_id, name, id]
+    );
     if (existRows.length > 0) {
       return {
         success: false,
-        errors: [{ field: "name", message: "Folder name already exists in this project" }],
+        errors: [
+          {
+            field: "name",
+            message: "Folder name already exists in this project",
+          },
+        ],
       };
     }
   }
@@ -175,6 +214,7 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
 
   return { success: true, data: rows[0] };
 }
+
 
 /**
  * Reset lại data_default và data_current trong MongoDB
