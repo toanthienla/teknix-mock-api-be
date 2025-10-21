@@ -3,6 +3,7 @@ const router = express.Router();
 const ctrl = require('../controllers/endpoint.controller');
 const asyncHandler = require('../middlewares/asyncHandler');
 const validateEndpoint = require('../middlewares/validateEndpoint');
+const ctrlEndpointFul = require('../controllers/endpoints_ful.controller');
 
 // Get all endpoints (filter by project_id nếu có query param)
 // GET /endpoints
@@ -25,7 +26,7 @@ router.put('/:id', validateEndpoint, asyncHandler(ctrl.updateEndpoint));
 router.delete('/:id', asyncHandler(ctrl.deleteEndpoint));
 
 // 2 Routes mới về chức năng AdvancedConfig gồm GET và PUT
-router.get("/advanced/:id", EndpointStatefulController.getAdvancedConfig);
-router.put("/advanced/:id", EndpointStatefulController.updateAdvancedConfig);
+router.get("/advanced/:id", ctrlEndpointFul.getAdvancedConfig);
+router.put("/advanced/:id", ctrlEndpointFul.updateAdvancedConfig);
 
 module.exports = router;
