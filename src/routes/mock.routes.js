@@ -333,20 +333,7 @@ router.use(async (req, res, next) => {
       [ep.id]
     );
 
-    // 🧹 Normalize: condition có thể là string -> parse JSON an toàn
-    const normalized = responses.map((r) => {
-      let cond = r.condition;
-      if (cond && typeof cond === "string") {
-        try {
-          cond = JSON.parse(cond);
-        } catch (_) {
-          cond = {};
-        }
-      }
-      return { ...r, condition: cond };
-    });
-
-    if (normalized.length === 0) {
+    if (responses.length === 0) {
       const status = req.method.toUpperCase() === "GET" ? 200 : 501;
       const body = req.method.toUpperCase() === "GET" ? (hasParams ? {} : []) : { error: { message: "No response configured" } };
       try {
@@ -383,14 +370,12 @@ router.use(async (req, res, next) => {
       return true;
     };
 
-    const matchedResponses = normalized.filter((r) => matchesCondition(r.condition));
+    const matchedResponses = responses.filter((r) => matchesCondition(r.condition));
     let r;
     if (matchedResponses.length > 0) {
       r = matchedResponses[0];
     } else {
-      // ✅ Fallback default CHỈ lấy default có condition rỗng
-      const isEmptyCond = (c) => !isPlainObject(c) || Object.keys(c).length === 0 || (isPlainObject(c.params) && Object.keys(c.params).length === 0 && (!isPlainObject(c.query) || Object.keys(c.query).length === 0));
-      r = normalized.find((rr) => rr.is_default && isEmptyCond(rr.condition));
+      r = responses.find((rr) => rr.is_default);
       if (!r) {
         const status = 404;
         const body = { error: "No matching response found" };
