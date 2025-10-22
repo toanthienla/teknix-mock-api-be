@@ -142,7 +142,6 @@ async function createEndpoint(req, res) {
   }
 }
 
-// Update endpoint
 // Update endpoint controller
 async function updateEndpoint(req, res) {
   try {

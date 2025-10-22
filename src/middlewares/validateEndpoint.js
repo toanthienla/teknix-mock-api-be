@@ -1,4 +1,3 @@
-// validateEndpoint.js
 module.exports = function validateEndpoint(req, res, next) {
   const body = req.body || {};
   const { name, method, path, folder_id, schema, fields } = body;
@@ -7,7 +6,11 @@ module.exports = function validateEndpoint(req, res, next) {
   // --- Helpers ---
   const onlyHas = (k) => Object.keys(body).length === 1 && Object.prototype.hasOwnProperty.call(body, k);
   const isStringArray = (arr) => Array.isArray(arr) && arr.every((v) => typeof v === "string" && v.trim() !== "");
-  const isRulesMap = (obj) => obj && typeof obj === "object" && !Array.isArray(obj) && Object.values(obj).some((v) => v && typeof v === "object" && ("type" in v || "required" in v));
+  const isRulesMap = (obj) =>
+    obj &&
+    typeof obj === "object" &&
+    !Array.isArray(obj) &&
+    Object.values(obj).some((v) => v && typeof v === "object" && ("type" in v || "required" in v));
 
   // --- CREATE: giữ nguyên rule cũ ---
   if (req.method === "POST") {
@@ -61,21 +64,33 @@ module.exports = function validateEndpoint(req, res, next) {
     return next();
   }
 
-  // --- UPDATE (PUT): 2 “shape” được phép ---
+  // --- UPDATE (PUT): cho phép cập nhật name hoặc schema ---
   if (req.method === "PUT") {
+    const hasNameOnly = onlyHas("name");
     const hasSchemaOnly = onlyHas("schema");
     const hasFieldsOnly = onlyHas("fields");
 
-    // chặn payload "lẫn lộn"
-    const forbiddenKeys = ["name", "method", "path", "folder_id"];
+    // ❌ Chặn các key không hợp lệ
+    const forbiddenKeys = ["method", "path", "folder_id", "is_stateful", "is_active"];
     if (Object.keys(body).some((k) => forbiddenKeys.includes(k))) {
       return res.status(400).json({
         success: false,
-        errors: [{ field: "body", message: "PUT schema update must not include name/method/path/folder_id" }],
+        errors: [{ field: "body", message: "PUT update only allows name or schema" }],
       });
     }
 
-    // CASE A: { fields: [...] } (dành cho endpoint GET)
+    // ✅ CASE 1: { name: "..." }
+    if (hasNameOnly) {
+      if (typeof name !== "string" || name.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "name", message: "Name must be a non-empty string" }],
+        });
+      }
+      return next();
+    }
+
+    // ✅ CASE 2: { fields: [...] } (GET schema)
     if (hasFieldsOnly) {
       if (!isStringArray(fields)) {
         return res.status(400).json({
@@ -83,10 +98,10 @@ module.exports = function validateEndpoint(req, res, next) {
           errors: [{ field: "fields", message: "fields must be a non-empty array of non-empty strings" }],
         });
       }
-      return next(); // để service kiểm tra method thực tế (GET) & xử lý tiếp
+      return next();
     }
 
-    // CASE B: { schema: { ... } } (dành cho endpoint POST/PUT)
+    // ✅ CASE 3: { schema: {...} } (POST/PUT schema)
     if (hasSchemaOnly) {
       if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
         return res.status(400).json({
@@ -94,7 +109,6 @@ module.exports = function validateEndpoint(req, res, next) {
           errors: [{ field: "schema", message: "schema must be an object" }],
         });
       }
-      // sơ bộ: phải là rules-map (ít nhất 1 field có type/required) hoặc { fields:[...] } cũng được (service sẽ phân loại)
       const looksLikeRules = isRulesMap(schema);
       const looksLikeGet = "fields" in schema && isStringArray(schema.fields) && Object.keys(schema).length === 1;
       if (!looksLikeRules && !looksLikeGet) {
@@ -106,13 +120,12 @@ module.exports = function validateEndpoint(req, res, next) {
       return next();
     }
 
-    // Không thuộc 2 shape hợp lệ
+    // ❌ Không hợp lệ (trộn nhiều field hoặc thiếu key)
     return res.status(400).json({
       success: false,
-      errors: [{ field: "body", message: "PUT payload must be either {fields:[...]} or {schema:{...}}" }],
+      errors: [{ field: "body", message: "PUT payload must be either {name:...}, {fields:[...]}, or {schema:{...}}" }],
     });
   }
 
-  // Các method khác -> để qua
   next();
 };
