@@ -21,7 +21,7 @@ function validateNameOrError(name) {
 // Get all folders (optionally filter by project_id)
 async function getFolders(db, project_id) {
   let query = `
-    SELECT id, project_id, name, description, created_at, updated_at
+    SELECT id, project_id, name, is_public, description, created_at, updated_at
     FROM folders
   `;
   const params = [];
