@@ -1,6 +1,7 @@
 // src/routes/statefulHandler.js
 const { getCollection } = require("../config/db");
 const logSvc = require("../services/project_request_log.service");
+const { onProjectLogInserted } = require("../centrifugo/notification.service");
 
 /* ========== Utils ========== */
 function getClientIp(req) {
@@ -203,7 +204,7 @@ async function resolveStatefulResponseId(statefulDb, statefulId, providedId) {
 async function logWithStatefulResponse(req, { projectId, originId, statefulId, method, path, status, responseBody, started, payload, statefulResponseId = null }) {
   try {
     const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId);
-    await logSvc.insertLog(req.db.stateless, {
+    const _log = await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
       endpoint_id: originId ?? null, // stateless endpoints.id
       endpoint_response_id: null, // NULL trong flow stateful
@@ -218,6 +219,25 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
       ip_address: getClientIp(req),
       latency_ms: Date.now() - started,
     });
+    let logId = _log && _log.id;
+    if (!logId) {
+      try {
+        const r = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
+        logId = r.rows?.[0]?.id || null;
+        console.log("[stateful] fallback logId =", logId);
+      } catch (e) {
+        console.error("[stateful] fallback query failed:", e?.message || e);
+      }
+    }
+    if (logId) {
+      try {
+        await onProjectLogInserted(logId, req.db.stateless);
+      } catch (e) {
+        console.error("[notify hook error]", e?.message || e);
+      }
+    } else {
+      console.warn("[stateful] missing logId - skip notify");
+    }
   } catch (e) {
     console.error("[statefulHandler] log error:", e?.message || e);
   }
@@ -393,8 +413,7 @@ module.exports = async function statefulHandler(req, res, next) {
 
       // doc đã seed
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
-        .some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
         const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
@@ -486,11 +505,8 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(body);
       }
 
-      if ((idRule?.required === false || idRule?.required === undefined) &&
-        (newId === undefined || newId === null)) {
-        const numericIds = current
-          .map((x) => Number(x?.id))
-          .filter((n) => Number.isFinite(n) && n >= 0);
+      if ((idRule?.required === false || idRule?.required === undefined) && (newId === undefined || newId === null)) {
+        const numericIds = current.map((x) => Number(x?.id)).filter((n) => Number.isFinite(n) && n >= 0);
         const maxId = numericIds.length ? Math.max(...numericIds) : 0;
         newId = maxId + 1;
       }
@@ -541,9 +557,7 @@ module.exports = async function statefulHandler(req, res, next) {
       }
 
       // 🧩 4️⃣ Build object lưu theo base_schema
-      const endpointExtra = Object.keys(endpointSchema || {}).filter(
-        (k) => !baseKeys.includes(k) && k !== "user_id"
-      );
+      const endpointExtra = Object.keys(endpointSchema || {}).filter((k) => !baseKeys.includes(k) && k !== "user_id");
       const insertOrder = [...baseKeys, ...endpointExtra];
       const newObj = {};
 
@@ -565,12 +579,7 @@ module.exports = async function statefulHandler(req, res, next) {
       await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 201;
-      const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket,
-        status,
-        {},
-        { fallback: { message: "New {path} item added successfully." }, logicalPath }
-      );
+      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "New {path} item added successfully." }, logicalPath });
       await logWithStatefulResponse(req, {
         projectId,
         originId,
@@ -586,15 +595,13 @@ module.exports = async function statefulHandler(req, res, next) {
       return res.status(status).json(rendered);
     }
 
-
     /* ===== PUT ===== */
     if (method === "PUT") {
       const userId = requireAuth(req, res);
       if (userId == null) return;
 
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
-        .some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
         const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
@@ -706,12 +713,7 @@ module.exports = async function statefulHandler(req, res, next) {
       await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 200;
-      const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket,
-        status,
-        { params: { id: idFromUrl } },
-        { fallback: { message: "{Path} with id {{params.id}} updated successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath }
-      );
+      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} updated successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }

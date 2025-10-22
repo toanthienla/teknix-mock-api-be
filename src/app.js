@@ -5,6 +5,7 @@ const app = express();
 const cors = require("cors");
 const auth = require("./middlewares/authMiddleware");
 const path = require("path");
+const notifyRoutes = require("./centrifugo/notify.routes");
 
 app.use(
   cors({
@@ -70,17 +71,6 @@ app.use("/", endpointResponseRoutes);
 app.use("/", statefulRoutes);
 app.use("/", mockRoutes);
 
-// ❌ GỠ BỎ đoạn bắt trực tiếp /:workspace/:project để khỏi bypass auth
-// app.use('/:workspace/:project', (req, res, next) => {
-//   if ((req.path || '/').split('/').filter(Boolean).length >= 1) {
-//     return statefulHandler(req, res, next);
-//   }
-//   return res.status(400).json({
-//     message: "Full route required: /{workspaceName}/{projectName}/{path}",
-//     detail: { path: req.originalUrl || req.url }
-//   });
-// });
-
 // Các route logs khác
 app.use("/project_request_logs", projectRequestLogRoutes);
 
@@ -88,5 +78,7 @@ app.use("/project_request_logs", projectRequestLogRoutes);
 // Mọi request động (/:workspace/:project/...) sẽ đi qua đây, có req.user
 // MỌI request dạng /:workspace/:project/... phải đi qua auth -> universalHandler
 app.use("/:workspace/:project", auth, require("./routes/universalHandler"));
+
+app.use(notifyRoutes);
 
 module.exports = app;
