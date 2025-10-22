@@ -59,9 +59,7 @@ const projectRequestLogRoutes = require("./routes/project_request_log.routes");
 const mockRoutes = require("./routes/mock.routes"); // stateless
 const statefulRoutes = require("./routes/stateful.routes"); // các API quản trị stateful (không phải handler chính)
 const adminResponseLogger = require("./middlewares/adminResponseLogger");
-
-// ⚠️ KHÔNG import statefulHandler trực tiếp để tránh bypass auth
-// const statefulHandler = require('./routes/statefulHandler'); // ← remove
+const createNotificationsRoutes = require("./routes/notifications.routes");
 
 app.use("/workspaces", workspaceRoutes);
 app.use("/projects", projectRoutes);
@@ -70,15 +68,10 @@ app.use("/folders", folderRoutes);
 app.use("/", endpointResponseRoutes);
 app.use("/", statefulRoutes);
 app.use("/", mockRoutes);
+app.use("/", createNotificationsRoutes());
 
 // Các route logs khác
 app.use("/project_request_logs", projectRequestLogRoutes);
-
-// ✅ MOUNT UNIVERSAL HANDLER CUỐI CÙNG + CÓ AUTH  // CHANGED
-// Mọi request động (/:workspace/:project/...) sẽ đi qua đây, có req.user
-// MỌI request dạng /:workspace/:project/... phải đi qua auth -> universalHandler
 app.use("/:workspace/:project", auth, require("./routes/universalHandler"));
-
-app.use(notifyRoutes);
 
 module.exports = app;
