@@ -356,8 +356,8 @@ module.exports = async function statefulHandler(req, res, next) {
       baseSchema = normalizeJsonb(baseRows?.[0]?.base_schema) || {};
     }
 
-    // ✅ Chọn schema thật sự để validate: ưu tiên endpoints_ful.schema, fallback về base_schema
-    const effectiveSchema = baseSchema && Object.keys(baseSchema).length ? baseSchema : endpointSchemaDb;
+    // Ưu tiên schema của endpoint, fallback về base_schema
+    const effectiveSchema = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema;
 
     // Nếu vẫn không có schema → chặn ghi
     if (!effectiveSchema || !Object.keys(effectiveSchema).length) {
@@ -385,11 +385,14 @@ module.exports = async function statefulHandler(req, res, next) {
       const userIdMaybe = pickUserIdFromRequest(req);
 
       const pickForGET = (obj) => {
-        const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+        // nếu schema là dạng { fields: [...] }
+        const fields = Array.isArray(effectiveSchema?.fields) ? effectiveSchema.fields : Object.keys(effectiveSchema || {});
+
         if (fields.length === 0) {
           const { user_id, ...rest } = obj || {};
           return rest;
         }
+
         const out = {};
         for (const k of fields) {
           if (k === "user_id") continue;
