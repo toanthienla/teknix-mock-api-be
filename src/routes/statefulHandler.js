@@ -1,13 +1,14 @@
 // src/routes/statefulHandler.js
 const { getCollection } = require("../config/db");
 const logSvc = require("../services/project_request_log.service");
-
+const { onProjectLogInserted } = require("../services/notification.service");
 /* ========== Utils ========== */
 function getClientIp(req) {
   return req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.connection?.remoteAddress || req.ip || null;
 }
 function normalizeJsonb(x) {
   if (x == null) return x;
+  s;
   if (typeof x === "string") {
     try {
       return JSON.parse(x);
@@ -171,8 +172,6 @@ function isTypeOK(expected, value) {
   return false;
 }
 
-
-
 function validateAndSanitizePayload(schema, payload, { allowMissingRequired = false, rejectUnknown = true }) {
   const errors = [];
   const sanitized = {};
@@ -327,41 +326,37 @@ module.exports = async function statefulHandler(req, res, next) {
     // 4) LOAD SCHEMA ở DB STATEFUL
     let endpointSchemaDb = {};
     if (statefulId != null) {
-      const { rows: schRows } = await req.db.stateful.query(
-        "SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1",
-        [statefulId]
-      );
+      const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
       endpointSchemaDb = normalizeJsonb(schRows?.[0]?.schema) || {};
     }
 
     // 5) BASE SCHEMA ở DB STATELESS (theo folderId)
     let baseSchema = {};
     if (folderId != null) {
-      const { rows: baseRows } = await req.db.stateless.query(
-        "SELECT base_schema FROM folders WHERE id = $1 LIMIT 1",
-        [folderId]
-      );
+      const { rows: baseRows } = await req.db.stateless.query("SELECT base_schema FROM folders WHERE id = $1 LIMIT 1", [folderId]);
       baseSchema = normalizeJsonb(baseRows?.[0]?.base_schema) || {};
     }
 
     // Ưu tiên schema của endpoint, fallback về base_schema
-    const effectiveSchema =
-      (endpointSchemaDb && Object.keys(endpointSchemaDb).length)
-        ? endpointSchemaDb
-        : baseSchema;
+    const effectiveSchema = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema;
 
     // Nếu vẫn không có schema → chặn ghi
     if (!effectiveSchema || !Object.keys(effectiveSchema).length) {
       const status = 400;
       const body = { message: "Schema is not initialized for this endpoint/folder." };
       await logWithStatefulResponse(req, {
-        projectId, originId, statefulId, method, path: rawPath,
-        status, responseBody: body, started, payload: req.body
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        status,
+        responseBody: body,
+        started,
+        payload: req.body,
       });
       return res.status(status).json(body);
     }
-
-
 
     /* 6) LOAD RESPONSE BUCKET Ở DB STATEFUL */
     const responsesBucket = await loadResponsesBucket(req.db.stateful, statefulId);
@@ -370,9 +365,7 @@ module.exports = async function statefulHandler(req, res, next) {
       const userIdMaybe = pickUserIdFromRequest(req);
 
       const pickForGET = (obj) => {
-        const fields = Array.isArray(effectiveSchema?.fields)
-          ? effectiveSchema.fields
-          : Object.keys(effectiveSchema || {});
+        const fields = Array.isArray(effectiveSchema?.fields) ? effectiveSchema.fields : Object.keys(effectiveSchema || {});
         if (fields.length === 0) {
           const { user_id, ...rest } = obj || {};
           return rest;
@@ -380,9 +373,7 @@ module.exports = async function statefulHandler(req, res, next) {
         const out = {};
         for (const k of fields) {
           if (k === "user_id") continue;
-          out[k] = Object.prototype.hasOwnProperty.call(obj || {}, k)
-            ? obj[k]
-            : null;
+          out[k] = Object.prototype.hasOwnProperty.call(obj || {}, k) ? obj[k] : null;
         }
         return out;
       };
@@ -402,15 +393,24 @@ module.exports = async function statefulHandler(req, res, next) {
               success: true,
             };
             await logWithStatefulResponse(req, {
-              projectId, originId, statefulId, method, path: rawPath,
-              status, responseBody: body, started, payload: req.body
+              projectId,
+              originId,
+              statefulId,
+              method,
+              path: rawPath,
+              status,
+              responseBody: body,
+              started,
+              payload: req.body,
             });
             return res.status(status).json(body);
           }
           // Not found
           const status = 404;
           const { rendered, responseId } = selectAndRenderResponseAdv(
-            responsesBucket, status, { params: { id: idFromUrl } },
+            responsesBucket,
+            status,
+            { params: { id: idFromUrl } },
             {
               fallback: { message: "{Path} with id {{params.id}} not found." },
               requireParamId: true,
@@ -425,8 +425,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload: req.body,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload: req.body,
             statefulResponseId: responseId,
           });
           return res.status(status).json(body);
@@ -442,8 +449,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: true,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload: req.body,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
         });
         return res.status(status).json(body);
       }
@@ -463,15 +477,24 @@ module.exports = async function statefulHandler(req, res, next) {
             success: true,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload: req.body
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload: req.body,
           });
           return res.status(status).json(body);
         }
 
         const status = 404;
         const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket, status, { params: { id: idFromUrl } },
+          responsesBucket,
+          status,
+          { params: { id: idFromUrl } },
           {
             fallback: { message: "{Path} with id {{params.id}} not found." },
             requireParamId: true,
@@ -486,8 +509,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload: req.body,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
           statefulResponseId: responseId,
         });
         return res.status(status).json(body);
@@ -495,14 +525,8 @@ module.exports = async function statefulHandler(req, res, next) {
 
       // GET all for private user
       const uid = pickUserIdFromRequest(req);
-      const defaults = current
-        .filter((x) => x.user_id == null || x.user_id === undefined)
-        .map(pickForGET);
-      const mine = uid == null
-        ? []
-        : current
-          .filter((x) => Number(x?.user_id) === Number(uid))
-          .map(pickForGET);
+      const defaults = current.filter((x) => x.user_id == null || x.user_id === undefined).map(pickForGET);
+      const mine = uid == null ? [] : current.filter((x) => Number(x?.user_id) === Number(uid)).map(pickForGET);
 
       const data = [...defaults, ...mine];
       const status = 200;
@@ -513,8 +537,15 @@ module.exports = async function statefulHandler(req, res, next) {
         success: true,
       };
       await logWithStatefulResponse(req, {
-        projectId, originId, statefulId, method, path: rawPath,
-        status, responseBody: body, started, payload: req.body,
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        status,
+        responseBody: body,
+        started,
+        payload: req.body,
       });
       return res.status(status).json(body);
     }
@@ -525,8 +556,7 @@ module.exports = async function statefulHandler(req, res, next) {
       if (userId == null) return;
 
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
-        .some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
         const body = {
@@ -536,18 +566,22 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload: req.body,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
         });
         return res.status(status).json(body);
       }
 
       const payload = req.body || {};
 
-      const endpointSchemaEffective =
-        (endpointSchemaDb && Object.keys(endpointSchemaDb).length)
-          ? endpointSchemaDb
-          : baseSchema || {};
+      const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
 
       // Kiểm tra thứ tự và hợp lệ schema
       const schemaKeys = Object.keys(endpointSchemaEffective);
@@ -564,8 +598,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload,
           });
           return res.status(status).json(body);
         }
@@ -578,8 +619,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload,
           });
           return res.status(status).json(body);
         }
@@ -599,8 +647,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload,
           });
           return res.status(status).json(body);
         }
@@ -613,8 +668,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload,
           });
           return res.status(status).json(body);
         }
@@ -632,14 +694,20 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload,
         });
         return res.status(status).json(body);
       }
 
-      if ((idRule?.required === false || idRule?.required === undefined) &&
-        (newId === undefined || newId === null)) {
+      if ((idRule?.required === false || idRule?.required === undefined) && (newId === undefined || newId === null)) {
         const numericIds = current.map((x) => Number(x?.id)).filter((n) => Number.isFinite(n) && n >= 0);
         const maxId = numericIds.length ? Math.max(...numericIds) : 0;
         newId = maxId + 1;
@@ -654,8 +722,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload,
         });
         return res.status(status).json(body);
       }
@@ -663,7 +738,9 @@ module.exports = async function statefulHandler(req, res, next) {
       if (newId !== undefined && current.some((x) => Number(x?.id) === Number(newId))) {
         const status = 409;
         const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket, status, { params: { id: newId } },
+          responsesBucket,
+          status,
+          { params: { id: newId } },
           {
             fallback: { message: "{Path} {{params.id}} conflict: {{params.id}} already exists." },
             requireParamId: true,
@@ -678,8 +755,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload,
           statefulResponseId: responseId,
         });
         return res.status(status).json(body);
@@ -702,9 +786,7 @@ module.exports = async function statefulHandler(req, res, next) {
       await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 201;
-      const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket, status, {}, { fallback: { message: "New {path} item added successfully." }, logicalPath }
-      );
+      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "New {path} item added successfully." }, logicalPath });
       const body = {
         code: status,
         message: rendered?.message ?? "New item added successfully.",
@@ -712,14 +794,19 @@ module.exports = async function statefulHandler(req, res, next) {
         success: true,
       };
       await logWithStatefulResponse(req, {
-        projectId, originId, statefulId, method, path: rawPath,
-        status, responseBody: body, started, payload: req.body,
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        status,
+        responseBody: body,
+        started,
+        payload: req.body,
         statefulResponseId: responseId,
       });
       return res.status(status).json(body);
     }
-
-
 
     /* ===== PUT ===== */
     if (method === "PUT") {
@@ -727,8 +814,7 @@ module.exports = async function statefulHandler(req, res, next) {
       if (userId == null) return;
 
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
-        .some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
         const body = {
@@ -738,8 +824,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload: req.body,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
         });
         return res.status(status).json(body);
       }
@@ -747,11 +840,14 @@ module.exports = async function statefulHandler(req, res, next) {
       if (!hasId) {
         const status = 404;
         const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket, status, {}, {
-          fallback: { message: "Not found." },
-          requireParamId: false,
-          logicalPath,
-        }
+          responsesBucket,
+          status,
+          {},
+          {
+            fallback: { message: "Not found." },
+            requireParamId: false,
+            logicalPath,
+          }
         );
         const body = {
           code: status,
@@ -760,8 +856,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload: req.body,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
           statefulResponseId: responseId,
         });
         return res.status(status).json(body);
@@ -771,12 +874,15 @@ module.exports = async function statefulHandler(req, res, next) {
       if (idx === -1) {
         const status = 404;
         const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket, status, { params: { id: idFromUrl } }, {
-          fallback: { message: "{Path} with id {{params.id}} not found." },
-          requireParamId: true,
-          paramsIdOccurrences: 1,
-          logicalPath,
-        }
+          responsesBucket,
+          status,
+          { params: { id: idFromUrl } },
+          {
+            fallback: { message: "{Path} with id {{params.id}} not found." },
+            requireParamId: true,
+            paramsIdOccurrences: 1,
+            logicalPath,
+          }
         );
         const body = {
           code: status,
@@ -785,8 +891,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload: req.body,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
           statefulResponseId: responseId,
         });
         return res.status(status).json(body);
@@ -804,8 +917,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload: req.body,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
         });
         return res.status(status).json(body);
       }
@@ -813,10 +933,7 @@ module.exports = async function statefulHandler(req, res, next) {
       let payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
-      const endpointSchemaEffective =
-        (endpointSchemaDb && Object.keys(endpointSchemaDb).length)
-          ? endpointSchemaDb
-          : baseSchema || {};
+      const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
 
       // Order & type checks
       const schemaKeys = Object.keys(endpointSchemaEffective);
@@ -833,8 +950,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload,
           });
           return res.status(status).json(body);
         }
@@ -847,8 +971,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload,
           });
           return res.status(status).json(body);
         }
@@ -867,8 +998,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload,
           });
           return res.status(status).json(body);
         }
@@ -881,8 +1019,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload,
           });
           return res.status(status).json(body);
         }
@@ -890,9 +1035,7 @@ module.exports = async function statefulHandler(req, res, next) {
 
       // Update data
       const schemaKeysForUpdate = Object.keys(endpointSchemaEffective);
-      const extraKeys = Object.keys(current[idx] || {}).filter(
-        (k) => !schemaKeysForUpdate.includes(k) && k !== "user_id"
-      );
+      const extraKeys = Object.keys(current[idx] || {}).filter((k) => !schemaKeysForUpdate.includes(k) && k !== "user_id");
       const updateOrder = [...schemaKeysForUpdate, ...extraKeys];
       const updatedItem = {};
 
@@ -913,10 +1056,14 @@ module.exports = async function statefulHandler(req, res, next) {
 
       const status = 200;
       const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket, status, { params: { id: idFromUrl } },
+        responsesBucket,
+        status,
+        { params: { id: idFromUrl } },
         {
           fallback: { message: "{Path} with id {{params.id}} updated successfully." },
-          requireParamId: true, paramsIdOccurrences: 1, logicalPath
+          requireParamId: true,
+          paramsIdOccurrences: 1,
+          logicalPath,
         }
       );
       const body = {
@@ -926,8 +1073,15 @@ module.exports = async function statefulHandler(req, res, next) {
         success: true,
       };
       await logWithStatefulResponse(req, {
-        projectId, originId, statefulId, method, path: rawPath,
-        status, responseBody: body, started, payload: req.body,
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        status,
+        responseBody: body,
+        started,
+        payload: req.body,
         statefulResponseId: responseId,
       });
       return res.status(status).json(body);
@@ -939,8 +1093,7 @@ module.exports = async function statefulHandler(req, res, next) {
       if (userId == null) return;
 
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
-        .some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
         const body = {
@@ -950,8 +1103,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: false,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload: req.body,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
         });
         return res.status(status).json(body);
       }
@@ -961,12 +1121,15 @@ module.exports = async function statefulHandler(req, res, next) {
         if (idx === -1) {
           const status = 404;
           const { rendered, responseId } = selectAndRenderResponseAdv(
-            responsesBucket, status, { params: { id: idFromUrl } }, {
-            fallback: { message: "{Path} with id {{params.id}} to delete not found." },
-            requireParamId: true,
-            paramsIdOccurrences: 1,
-            logicalPath,
-          }
+            responsesBucket,
+            status,
+            { params: { id: idFromUrl } },
+            {
+              fallback: { message: "{Path} with id {{params.id}} to delete not found." },
+              requireParamId: true,
+              paramsIdOccurrences: 1,
+              logicalPath,
+            }
           );
           const body = {
             code: status,
@@ -975,8 +1138,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload: req.body,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload: req.body,
             statefulResponseId: responseId,
           });
           return res.status(status).json(body);
@@ -992,8 +1162,15 @@ module.exports = async function statefulHandler(req, res, next) {
             success: false,
           };
           await logWithStatefulResponse(req, {
-            projectId, originId, statefulId, method, path: rawPath,
-            status, responseBody: body, started, payload: req.body,
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload: req.body,
           });
           return res.status(status).json(body);
         }
@@ -1003,7 +1180,9 @@ module.exports = async function statefulHandler(req, res, next) {
 
         const status = 200;
         const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket, status, { params: { id: idFromUrl } },
+          responsesBucket,
+          status,
+          { params: { id: idFromUrl } },
           {
             fallback: { message: "{Path} with id {{params.id}} deleted successfully." },
             requireParamId: true,
@@ -1018,8 +1197,15 @@ module.exports = async function statefulHandler(req, res, next) {
           success: true,
         };
         await logWithStatefulResponse(req, {
-          projectId, originId, statefulId, method, path: rawPath,
-          status, responseBody: body, started, payload: req.body,
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
           statefulResponseId: responseId,
         });
         return res.status(status).json(body);
@@ -1032,12 +1218,15 @@ module.exports = async function statefulHandler(req, res, next) {
 
       const status = 200;
       const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket, status, {}, {
-        fallback: { message: "Delete all data with {Path} successfully." },
-        requireParamId: false,
-        paramsIdOccurrences: 0,
-        logicalPath,
-      }
+        responsesBucket,
+        status,
+        {},
+        {
+          fallback: { message: "Delete all data with {Path} successfully." },
+          requireParamId: false,
+          paramsIdOccurrences: 0,
+          logicalPath,
+        }
       );
       const body = {
         code: status,
@@ -1046,8 +1235,15 @@ module.exports = async function statefulHandler(req, res, next) {
         success: true,
       };
       await logWithStatefulResponse(req, {
-        projectId, originId, statefulId, method, path: rawPath,
-        status, responseBody: body, started, payload: req.body,
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        status,
+        responseBody: body,
+        started,
+        payload: req.body,
         statefulResponseId: responseId,
       });
       return res.status(status).json(body);
