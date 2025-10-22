@@ -1,4 +1,3 @@
-// src/controllers/project_request_log.controller.js
 const service = require("../services/project_request_log.service");
 
 function toInt(v, fallback = null) {
@@ -44,6 +43,7 @@ exports.listLogs = async (req, res) => {
   }
 };
 
+// GET /project_request_logs/project/:id → trả danh sách logs theo project_id
 exports.getLogsByProjectId = async (req, res) => {
   try {
     const projectId = toInt(req.params.id);
@@ -59,8 +59,23 @@ exports.getLogsByProjectId = async (req, res) => {
     });
   } catch (err) {
     console.error("[project_request_logs] getLogsByProjectId error:", err);
-    return res
-      .status(500)
-      .json({ message: "Internal Server Error", error: err.message });
+    return res.status(500).json({ message: "Internal Server Error", error: err.message });
+  }
+};
+
+// ✅ GET /project_request_logs/:id → trả 1 log theo log_id
+exports.getLogById = async (req, res) => {
+  try {
+    const id = toInt(req.params.id);
+    if (!id) return res.status(400).json({ message: "Invalid log id" });
+
+    // GỌI SERVICE, TRUYỀN ĐÚNG pool: req.db.stateless
+    const log = await service.getLogById(req.db.stateless, id);
+
+    if (!log) return res.status(404).json({ message: "Log not found", id });
+    return res.status(200).json(log);
+  } catch (err) {
+    console.error("[project_request_logs] getLogById error:", err);
+    return res.status(500).json({ message: "Internal Server Error", error: err.message });
   }
 };

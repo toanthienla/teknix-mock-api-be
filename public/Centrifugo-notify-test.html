@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <h3>Centrifugo Test (Secure)</h3>
+    <pre id="log">starting...</pre>
+
+    <!-- axios (UMD) -->
+    <script src="https://cdn.jsdelivr.net/npm/axios@1/dist/axios.min.js"></script>
+    <!-- Centrifuge (UMD) → tạo window.Centrifuge -->
+    <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.min.js" onload="window.__CENT_OK__=true"></script>
+
+    <script>
+      const logEl = document.getElementById("log");
+      const log = (...a) => (logEl.textContent += "\n" + a.join(" "));
+
+      const BE = "http://127.0.0.1:3000";
+      const WS_URL = "ws://127.0.0.1:8000/connection/websocket"; // v6 KHÔNG cần ?format=json
+      const SUB_CHANNEL = "notification#mock_logging";
+
+      (async () => {
+        // 1) Xin connection token từ BE
+        const { data: conn } = await axios.get(`${BE}/centrifugo/conn-token`);
+        log("conn token ok, user:", conn.user_id);
+
+        // 2) Tạo client Centrifuge với connection token
+        if (!window.__CENT_OK__ || !window.Centrifuge) throw new Error("Centrifuge UMD not loaded");
+        const CentCtor = window.Centrifuge?.Centrifuge || window.Centrifuge;
+        const centrifuge = new CentCtor(WS_URL, { token: conn.token });
+
+        // 3) Xin subscription token cho đúng kênh
+        const { data: subTok } = await axios.get(`${BE}/centrifugo/sub-token`, {
+          params: { channel: SUB_CHANNEL, user_id: conn.user_id },
+        });
+
+        // 4) Subscribe
+        const sub = centrifuge.newSubscription(SUB_CHANNEL, { token: subTok.token });
+        sub.on("publication", (ctx) => log("Notification received:", JSON.stringify(ctx.data)));
+        sub.on("subscribed", () => log("subscribed"));
+        sub.on("error", (e) => log("sub error", e));
+        sub.subscribe();
+
+        centrifuge.on("connected", () => log("connected"));
+        centrifuge.on("error", (e) => log("conn error", e));
+        centrifuge.connect();
+      })().catch((e) => log("init error:", e?.message || e));
+    </script>
+  </body>
+</html>
