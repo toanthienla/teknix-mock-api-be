@@ -21,6 +21,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "jose": "^6.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.10.0",
     "path-to-regexp": "^6.3.0",

@@ -258,3 +258,30 @@ exports.nullifyEndpointAndResponses = async (client, endpointId) => {
     throw err;
   }
 };
+exports.getLogById = async (pool, id) => {
+  const { rows } = await pool.query(
+    `
+      SELECT
+        l.id,
+        l.project_id,
+        l.endpoint_id,
+        l.endpoint_response_id,
+        l.stateful_endpoint_id,
+        l.stateful_endpoint_response_id,
+        l.request_method,
+        l.request_path,
+
+        l.request_body,
+        l.response_status_code,
+        l.response_body,
+        l.ip_address,
+        l.latency_ms,
+        l.created_at
+      FROM project_request_logs l
+      WHERE l.id = $1
+      LIMIT 1
+    `,
+    [id]
+  );
+  return rows[0] || null;
+};
