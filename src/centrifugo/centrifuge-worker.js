@@ -46,8 +46,9 @@ async function main() {
   sub.on("unsubscribed", (ctx) => console.log("[worker] unsubscribed", ctx));
   sub.on("error", (err) => console.error("[worker] sub error", err));
 
-  // Kết nối trước, rồi subscribe đúng 1 lần
+  // connect trước, rồi gọi sub.subscribe() đúng 1 lần
   await centrifuge.connect();
+  sub.subscribe(); // gọi MỘT lần cho cả vòng đời process
 }
 
 main().catch((e) => {

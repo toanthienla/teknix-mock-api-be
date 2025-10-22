@@ -13,8 +13,8 @@ function buildChannels(row) {
   const chans = [];
   if (row.project_id) chans.push(`notification#project_${row.project_id}`);
   if (row.user_id) chans.push(`user_${row.user_id}#notifications`);
-  // (tuỳ) vẫn bắn kênh cũ trong thời gian chuyển đổi:
-  // chans.push("notification#mock_logging");
+  //  kênh chung để mọi client đều nhận được
+  if (CHANNEL) chans.push(CHANNEL);
   return chans;
 }
 
