@@ -245,10 +245,10 @@ async function convertToStateful(endpointId) {
   } catch (e) {
     try {
       await clientStateless.query("ROLLBACK");
-    } catch {}
+    } catch { }
     try {
       await clientStateful.query("ROLLBACK");
-    } catch {}
+    } catch { }
     throw e;
   } finally {
     clientStateless.release();
@@ -723,13 +723,14 @@ async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
   // 3) Map fields: luôn có name + type; chỉ thêm required khi POST/PUT
   const fields = Object.entries(schemaObj).map(([name, def]) => {
     const t = def && typeof def === "object" ? def.type : undefined;
-    const type = t === "number" ? "integer" : t || "string";
+    const type = t || "string"; // ✅ Giữ nguyên "number" thay vì đổi thành "integer"
     if (isMutating) {
       const required = !!(def && typeof def === "object" && def.required === true);
       return { name, type, required };
     }
     return { name, type };
   });
+  ;
 
   return { fields };
 }
