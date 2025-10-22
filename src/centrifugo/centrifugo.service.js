@@ -1,16 +1,42 @@
+// src/centrifugo/centrifugo.service.js
 const axios = require("axios");
-const CENT_HTTP = process.env.CENTRIFUGO_HTTP || "http://127.0.0.1:8000";
-const API_KEY = process.env.CENTRIFUGO_API_KEY || "my_centrifugo";
 
-const http = axios.create({
-  baseURL: CENT_HTTP,
-  timeout: 5000,
-  headers: { "X-API-Key": API_KEY, "Content-Type": "application/json" },
-});
+const BASE = (process.env.CENTRIFUGO_HTTP || "http://127.0.0.1:8000").replace(/\/+$/, "");
+const API_KEY = process.env.CENTRIFUGO_API_KEY || "";
 
-async function publish(channel, data) {
-  const { data: res } = await http.post("/api/publish", { channel, data });
-  return res;
+function logDebug(...args) {
+  // Bật tạm thời, xong việc có thể tắt
+  console.log("[centrifugo]", ...args);
+}
+
+/**
+ * Publish qua RPC /api
+ * @param {string} channel
+ * @param {object} data
+ */
+async function publish(channel, data = {}) {
+  const url = `${BASE}/api`;
+  const cmd = { method: "publish", params: { channel, data } };
+
+  logDebug("POST", url, { keylen: API_KEY ? API_KEY.length : 0, channel });
+
+  try {
+    const { data: res } = await axios.post(url, cmd, {
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": API_KEY,
+        Authorization: `apikey ${API_KEY}`, // để tương thích
+      },
+      timeout: 5000,
+    });
+    logDebug("OK");
+    return res;
+  } catch (e) {
+    const status = e?.response?.status;
+    const body = e?.response?.data;
+    logDebug("ERROR", status, body);
+    throw e;
+  }
 }
 
 module.exports = { publish };

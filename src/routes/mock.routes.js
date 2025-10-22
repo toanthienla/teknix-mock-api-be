@@ -3,7 +3,7 @@ const { match } = require("path-to-regexp");
 const router = express.Router();
 const axios = require("axios");
 const https = require("https");
-
+const { onProjectLogInserted } = require("../centrifugo/notification.service");
 const logSvc = require("../services/project_request_log.service");
 const { getCollection } = require("../config/db");
 
@@ -337,7 +337,7 @@ router.use(async (req, res, next) => {
       const status = req.method.toUpperCase() === "GET" ? 200 : 501;
       const body = req.method.toUpperCase() === "GET" ? (hasParams ? {} : []) : { error: { message: "No response configured" } };
       try {
-        await logSvc.insertLog(req.db.stateless, {
+        const _log = await logSvc.insertLog(req.db.stateless, {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           endpoint_response_id: null,
@@ -350,6 +350,24 @@ router.use(async (req, res, next) => {
           ip_address: getClientIp(req),
           latency_ms: Date.now() - started,
         });
+        console.log("[after insertLog] _log =", _log);
+        let logId = _log && _log.id;
+        if (!logId) {
+          try {
+            const { rows } = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
+            logId = rows?.[0]?.id || null;
+            console.log("[after insertLog] fallback logId =", logId);
+          } catch (e) {
+            console.error("[after insertLog] fallback query failed:", e?.message || e);
+          }
+        }
+        if (logId) {
+          onProjectLogInserted(logId, req.db.stateless).catch((err) => {
+            console.error("[notify hook error]", err?.message || err);
+          });
+        } else {
+          console.warn("[after insertLog] missing logId - skip notify");
+        }
       } catch (_) {}
       return res.status(status).json(body);
     }
@@ -379,7 +397,7 @@ router.use(async (req, res, next) => {
       if (!r) {
         const status = 404;
         const body = { error: "No matching response found" };
-        await logSvc.insertLog(req.db.stateless, {
+        const _log = await logSvc.insertLog(req.db.stateless, {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           request_method: method,
@@ -389,6 +407,24 @@ router.use(async (req, res, next) => {
           ip_address: getClientIp(req),
           latency_ms: Date.now() - started,
         });
+        console.log("[after insertLog] _log =", _log);
+        let logId = _log && _log.id;
+        if (!logId) {
+          try {
+            const { rows } = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
+            logId = rows?.[0]?.id || null;
+            console.log("[after insertLog] fallback logId =", logId);
+          } catch (e) {
+            console.error("[after insertLog] fallback query failed:", e?.message || e);
+          }
+        }
+        if (logId) {
+          onProjectLogInserted(logId, req.db.stateless).catch((err) => {
+            console.error("[notify hook error]", err?.message || err);
+          });
+        } else {
+          console.warn("[after insertLog] missing logId - skip notify");
+        }
         return res.status(status).json(body);
       }
     }
@@ -417,7 +453,7 @@ router.use(async (req, res, next) => {
               raw_body: String(proxyResp.data ?? ""),
             };
           }
-          await logSvc.insertLog(req.db.stateless, {
+          const _log = await logSvc.insertLog(req.db.stateless, {
             project_id: ep.project_id || null,
             endpoint_id: ep.id,
             endpoint_response_id: r.id || null,
@@ -430,6 +466,24 @@ router.use(async (req, res, next) => {
             ip_address: getClientIp(req),
             latency_ms: finished - started,
           });
+          console.log("[after insertLog] _log =", _log);
+          let logId = _log && _log.id;
+          if (!logId) {
+            try {
+              const { rows } = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
+              logId = rows?.[0]?.id || null;
+              console.log("[after insertLog] fallback logId =", logId);
+            } catch (e) {
+              console.error("[after insertLog] fallback query failed:", e?.message || e);
+            }
+          }
+          if (logId) {
+            onProjectLogInserted(logId, req.db.stateless).catch((err) => {
+              console.error("[notify hook error]", err?.message || err);
+            });
+          } else {
+            console.warn("[after insertLog] missing logId - skip notify");
+          }
           return res.status(proxyResp.status).set(proxyResp.headers).send(proxyResp.data);
         } catch (err) {
           return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
@@ -451,7 +505,7 @@ router.use(async (req, res, next) => {
       }
       const sendResponse = async () => {
         const finished = Date.now();
-        await logSvc.insertLog(req.db.stateless, {
+        const _log = await logSvc.insertLog(req.db.stateless, {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           endpoint_response_id: r.id || null,
@@ -464,6 +518,24 @@ router.use(async (req, res, next) => {
           ip_address: getClientIp(req),
           latency_ms: finished - started,
         });
+        console.log("[after insertLog] _log =", _log);
+        let logId = _log && _log.id;
+        if (!logId) {
+          try {
+            const { rows } = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
+            logId = rows?.[0]?.id || null;
+            console.log("[after insertLog] fallback logId =", logId);
+          } catch (e) {
+            console.error("[after insertLog] fallback query failed:", e?.message || e);
+          }
+        }
+        if (logId) {
+          onProjectLogInserted(logId, req.db.stateless).catch((err) => {
+            console.error("[notify hook error]", err?.message || err);
+          });
+        } else {
+          console.warn("[after insertLog] missing logId - skip notify");
+        }
         if (body && typeof body === "object") {
           return res.status(status).json(body);
         }
@@ -477,7 +549,7 @@ router.use(async (req, res, next) => {
     }
   } catch (err) {
     try {
-      await logSvc.insertLog(req.db.stateless, {
+      const _log = await logSvc.insertLog(req.db.stateless, {
         project_id: null,
         endpoint_id: null,
         request_method: req.method?.toUpperCase?.() || "",
@@ -487,6 +559,24 @@ router.use(async (req, res, next) => {
         ip_address: getClientIp(req),
         latency_ms: Date.now() - started,
       });
+      console.log("[after insertLog] _log =", _log);
+      let logId = _log && _log.id;
+      if (!logId) {
+        try {
+          const { rows } = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
+          logId = rows?.[0]?.id || null;
+          console.log("[after insertLog] fallback logId =", logId);
+        } catch (e) {
+          console.error("[after insertLog] fallback query failed:", e?.message || e);
+        }
+      }
+      if (logId) {
+        onProjectLogInserted(logId, req.db.stateless).catch((err) => {
+          console.error("[notify hook error]", err?.message || err);
+        });
+      } else {
+        console.warn("[after insertLog] missing logId - skip notify");
+      }
     } catch (logErr) {
       console.error("CRITICAL: Failed to log an unexpected error.", logErr);
     }
