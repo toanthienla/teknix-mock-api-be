@@ -1,7 +1,7 @@
 // src/routes/statefulHandler.js
 const { getCollection } = require("../config/db");
 const logSvc = require("../services/project_request_log.service");
-const { onProjectLogInserted } = require("../centrifugo/notification.service");
+const { onProjectLogInserted } = require("../services/notification.service");
 
 /* ========== Utils ========== */
 function getClientIp(req) {
@@ -216,6 +216,8 @@ async function resolveStatefulResponseId(statefulDb, statefulId, providedId) {
 /* ========== Logging (ghi vào DB stateless) ========== */
 async function logWithStatefulResponse(req, { projectId, originId, statefulId, method, path, status, responseBody, started, payload, statefulResponseId = null }) {
   try {
+    // LẤY user_id từ request (auth middleware, res.locals.user, hoặc header X-Mock-User-Id)
+    const userIdForLog = pickUserIdFromRequest(req);
     const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId);
     const _log = await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
@@ -223,6 +225,7 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
       endpoint_response_id: null, // NULL trong flow stateful
       stateful_endpoint_id: statefulId ?? null, // endpoints_ful.id (no FK)
       stateful_endpoint_response_id: finalResponseId ?? null, // endpoint_responses_ful.id (no FK)
+      user_id: userIdForLog ?? null,
       request_method: method,
       request_path: path,
       request_headers: req.headers || {},

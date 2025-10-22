@@ -1,5 +1,5 @@
 // src/centrifugo/notification.service.js
-const { publish } = require("./centrifugo.service.js");
+const { publish } = require("../centrifugo/centrifugo.service.js");
 
 const CHANNEL = (process.env.CENTRIFUGO_SUB_CHANNEL || "notification#mock_logging").replace(/^"|"$/g, ""); // bỏ dấu " nếu có trong .env
 

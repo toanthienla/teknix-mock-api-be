@@ -34,21 +34,15 @@ async function main() {
   centrifuge.on("error", (err) => console.error("[worker] error", err));
 
   // 2) Chuẩn bị subscription (tạo trước)
-  const sub = centrifuge.newSubscription(CHANNEL);
-  let subscribedOnce = false;
-
-  sub.on("publication", (ctx) => {
-    console.log("[worker] GOT MESSAGE:", JSON.stringify(ctx.data));
-    // TODO: xử lý tác vụ nền nếu cần (audit, gửi mail/SMS, ghi DB khác, v.v.)
+  centrifuge.on("publication", (ctx) => {
+    if (ctx.channel === CHANNEL) {
+      console.log("[worker] GOT MESSAGE:", JSON.stringify(ctx.data));
+    }
   });
 
-  sub.on("subscribed", (ctx) => console.log("[worker] subscribed", ctx));
-  sub.on("unsubscribed", (ctx) => console.log("[worker] unsubscribed", ctx));
-  sub.on("error", (err) => console.error("[worker] sub error", err));
-
-  // connect trước, rồi gọi sub.subscribe() đúng 1 lần
+  //  connect trước, rồi gọi sub.subscribe() đúng 1 lần
   await centrifuge.connect();
-  sub.subscribe(); // gọi MỘT lần cho cả vòng đời process
+  // sub.subscribe(); // gọi MỘT lần cho cả vòng đời process
 }
 
 main().catch((e) => {

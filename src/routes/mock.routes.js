@@ -1,9 +1,10 @@
 const express = require("express");
 const { match } = require("path-to-regexp");
 const router = express.Router();
+const authMiddleware = require("../middlewares/authMiddleware");
 const axios = require("axios");
 const https = require("https");
-const { onProjectLogInserted } = require("../centrifugo/notification.service");
+const { onProjectLogInserted } = require("../services/notification.service");
 const logSvc = require("../services/project_request_log.service");
 const { getCollection } = require("../config/db");
 
@@ -107,7 +108,7 @@ function renderTemplate(value, ctx) {
   return value;
 }
 
-router.use(async (req, res, next) => {
+router.use(authMiddleware, async (req, res, next) => {
   const started = Date.now();
   try {
     const method = req.method.toUpperCase();
@@ -341,6 +342,7 @@ router.use(async (req, res, next) => {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           endpoint_response_id: null,
+          user_id: req.user?.id ?? null,
           request_method: method,
           request_path: req.path,
           request_headers: req.headers || {},
@@ -400,6 +402,7 @@ router.use(async (req, res, next) => {
         const _log = await logSvc.insertLog(req.db.stateless, {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
+          user_id: req.user?.id ?? null,
           request_method: method,
           request_path: req.path,
           response_status_code: status,
@@ -457,6 +460,7 @@ router.use(async (req, res, next) => {
             project_id: ep.project_id || null,
             endpoint_id: ep.id,
             endpoint_response_id: r.id || null,
+            user_id: req.user?.id ?? null,
             request_method: method,
             request_path: req.path,
             request_headers: req.headers || {},
@@ -509,6 +513,7 @@ router.use(async (req, res, next) => {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           endpoint_response_id: r.id || null,
+          user_id: req.user?.id ?? null,
           request_method: method,
           request_path: req.path,
           request_headers: req.headers || {},
@@ -552,6 +557,7 @@ router.use(async (req, res, next) => {
       const _log = await logSvc.insertLog(req.db.stateless, {
         project_id: null,
         endpoint_id: null,
+        user_id: req.user?.id ?? null,
         request_method: req.method?.toUpperCase?.() || "",
         request_path: req.path || req.originalUrl || "",
         response_status_code: 500,
