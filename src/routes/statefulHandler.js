@@ -8,7 +8,7 @@ function getClientIp(req) {
 }
 function normalizeJsonb(x) {
   if (x == null) return x;
-  s;
+
   if (typeof x === "string") {
     try {
       return JSON.parse(x);
@@ -216,13 +216,17 @@ async function resolveStatefulResponseId(statefulDb, statefulId, providedId) {
 /* ========== Logging (ghi vào DB stateless) ========== */
 async function logWithStatefulResponse(req, { projectId, originId, statefulId, method, path, status, responseBody, started, payload, statefulResponseId = null }) {
   try {
+    // 🆕 gắn user vào log nếu có (lấy từ auth hoặc header X-Mock-User-Id)
+    const userIdForLog = pickUserIdFromRequest(req);
     const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId);
-    await logSvc.insertLog(req.db.stateless, {
+
+    const _log = await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
       endpoint_id: originId ?? null, // stateless endpoints.id
       endpoint_response_id: null, // NULL trong flow stateful
       stateful_endpoint_id: statefulId ?? null, // endpoints_ful.id (no FK)
       stateful_endpoint_response_id: finalResponseId ?? null, // endpoint_responses_ful.id (no FK)
+      user_id: userIdForLog ?? null, // 🆕 thêm user_id để notify/trace theo user
       request_method: method,
       request_path: path,
       request_headers: req.headers || {},
@@ -232,6 +236,27 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
       ip_address: getClientIp(req),
       latency_ms: Date.now() - started,
     });
+
+    // 🆕 gọi hook notify sau khi có logId (fallback nếu service không trả id)
+    let logId = _log && _log.id;
+    if (!logId) {
+      try {
+        const r = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
+        logId = r.rows?.[0]?.id || null;
+        console.log("[stateful] fallback logId =", logId);
+      } catch (e) {
+        console.error("[stateful] fallback query failed:", e?.message || e);
+      }
+    }
+    if (logId) {
+      try {
+        await onProjectLogInserted(logId, req.db.stateless);
+      } catch (e) {
+        console.error("[notify hook error]", e?.message || e);
+      }
+    } else {
+      console.warn("[stateful] missing logId - skip notify");
+    }
   } catch (e) {
     console.error("[statefulHandler] log error:", e?.message || e);
   }
