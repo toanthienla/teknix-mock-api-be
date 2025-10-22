@@ -25,8 +25,9 @@ function safeStringify(obj) {
 exports.insertLog = async (pool, log) => {
   const text = `
     INSERT INTO project_request_logs
-      (project_id, endpoint_id,
+       (project_id, endpoint_id,
        endpoint_response_id, stateful_endpoint_id, stateful_endpoint_response_id,
+       user_id,
        request_method, request_path,
        request_headers, request_body,
        response_status_code, response_body,
@@ -34,10 +35,11 @@ exports.insertLog = async (pool, log) => {
     VALUES
       ($1, $2,
        $3, $4, $5,
-       $6, $7,
-       $8::jsonb, $9::jsonb,
-       $10, $11::jsonb,
-       $12, $13)
+       $6,
+       $7, $8,
+       $9::jsonb, $10::jsonb,
+       $11, $12::jsonb,
+       $13, $14)
     RETURNING id
   `;
   const values = [
@@ -48,7 +50,7 @@ exports.insertLog = async (pool, log) => {
     log.endpoint_response_id ?? null, // stateless
     log.stateful_endpoint_id ?? null, // stateful (no FK)
     log.stateful_endpoint_response_id ?? null, // stateful (no FK)
-
+    log.user_id ?? null,
     log.request_method ?? null,
     log.request_path ?? null,
     safeStringify(log.request_headers),
@@ -161,13 +163,9 @@ exports.getLogsByProjectId = async (pool, projectId) => {
   return rows; // Trả về danh sách log
 };
 
-
 exports.nullifyFolderTree = async (client, folderId) => {
   // Lấy danh sách endpoint trong folder này
-  const { rows: endpoints } = await client.query(
-    `SELECT id FROM endpoints WHERE folder_id = $1`,
-    [folderId]
-  );
+  const { rows: endpoints } = await client.query(`SELECT id FROM endpoints WHERE folder_id = $1`, [folderId]);
 
   if (endpoints.length === 0) {
     console.log(`🟡 Folder ${folderId} không có endpoint nào, bỏ qua nullify logs.`);
@@ -189,10 +187,7 @@ exports.nullifyFolderTree = async (client, folderId) => {
 
 exports.nullifyWorkspaceTree = async (client, workspaceId) => {
   // Lấy tất cả project trong workspace
-  const { rows: projects } = await client.query(
-    `SELECT id FROM projects WHERE workspace_id = $1`,
-    [workspaceId]
-  );
+  const { rows: projects } = await client.query(`SELECT id FROM projects WHERE workspace_id = $1`, [workspaceId]);
 
   if (projects.length === 0) {
     console.log(`🟡 Workspace ${workspaceId} không có project nào.`);
@@ -206,13 +201,9 @@ exports.nullifyWorkspaceTree = async (client, workspaceId) => {
   console.log(`🧹 Đã nullify logs cho toàn bộ workspace ${workspaceId}`);
 };
 
-
 exports.nullifyProjectTree = async (client, projectId) => {
   // Lấy tất cả folder trong project
-  const { rows: folders } = await client.query(
-    `SELECT id FROM folders WHERE project_id = $1`,
-    [projectId]
-  );
+  const { rows: folders } = await client.query(`SELECT id FROM folders WHERE project_id = $1`, [projectId]);
 
   if (folders.length === 0) {
     console.log(`🟡 Project ${projectId} không có folder nào.`);
@@ -224,12 +215,9 @@ exports.nullifyProjectTree = async (client, projectId) => {
   }
 
   // Ngoài ra, nullify trực tiếp các endpoint không thuộc folder nào (nếu có)
-  const { rows: endpointsNoFolder } = await client.query(
-    `SELECT id FROM endpoints WHERE project_id = $1 AND folder_id IS NULL`,
-    [projectId]
-  );
+  const { rows: endpointsNoFolder } = await client.query(`SELECT id FROM endpoints WHERE project_id = $1 AND folder_id IS NULL`, [projectId]);
   if (endpointsNoFolder.length > 0) {
-    const endpointIds = endpointsNoFolder.map(e => e.id);
+    const endpointIds = endpointsNoFolder.map((e) => e.id);
     await client.query(
       `UPDATE project_request_logs
        SET endpoint_id = NULL, endpoint_response_id = NULL
@@ -262,14 +250,9 @@ exports.nullifyEndpointAndResponses = async (client, endpointId) => {
     );
 
     // 2️⃣ Xóa toàn bộ response của endpoint này
-    const { rowCount } = await client.query(
-      `DELETE FROM endpoint_responses WHERE endpoint_id = $1`,
-      [endpointId]
-    );
+    const { rowCount } = await client.query(`DELETE FROM endpoint_responses WHERE endpoint_id = $1`, [endpointId]);
 
-    console.log(
-      `🧹 Đã nullify logs và xóa ${rowCount} endpoint_responses cho endpoint ${endpointId}`
-    );
+    console.log(`🧹 Đã nullify logs và xóa ${rowCount} endpoint_responses cho endpoint ${endpointId}`);
   } catch (err) {
     console.error(`❌ Lỗi khi xóa endpoint_responses cho endpoint ${endpointId}:`, err);
     throw err;

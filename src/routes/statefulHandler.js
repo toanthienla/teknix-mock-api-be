@@ -1,6 +1,7 @@
 // src/routes/statefulHandler.js
 const { getCollection } = require("../config/db");
 const logSvc = require("../services/project_request_log.service");
+const { onProjectLogInserted } = require("../services/notification.service");
 
 /* ========== Utils ========== */
 function getClientIp(req) {
@@ -171,8 +172,6 @@ function isTypeOK(expected, value) {
   return false;
 }
 
-
-
 function validateAndSanitizePayload(schema, payload, { allowMissingRequired = false, rejectUnknown = true }) {
   const errors = [];
   const sanitized = {};
@@ -217,13 +216,16 @@ async function resolveStatefulResponseId(statefulDb, statefulId, providedId) {
 /* ========== Logging (ghi vào DB stateless) ========== */
 async function logWithStatefulResponse(req, { projectId, originId, statefulId, method, path, status, responseBody, started, payload, statefulResponseId = null }) {
   try {
+    // LẤY user_id từ request (auth middleware, res.locals.user, hoặc header X-Mock-User-Id)
+    const userIdForLog = pickUserIdFromRequest(req);
     const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId);
-    await logSvc.insertLog(req.db.stateless, {
+    const _log = await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
       endpoint_id: originId ?? null, // stateless endpoints.id
       endpoint_response_id: null, // NULL trong flow stateful
       stateful_endpoint_id: statefulId ?? null, // endpoints_ful.id (no FK)
       stateful_endpoint_response_id: finalResponseId ?? null, // endpoint_responses_ful.id (no FK)
+      user_id: userIdForLog ?? null,
       request_method: method,
       request_path: path,
       request_headers: req.headers || {},
@@ -233,6 +235,25 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
       ip_address: getClientIp(req),
       latency_ms: Date.now() - started,
     });
+    let logId = _log && _log.id;
+    if (!logId) {
+      try {
+        const r = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
+        logId = r.rows?.[0]?.id || null;
+        console.log("[stateful] fallback logId =", logId);
+      } catch (e) {
+        console.error("[stateful] fallback query failed:", e?.message || e);
+      }
+    }
+    if (logId) {
+      try {
+        await onProjectLogInserted(logId, req.db.stateless);
+      } catch (e) {
+        console.error("[notify hook error]", e?.message || e);
+      }
+    } else {
+      console.warn("[stateful] missing logId - skip notify");
+    }
   } catch (e) {
     console.error("[statefulHandler] log error:", e?.message || e);
   }
@@ -327,41 +348,37 @@ module.exports = async function statefulHandler(req, res, next) {
     // 4) LOAD SCHEMA ở DB STATEFUL
     let endpointSchemaDb = {};
     if (statefulId != null) {
-      const { rows: schRows } = await req.db.stateful.query(
-        "SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1",
-        [statefulId]
-      );
+      const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
       endpointSchemaDb = normalizeJsonb(schRows?.[0]?.schema) || {};
     }
 
     // 5) BASE SCHEMA ở DB STATELESS (theo folderId)
     let baseSchema = {};
     if (folderId != null) {
-      const { rows: baseRows } = await req.db.stateless.query(
-        "SELECT base_schema FROM folders WHERE id = $1 LIMIT 1",
-        [folderId]
-      );
+      const { rows: baseRows } = await req.db.stateless.query("SELECT base_schema FROM folders WHERE id = $1 LIMIT 1", [folderId]);
       baseSchema = normalizeJsonb(baseRows?.[0]?.base_schema) || {};
     }
 
     // Ưu tiên schema của endpoint, fallback về base_schema
-    const effectiveSchema =
-      (endpointSchemaDb && Object.keys(endpointSchemaDb).length)
-        ? endpointSchemaDb
-        : baseSchema;
+    const effectiveSchema = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema;
 
     // Nếu vẫn không có schema → chặn ghi
     if (!effectiveSchema || !Object.keys(effectiveSchema).length) {
       const status = 400;
       const body = { message: "Schema is not initialized for this endpoint/folder." };
       await logWithStatefulResponse(req, {
-        projectId, originId, statefulId, method, path: rawPath,
-        status, responseBody: body, started, payload: req.body
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        status,
+        responseBody: body,
+        started,
+        payload: req.body,
       });
       return res.status(status).json(body);
     }
-
-
 
     /* 6) LOAD RESPONSE BUCKET Ở DB STATEFUL */
     const responsesBucket = await loadResponsesBucket(req.db.stateful, statefulId);
@@ -372,9 +389,7 @@ module.exports = async function statefulHandler(req, res, next) {
 
       const pickForGET = (obj) => {
         // nếu schema là dạng { fields: [...] }
-        const fields = Array.isArray(effectiveSchema?.fields)
-          ? effectiveSchema.fields
-          : Object.keys(effectiveSchema || {});
+        const fields = Array.isArray(effectiveSchema?.fields) ? effectiveSchema.fields : Object.keys(effectiveSchema || {});
 
         if (fields.length === 0) {
           const { user_id, ...rest } = obj || {};
@@ -384,9 +399,7 @@ module.exports = async function statefulHandler(req, res, next) {
         const out = {};
         for (const k of fields) {
           if (k === "user_id") continue;
-          out[k] = Object.prototype.hasOwnProperty.call(obj || {}, k)
-            ? obj[k]
-            : null;
+          out[k] = Object.prototype.hasOwnProperty.call(obj || {}, k) ? obj[k] : null;
         }
         return out;
       };
@@ -454,7 +467,7 @@ module.exports = async function statefulHandler(req, res, next) {
       const payload = req.body || {};
 
       // ✅ Use endpoint schema first, fallback to baseSchema
-      const endpointSchemaEffective = (endpointSchemaDb && Object.keys(endpointSchemaDb).length) ? endpointSchemaDb : baseSchema || {};
+      const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
 
       // ⚙️ Order check (POST: payload keys must be subsequence of schema keys allowing missing optional fields)
       const schemaKeys = Object.keys(endpointSchemaEffective);
@@ -506,8 +519,7 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(body);
       }
 
-      if ((idRule?.required === false || idRule?.required === undefined) &&
-        (newId === undefined || newId === null)) {
+      if ((idRule?.required === false || idRule?.required === undefined) && (newId === undefined || newId === null)) {
         const numericIds = current.map((x) => Number(x?.id)).filter((n) => Number.isFinite(n) && n >= 0);
         const maxId = numericIds.length ? Math.max(...numericIds) : 0;
         newId = maxId + 1;
@@ -527,11 +539,9 @@ module.exports = async function statefulHandler(req, res, next) {
         return res.status(status).json(rendered);
       }
 
-      // Build object to store based on base_schema (structure), but values from endpointSchema/payload
-      const baseKeys = Object.keys(baseSchema || {});
-      const schemaKeysForInsert = Object.keys(endpointSchemaEffective);
-      const unionKeys = Array.from(new Set([...baseKeys, ...schemaKeysForInsert])).filter((k) => k !== "user_id");
-
+      // 🧩 4️⃣ Build object lưu theo base_schema
+      const endpointExtra = Object.keys(endpointSchema || {}).filter((k) => !baseKeys.includes(k) && k !== "user_id");
+      const insertOrder = [...baseKeys, ...endpointExtra];
       const newObj = {};
       for (const k of unionKeys) {
         if (k === "id") newObj.id = newId;
@@ -545,10 +555,20 @@ module.exports = async function statefulHandler(req, res, next) {
 
       const status = 201;
       const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "New {path} item added successfully." }, logicalPath });
-      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
+      await logWithStatefulResponse(req, {
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        status,
+        responseBody: rendered,
+        started,
+        payload: req.body,
+        statefulResponseId: responseId,
+      });
       return res.status(status).json(rendered);
     }
-
 
     /* ===== PUT ===== */
     if (method === "PUT") {
@@ -593,7 +613,7 @@ module.exports = async function statefulHandler(req, res, next) {
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
       // ✅ Use endpoint schema first, fallback base_schema
-      const endpointSchemaEffective = (endpointSchemaDb && Object.keys(endpointSchemaDb).length) ? endpointSchemaDb : baseSchema || {};
+      const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
 
       // Order check (PUT): payload keys must be in same relative order as endpoint schema (subsequence)
       const schemaKeys = Object.keys(endpointSchemaEffective);
@@ -663,7 +683,6 @@ module.exports = async function statefulHandler(req, res, next) {
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
       return res.status(status).json(rendered);
     }
-
 
     /* ===== DELETE ===== */
     if (method === "DELETE") {

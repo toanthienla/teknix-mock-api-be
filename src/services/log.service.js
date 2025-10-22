@@ -18,14 +18,14 @@
  */
 async function logRequest(dbPool, log) {
   const query = `
-    INSERT INTO project_request_logs (
-      project_id, endpoint_id, endpoint_response_id,
+   INSERT INTO project_request_logs (
+      project_id, endpoint_id, endpoint_response_id, user_id,
       request_method, request_path, request_headers, request_body,
       response_status_code, response_body, ip_address, latency_ms
     ) VALUES (
-      $1, $2, $3,
-      $4, $5, $6, $7,
-      $8, $9, $10, $11
+      $1, $2, $3, $4,
+      $5, $6, $7, $8,
+      $9, $10, $11, $12
     )
     RETURNING id;
   `;

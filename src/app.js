@@ -5,6 +5,7 @@ const app = express();
 const cors = require("cors");
 const auth = require("./middlewares/authMiddleware");
 const path = require("path");
+const notifyRoutes = require("./centrifugo/notify.routes");
 
 app.use(
   cors({
@@ -58,9 +59,7 @@ const projectRequestLogRoutes = require("./routes/project_request_log.routes");
 const mockRoutes = require("./routes/mock.routes"); // stateless
 const statefulRoutes = require("./routes/stateful.routes"); // các API quản trị stateful (không phải handler chính)
 const adminResponseLogger = require("./middlewares/adminResponseLogger");
-
-// ⚠️ KHÔNG import statefulHandler trực tiếp để tránh bypass auth
-// const statefulHandler = require('./routes/statefulHandler'); // ← remove
+const createNotificationsRoutes = require("./routes/notifications.routes");
 
 app.use("/workspaces", workspaceRoutes);
 app.use("/projects", projectRoutes);
@@ -69,24 +68,10 @@ app.use("/folders", folderRoutes);
 app.use("/", endpointResponseRoutes);
 app.use("/", statefulRoutes);
 app.use("/", mockRoutes);
-
-// ❌ GỠ BỎ đoạn bắt trực tiếp /:workspace/:project để khỏi bypass auth
-// app.use('/:workspace/:project', (req, res, next) => {
-//   if ((req.path || '/').split('/').filter(Boolean).length >= 1) {
-//     return statefulHandler(req, res, next);
-//   }
-//   return res.status(400).json({
-//     message: "Full route required: /{workspaceName}/{projectName}/{path}",
-//     detail: { path: req.originalUrl || req.url }
-//   });
-// });
+app.use("/", createNotificationsRoutes());
 
 // Các route logs khác
 app.use("/project_request_logs", projectRequestLogRoutes);
-
-// ✅ MOUNT UNIVERSAL HANDLER CUỐI CÙNG + CÓ AUTH  // CHANGED
-// Mọi request động (/:workspace/:project/...) sẽ đi qua đây, có req.user
-// MỌI request dạng /:workspace/:project/... phải đi qua auth -> universalHandler
 app.use("/:workspace/:project", auth, require("./routes/universalHandler"));
 
 module.exports = app;
