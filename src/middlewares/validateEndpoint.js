@@ -19,8 +19,8 @@ module.exports = function validateEndpoint(req, res, next) {
     if (!name || typeof name !== "string" || name.trim() === "") {
       errors.push({ field: "name", message: "Endpoint name cannot be empty" });
     } else {
-      if (name.length > 20) {
-        errors.push({ field: "name", message: "Endpoint name must not exceed 20 characters" });
+      if (name.length > 255) {
+        errors.push({ field: "name", message: "Endpoint name must not exceed 255 characters" });
       }
       if (!/^[a-zA-Z]/.test(name)) {
         errors.push({
