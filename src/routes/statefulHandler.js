@@ -1,7 +1,6 @@
 // src/routes/statefulHandler.js
 const { getCollection } = require("../config/db");
 const logSvc = require("../services/project_request_log.service");
-const { onProjectLogInserted } = require("../services/notification.service");
 
 /* ========== Utils ========== */
 function getClientIp(req) {
@@ -172,6 +171,8 @@ function isTypeOK(expected, value) {
   return false;
 }
 
+
+
 function validateAndSanitizePayload(schema, payload, { allowMissingRequired = false, rejectUnknown = true }) {
   const errors = [];
   const sanitized = {};
@@ -216,16 +217,13 @@ async function resolveStatefulResponseId(statefulDb, statefulId, providedId) {
 /* ========== Logging (ghi vào DB stateless) ========== */
 async function logWithStatefulResponse(req, { projectId, originId, statefulId, method, path, status, responseBody, started, payload, statefulResponseId = null }) {
   try {
-    // LẤY user_id từ request (auth middleware, res.locals.user, hoặc header X-Mock-User-Id)
-    const userIdForLog = pickUserIdFromRequest(req);
     const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId);
-    const _log = await logSvc.insertLog(req.db.stateless, {
+    await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
       endpoint_id: originId ?? null, // stateless endpoints.id
       endpoint_response_id: null, // NULL trong flow stateful
       stateful_endpoint_id: statefulId ?? null, // endpoints_ful.id (no FK)
       stateful_endpoint_response_id: finalResponseId ?? null, // endpoint_responses_ful.id (no FK)
-      user_id: userIdForLog ?? null,
       request_method: method,
       request_path: path,
       request_headers: req.headers || {},
@@ -235,25 +233,6 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
       ip_address: getClientIp(req),
       latency_ms: Date.now() - started,
     });
-    let logId = _log && _log.id;
-    if (!logId) {
-      try {
-        const r = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
-        logId = r.rows?.[0]?.id || null;
-        console.log("[stateful] fallback logId =", logId);
-      } catch (e) {
-        console.error("[stateful] fallback query failed:", e?.message || e);
-      }
-    }
-    if (logId) {
-      try {
-        await onProjectLogInserted(logId, req.db.stateless);
-      } catch (e) {
-        console.error("[notify hook error]", e?.message || e);
-      }
-    } else {
-      console.warn("[stateful] missing logId - skip notify");
-    }
   } catch (e) {
     console.error("[statefulHandler] log error:", e?.message || e);
   }
@@ -348,128 +327,229 @@ module.exports = async function statefulHandler(req, res, next) {
     // 4) LOAD SCHEMA ở DB STATEFUL
     let endpointSchemaDb = {};
     if (statefulId != null) {
-      const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
+      const { rows: schRows } = await req.db.stateful.query(
+        "SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1",
+        [statefulId]
+      );
       endpointSchemaDb = normalizeJsonb(schRows?.[0]?.schema) || {};
     }
 
     // 5) BASE SCHEMA ở DB STATELESS (theo folderId)
     let baseSchema = {};
     if (folderId != null) {
-      const { rows: baseRows } = await req.db.stateless.query("SELECT base_schema FROM folders WHERE id = $1 LIMIT 1", [folderId]);
+      const { rows: baseRows } = await req.db.stateless.query(
+        "SELECT base_schema FROM folders WHERE id = $1 LIMIT 1",
+        [folderId]
+      );
       baseSchema = normalizeJsonb(baseRows?.[0]?.base_schema) || {};
     }
 
     // Ưu tiên schema của endpoint, fallback về base_schema
-    const effectiveSchema = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema;
+    const effectiveSchema =
+      (endpointSchemaDb && Object.keys(endpointSchemaDb).length)
+        ? endpointSchemaDb
+        : baseSchema;
 
     // Nếu vẫn không có schema → chặn ghi
     if (!effectiveSchema || !Object.keys(effectiveSchema).length) {
       const status = 400;
       const body = { message: "Schema is not initialized for this endpoint/folder." };
       await logWithStatefulResponse(req, {
-        projectId,
-        originId,
-        statefulId,
-        method,
-        path: rawPath,
-        status,
-        responseBody: body,
-        started,
-        payload: req.body,
+        projectId, originId, statefulId, method, path: rawPath,
+        status, responseBody: body, started, payload: req.body
       });
       return res.status(status).json(body);
     }
 
+
+
     /* 6) LOAD RESPONSE BUCKET Ở DB STATEFUL */
     const responsesBucket = await loadResponsesBucket(req.db.stateful, statefulId);
-
     /* ===== GET ===== */
     if (method === "GET") {
       const userIdMaybe = pickUserIdFromRequest(req);
 
       const pickForGET = (obj) => {
-        // nếu schema là dạng { fields: [...] }
-        const fields = Array.isArray(effectiveSchema?.fields) ? effectiveSchema.fields : Object.keys(effectiveSchema || {});
-
+        const fields = Array.isArray(effectiveSchema?.fields)
+          ? effectiveSchema.fields
+          : Object.keys(effectiveSchema || {});
         if (fields.length === 0) {
           const { user_id, ...rest } = obj || {};
           return rest;
         }
-
         const out = {};
         for (const k of fields) {
           if (k === "user_id") continue;
-          out[k] = Object.prototype.hasOwnProperty.call(obj || {}, k) ? obj[k] : null;
+          out[k] = Object.prototype.hasOwnProperty.call(obj || {}, k)
+            ? obj[k]
+            : null;
         }
         return out;
       };
 
+      // ---------- PUBLIC ----------
       if (isPublic) {
+        // GET by ID
         if (hasId) {
           const any = current.find((x) => Number(x?.id) === Number(idFromUrl));
           if (any) {
-            const body = pickForGET(any);
+            const data = pickForGET(any);
             const status = 200;
-            await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+            const body = {
+              code: status,
+              message: "Success",
+              data,
+              success: true,
+            };
+            await logWithStatefulResponse(req, {
+              projectId, originId, statefulId, method, path: rawPath,
+              status, responseBody: body, started, payload: req.body
+            });
             return res.status(status).json(body);
           }
+          // Not found
           const status = 404;
-          const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} not found." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-          return res.status(status).json(rendered);
+          const { rendered, responseId } = selectAndRenderResponseAdv(
+            responsesBucket, status, { params: { id: idFromUrl } },
+            {
+              fallback: { message: "{Path} with id {{params.id}} not found." },
+              requireParamId: true,
+              paramsIdOccurrences: 1,
+              logicalPath,
+            }
+          );
+          const body = {
+            code: status,
+            message: rendered?.message ?? `{Path} with id ${idFromUrl} not found.`,
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload: req.body,
+            statefulResponseId: responseId,
+          });
+          return res.status(status).json(body);
         }
+
+        // GET all
         const all = current.map(pickForGET);
         const status = 200;
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: all, started, payload: req.body });
-        return res.status(status).json(all);
+        const body = {
+          code: status,
+          message: "Success",
+          data: all,
+          success: true,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload: req.body,
+        });
+        return res.status(status).json(body);
       }
 
-      // PRIVATE
+      // ---------- PRIVATE ----------
       if (hasId) {
         const uid = pickUserIdFromRequest(req);
         const rec = current.find((x) => Number(x?.id) === Number(idFromUrl));
         const allowed = rec && (rec.user_id == null || (uid != null && Number(rec.user_id) === Number(uid)));
         if (allowed) {
-          const body = pickForGET(rec);
+          const data = pickForGET(rec);
           const status = 200;
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+          const body = {
+            code: status,
+            message: "Success",
+            data,
+            success: true,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload: req.body
+          });
           return res.status(status).json(body);
         }
+
         const status = 404;
-        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} not found." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-        return res.status(status).json(rendered);
+        const { rendered, responseId } = selectAndRenderResponseAdv(
+          responsesBucket, status, { params: { id: idFromUrl } },
+          {
+            fallback: { message: "{Path} with id {{params.id}} not found." },
+            requireParamId: true,
+            paramsIdOccurrences: 1,
+            logicalPath,
+          }
+        );
+        const body = {
+          code: status,
+          message: rendered?.message ?? `{Path} with id ${idFromUrl} not found.`,
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload: req.body,
+          statefulResponseId: responseId,
+        });
+        return res.status(status).json(body);
       }
 
+      // GET all for private user
       const uid = pickUserIdFromRequest(req);
-      const defaults = current.filter((x) => x.user_id == null || x.user_id === undefined).map(pickForGET);
-      const mine = uid == null ? [] : current.filter((x) => Number(x?.user_id) === Number(uid)).map(pickForGET);
-      const body = [...defaults, ...mine];
+      const defaults = current
+        .filter((x) => x.user_id == null || x.user_id === undefined)
+        .map(pickForGET);
+      const mine = uid == null
+        ? []
+        : current
+          .filter((x) => Number(x?.user_id) === Number(uid))
+          .map(pickForGET);
+
+      const data = [...defaults, ...mine];
       const status = 200;
-      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+      const body = {
+        code: status,
+        message: "Success",
+        data,
+        success: true,
+      };
+      await logWithStatefulResponse(req, {
+        projectId, originId, statefulId, method, path: rawPath,
+        status, responseBody: body, started, payload: req.body,
+      });
       return res.status(status).json(body);
     }
+
     /* ===== POST ===== */
     if (method === "POST") {
       const userId = requireAuth(req, res);
       if (userId == null) return;
 
-      // doc đã seed
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
+        .some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
-        const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+        const body = {
+          code: status,
+          message: `Collection ${collectionName} is not initialized (missing seeded document).`,
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload: req.body,
+        });
         return res.status(status).json(body);
       }
 
       const payload = req.body || {};
 
-      // ✅ Use endpoint schema first, fallback to baseSchema
-      const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
+      const endpointSchemaEffective =
+        (endpointSchemaDb && Object.keys(endpointSchemaDb).length)
+          ? endpointSchemaDb
+          : baseSchema || {};
 
-      // ⚙️ Order check (POST: payload keys must be subsequence of schema keys allowing missing optional fields)
+      // Kiểm tra thứ tự và hợp lệ schema
       const schemaKeys = Object.keys(endpointSchemaEffective);
       const payloadKeys = Object.keys(payload);
       let lastIndex = -1;
@@ -477,49 +557,89 @@ module.exports = async function statefulHandler(req, res, next) {
         const idxKey = schemaKeys.indexOf(k);
         if (idxKey === -1) {
           const status = 400;
-          const body = { message: `Invalid data: unknown field '${k}'.` };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          const body = {
+            code: status,
+            message: `Invalid data: unknown field '${k}'.`,
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload,
+          });
           return res.status(status).json(body);
         }
         if (idxKey <= lastIndex) {
           const status = 400;
-          const body = { message: "Invalid data: field order does not follow schema." };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          const body = {
+            code: status,
+            message: "Invalid data: field order does not follow schema.",
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload,
+          });
           return res.status(status).json(body);
         }
         lastIndex = idxKey;
       }
 
-      // ⚙️ Required & type checks (based on endpoint schema)
+      // Kiểm tra required + type
       for (const [k, rule] of Object.entries(endpointSchemaEffective)) {
         const hasValue = Object.prototype.hasOwnProperty.call(payload, k);
         const v = payload[k];
         if (rule.required === true && !hasValue) {
           const status = 400;
-          const body = { message: `Missing required field: ${k}` };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          const body = {
+            code: status,
+            message: `Missing required field: ${k}`,
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload,
+          });
           return res.status(status).json(body);
         }
         if (hasValue && v !== null && v !== undefined && !isTypeOK(rule.type, v)) {
           const status = 400;
-          const body = { message: `Invalid type for ${k}: expected ${rule.type}` };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          const body = {
+            code: status,
+            message: `Invalid type for ${k}: expected ${rule.type}`,
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload,
+          });
           return res.status(status).json(body);
         }
       }
 
-      // ✅ ID logic (endpoint schema governs required/optional)
+      // Sinh id tự động hoặc kiểm tra id tồn tại
       const idRule = endpointSchemaEffective?.id || {};
       let newId = payload.id;
-
       if (idRule?.required === true && (newId === undefined || newId === null)) {
         const status = 400;
-        const body = { message: "Invalid data: missing required field: id" };
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+        const body = {
+          code: status,
+          message: "Invalid data: missing required field: id",
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload,
+        });
         return res.status(status).json(body);
       }
 
-      if ((idRule?.required === false || idRule?.required === undefined) && (newId === undefined || newId === null)) {
+      if ((idRule?.required === false || idRule?.required === undefined) &&
+        (newId === undefined || newId === null)) {
         const numericIds = current.map((x) => Number(x?.id)).filter((n) => Number.isFinite(n) && n >= 0);
         const maxId = numericIds.length ? Math.max(...numericIds) : 0;
         newId = maxId + 1;
@@ -527,21 +647,49 @@ module.exports = async function statefulHandler(req, res, next) {
 
       if (newId !== undefined && typeof newId !== "number") {
         const status = 400;
-        const body = { message: "Invalid data: id must be a number." };
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+        const body = {
+          code: status,
+          message: "Invalid data: id must be a number.",
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload,
+        });
         return res.status(status).json(body);
       }
 
       if (newId !== undefined && current.some((x) => Number(x?.id) === Number(newId))) {
         const status = 409;
-        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: newId } }, { fallback: { message: "{Path} {{params.id}} conflict: {{params.id}} already exists." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload, statefulResponseId: responseId });
-        return res.status(status).json(rendered);
+        const { rendered, responseId } = selectAndRenderResponseAdv(
+          responsesBucket, status, { params: { id: newId } },
+          {
+            fallback: { message: "{Path} {{params.id}} conflict: {{params.id}} already exists." },
+            requireParamId: true,
+            paramsIdOccurrences: 1,
+            logicalPath,
+          }
+        );
+        const body = {
+          code: status,
+          message: rendered?.message ?? `{Path} ${newId} conflict: already exists.`,
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload,
+          statefulResponseId: responseId,
+        });
+        return res.status(status).json(body);
       }
 
-      // 🧩 4️⃣ Build object lưu theo base_schema
-      const endpointExtra = Object.keys(endpointSchema || {}).filter((k) => !baseKeys.includes(k) && k !== "user_id");
-      const insertOrder = [...baseKeys, ...endpointExtra];
+      // Thêm mới item
+      const baseKeys = Object.keys(baseSchema || {});
+      const schemaKeysForInsert = Object.keys(endpointSchemaEffective);
+      const unionKeys = Array.from(new Set([...baseKeys, ...schemaKeysForInsert])).filter((k) => k !== "user_id");
+
       const newObj = {};
       for (const k of unionKeys) {
         if (k === "id") newObj.id = newId;
@@ -554,21 +702,24 @@ module.exports = async function statefulHandler(req, res, next) {
       await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 201;
-      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "New {path} item added successfully." }, logicalPath });
+      const { rendered, responseId } = selectAndRenderResponseAdv(
+        responsesBucket, status, {}, { fallback: { message: "New {path} item added successfully." }, logicalPath }
+      );
+      const body = {
+        code: status,
+        message: rendered?.message ?? "New item added successfully.",
+        data: newObj,
+        success: true,
+      };
       await logWithStatefulResponse(req, {
-        projectId,
-        originId,
-        statefulId,
-        method,
-        path: rawPath,
-        status,
-        responseBody: rendered,
-        started,
-        payload: req.body,
+        projectId, originId, statefulId, method, path: rawPath,
+        status, responseBody: body, started, payload: req.body,
         statefulResponseId: responseId,
       });
-      return res.status(status).json(rendered);
+      return res.status(status).json(body);
     }
+
+
 
     /* ===== PUT ===== */
     if (method === "PUT") {
@@ -576,46 +727,98 @@ module.exports = async function statefulHandler(req, res, next) {
       if (userId == null) return;
 
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
+        .some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
-        const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+        const body = {
+          code: status,
+          message: `Collection ${collectionName} is not initialized (missing seeded document).`,
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload: req.body,
+        });
         return res.status(status).json(body);
       }
 
       if (!hasId) {
         const status = 404;
-        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Not found." }, requireParamId: false, logicalPath });
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-        return res.status(status).json(rendered);
+        const { rendered, responseId } = selectAndRenderResponseAdv(
+          responsesBucket, status, {}, {
+          fallback: { message: "Not found." },
+          requireParamId: false,
+          logicalPath,
+        }
+        );
+        const body = {
+          code: status,
+          message: rendered?.message ?? "Not found.",
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload: req.body,
+          statefulResponseId: responseId,
+        });
+        return res.status(status).json(body);
       }
 
       const idx = current.findIndex((x) => Number(x?.id) === Number(idFromUrl));
       if (idx === -1) {
         const status = 404;
-        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} not found." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-        return res.status(status).json(rendered);
+        const { rendered, responseId } = selectAndRenderResponseAdv(
+          responsesBucket, status, { params: { id: idFromUrl } }, {
+          fallback: { message: "{Path} with id {{params.id}} not found." },
+          requireParamId: true,
+          paramsIdOccurrences: 1,
+          logicalPath,
+        }
+        );
+        const body = {
+          code: status,
+          message: rendered?.message ?? `{Path} with id ${idFromUrl} not found.`,
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload: req.body,
+          statefulResponseId: responseId,
+        });
+        return res.status(status).json(body);
       }
 
-      // owner check: allow editing if item is default (user_id == null), otherwise require ownership
+      // owner check
       const rawOwner = current[idx]?.user_id;
       const ownerId = rawOwner == null ? null : Number(rawOwner);
       if (ownerId !== null && ownerId !== Number(userId)) {
         const status = 403;
-        const body = { message: "You are not the author of this object." };
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+        const body = {
+          code: status,
+          message: "You are not the author of this object.",
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload: req.body,
+        });
         return res.status(status).json(body);
       }
 
       let payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
 
-      // ✅ Use endpoint schema first, fallback base_schema
-      const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
+      const endpointSchemaEffective =
+        (endpointSchemaDb && Object.keys(endpointSchemaDb).length)
+          ? endpointSchemaDb
+          : baseSchema || {};
 
-      // Order check (PUT): payload keys must be in same relative order as endpoint schema (subsequence)
+      // Order & type checks
       const schemaKeys = Object.keys(endpointSchemaEffective);
       const payloadKeys = Object.keys(payload);
       let lastIndex = -1;
@@ -623,43 +826,76 @@ module.exports = async function statefulHandler(req, res, next) {
         const idxSchema = schemaKeys.indexOf(k);
         if (idxSchema === -1) {
           const status = 400;
-          const body = { message: `Invalid data: unknown field '${k}'.` };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          const body = {
+            code: status,
+            message: `Invalid data: unknown field '${k}'.`,
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload,
+          });
           return res.status(status).json(body);
         }
         if (idxSchema <= lastIndex) {
           const status = 400;
-          const body = { message: "Invalid data: field order does not follow schema." };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          const body = {
+            code: status,
+            message: "Invalid data: field order does not follow schema.",
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload,
+          });
           return res.status(status).json(body);
         }
         lastIndex = idxSchema;
       }
 
-      // Required & type checks (based on endpoint schema)
       for (const [k, rule] of Object.entries(endpointSchemaEffective)) {
         const hasValue = Object.prototype.hasOwnProperty.call(payload, k);
         const v = payload[k];
         if (rule.required === true && !hasValue) {
           const status = 400;
-          const body = { message: `Missing required field: ${k}` };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          const body = {
+            code: status,
+            message: `Missing required field: ${k}`,
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload,
+          });
           return res.status(status).json(body);
         }
         if (hasValue && v !== null && v !== undefined && !isTypeOK(rule.type, v)) {
           const status = 400;
-          const body = { message: `Invalid type for ${k}: expected ${rule.type}` };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload });
+          const body = {
+            code: status,
+            message: `Invalid type for ${k}: expected ${rule.type}`,
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload,
+          });
           return res.status(status).json(body);
         }
       }
 
-      // Build updated item preserving base_schema order and merging payload
+      // Update data
       const schemaKeysForUpdate = Object.keys(endpointSchemaEffective);
-      const extraKeys = Object.keys(current[idx] || {}).filter((k) => !schemaKeysForUpdate.includes(k) && k !== "user_id");
+      const extraKeys = Object.keys(current[idx] || {}).filter(
+        (k) => !schemaKeysForUpdate.includes(k) && k !== "user_id"
+      );
       const updateOrder = [...schemaKeysForUpdate, ...extraKeys];
-
       const updatedItem = {};
+
       for (const k of updateOrder) {
         if (k === "id") {
           updatedItem.id = idFromUrl;
@@ -670,18 +906,31 @@ module.exports = async function statefulHandler(req, res, next) {
         }
       }
 
-      // If item was default (no owner), set user_id to the user who edits it (optional behavior)
-      // Here we keep original owner if exists, otherwise set to current user
       updatedItem.user_id = ownerId === null ? Number(userId) : ownerId;
-
       const updated = current.slice();
       updated[idx] = updatedItem;
       await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
       const status = 200;
-      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} updated successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
-      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-      return res.status(status).json(rendered);
+      const { rendered, responseId } = selectAndRenderResponseAdv(
+        responsesBucket, status, { params: { id: idFromUrl } },
+        {
+          fallback: { message: "{Path} with id {{params.id}} updated successfully." },
+          requireParamId: true, paramsIdOccurrences: 1, logicalPath
+        }
+      );
+      const body = {
+        code: status,
+        message: rendered?.message ?? "Update success.",
+        data: updatedItem,
+        success: true,
+      };
+      await logWithStatefulResponse(req, {
+        projectId, originId, statefulId, method, path: rawPath,
+        status, responseBody: body, started, payload: req.body,
+        statefulResponseId: responseId,
+      });
+      return res.status(status).json(body);
     }
 
     /* ===== DELETE ===== */
@@ -690,11 +939,20 @@ module.exports = async function statefulHandler(req, res, next) {
       if (userId == null) return;
 
       const mongoDb = col.s.db;
-      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray()).some((c) => c.name === collectionName);
+      const exists = (await mongoDb.listCollections({ name: collectionName }).toArray())
+        .some((c) => c.name === collectionName);
       if (!exists || !docId) {
         const status = 404;
-        const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+        const body = {
+          code: status,
+          message: `Collection ${collectionName} is not initialized (missing seeded document).`,
+          data: null,
+          success: false,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload: req.body,
+        });
         return res.status(status).json(body);
       }
 
@@ -702,27 +960,69 @@ module.exports = async function statefulHandler(req, res, next) {
         const idx = current.findIndex((x) => Number(x?.id) === Number(idFromUrl));
         if (idx === -1) {
           const status = 404;
-          const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} to delete not found." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-          return res.status(status).json(rendered);
+          const { rendered, responseId } = selectAndRenderResponseAdv(
+            responsesBucket, status, { params: { id: idFromUrl } }, {
+            fallback: { message: "{Path} with id {{params.id}} to delete not found." },
+            requireParamId: true,
+            paramsIdOccurrences: 1,
+            logicalPath,
+          }
+          );
+          const body = {
+            code: status,
+            message: rendered?.message ?? `{Path} with id ${idFromUrl} not found.`,
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload: req.body,
+            statefulResponseId: responseId,
+          });
+          return res.status(status).json(body);
         }
 
         const ownerId = Number(current[idx]?.user_id);
         if (ownerId !== Number(userId)) {
           const status = 403;
-          const body = { error: "Forbidden" };
-          await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
+          const body = {
+            code: status,
+            message: "You are not the author of this object.",
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId, originId, statefulId, method, path: rawPath,
+            status, responseBody: body, started, payload: req.body,
+          });
           return res.status(status).json(body);
         }
-
         const updated = current.slice();
         updated.splice(idx, 1);
         await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
         const status = 200;
-        const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, { params: { id: idFromUrl } }, { fallback: { message: "{Path} with id {{params.id}} deleted successfully." }, requireParamId: true, paramsIdOccurrences: 1, logicalPath });
-        await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-        return res.status(status).json(rendered);
+        const { rendered, responseId } = selectAndRenderResponseAdv(
+          responsesBucket, status, { params: { id: idFromUrl } },
+          {
+            fallback: { message: "{Path} with id {{params.id}} deleted successfully." },
+            requireParamId: true,
+            paramsIdOccurrences: 1,
+            logicalPath,
+          }
+        );
+        const body = {
+          code: status,
+          message: rendered?.message ?? "Deleted successfully.",
+          data: null,
+          success: true,
+        };
+        await logWithStatefulResponse(req, {
+          projectId, originId, statefulId, method, path: rawPath,
+          status, responseBody: body, started, payload: req.body,
+          statefulResponseId: responseId,
+        });
+        return res.status(status).json(body);
       }
 
       // Xoá toàn bộ data của user hiện tại
@@ -731,9 +1031,26 @@ module.exports = async function statefulHandler(req, res, next) {
       await col.updateOne({ _id: docId }, { $set: { data_current: keep } }, { upsert: false });
 
       const status = 200;
-      const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Delete all data with {Path} successfully." }, requireParamId: false, paramsIdOccurrences: 0, logicalPath });
-      await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-      return res.status(status).json(rendered);
+      const { rendered, responseId } = selectAndRenderResponseAdv(
+        responsesBucket, status, {}, {
+        fallback: { message: "Delete all data with {Path} successfully." },
+        requireParamId: false,
+        paramsIdOccurrences: 0,
+        logicalPath,
+      }
+      );
+      const body = {
+        code: status,
+        message: rendered?.message ?? "Delete all data successfully.",
+        data: null,
+        success: true,
+      };
+      await logWithStatefulResponse(req, {
+        projectId, originId, statefulId, method, path: rawPath,
+        status, responseBody: body, started, payload: req.body,
+        statefulResponseId: responseId,
+      });
+      return res.status(status).json(body);
     }
 
     /* ===== Others ===== */
