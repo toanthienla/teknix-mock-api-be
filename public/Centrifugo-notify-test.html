@@ -34,7 +34,31 @@
 
         // 4) Subscribe
         const sub = centrifuge.newSubscription(SUB_CHANNEL, { token: subTok.token });
-        sub.on("publication", (ctx) => log("Notification received:", JSON.stringify(ctx.data)));
+        sub.on("publication", (ctx) => {
+          try {
+            const data = ctx.data || {};
+            // payload shape: { notification: {...}, log: {...} }
+            const n = data.notification || {};
+            const l = data.log || {};
+
+            const parts = [];
+            parts.push(``);
+            parts.push(`user_id=${l.user_id ?? n.user_id ?? "-"}`);
+            parts.push(`method=${l.request_method ?? "-"}`);
+            parts.push(`path=${l.request_path ?? "-"}`);
+            parts.push(`status=${l.response_status_code ?? "-"}`);
+            parts.push(`is_stateful=${l.is_stateful ?? n.is_stateful ?? false}`);
+            parts.push(`is_read=${n.is_read ?? false}`);
+            parts.push(`created_at=${l.created_at ?? n.created_at ?? new Date().toISOString()}`);
+
+            log("Notification received:", parts.join("\n"));
+            // Also show bodies if present
+            if (l.request_body) log("request_body:", JSON.stringify(l.request_body));
+            if (l.response_body) log("response_body:", JSON.stringify(l.response_body));
+          } catch (e) {
+            log("Notification received (raw):", JSON.stringify(ctx.data));
+          }
+        });
         sub.on("subscribed", () => log("subscribed"));
         sub.on("error", (e) => log("sub error", e));
         sub.subscribe();
