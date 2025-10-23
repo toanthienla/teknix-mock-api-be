@@ -4,15 +4,46 @@ const EndpointStatefulService = require("../services/endpoints_ful.service");
 // --- Định nghĩa tất cả các hàm xử lý ---
 
 async function listEndpoints(req, res) {
-  const { folder_id } = req.query;
-  if (!folder_id) {
-    return res.status(400).json({ error: "folder_id là bắt buộc." });
+  try {
+    const { folder_id } = req.query;
+    if (!folder_id) return res.status(400).json({ error: "folder_id là bắt buộc." });
+
+    // parse pagination
+    const page = req.query.page ? parseInt(req.query.page, 10) : 1;
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 20;
+
+    // parse query search
+    const q = typeof req.query.query === "string" && req.query.query.trim() ? req.query.query.trim() : null;
+
+    // parse filter: allow JSON string or key:val,key2:val2
+    let filter = null;
+    if (req.query.filter) {
+      const raw = req.query.filter;
+      try {
+        filter = typeof raw === "string" && raw.trim().startsWith("{") ? JSON.parse(raw) : Object.fromEntries(String(raw).split(",").map((p) => p.split(":", 2)));
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid filter format" });
+      }
+    }
+
+    // parse sort: field:dir
+    let sort = null;
+    if (req.query.sort) {
+      const [field, dir] = String(req.query.sort).split(":", 2);
+      sort = { field: field || null, dir: dir || "asc" };
+    }
+
+    const opts = { page, limit, query: q, filter, sort };
+    const { rows, total } = await EndpointStatefulService.findByFolderIdPaged(folder_id, opts);
+
+    // add is_stateful flag for backward compatibility
+    const data = rows.map((ep) => ({ ...ep, is_stateful: true }));
+
+    return res.status(200).json({ data, page: Number(page), limit: Number(limit), total });
+  } catch (err) {
+    console.error("listEndpoints error:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
-
-  const endpoints = await EndpointStatefulService.findByFolderId(folder_id);
-  const result = endpoints.map((ep) => ({ ...ep, is_stateful: true }));
-
-  res.status(200).json(result);
 }
 
 async function getEndpointById(req, res) {

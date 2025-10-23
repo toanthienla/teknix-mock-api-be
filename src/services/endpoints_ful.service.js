@@ -62,6 +62,62 @@ async function findByFolderId(folderId) {
   return rows;
 }
 
+/**
+ * Paginated list for endpoints within a folder with optional search/filter/sort
+ * opts: { page, limit, query, filter: object, sort: { field, dir } }
+ * returns { rows, total }
+ */
+async function findByFolderIdPaged(folderId, opts = {}) {
+  const page = Number.isFinite(Number(opts.page)) ? Math.max(1, Number(opts.page)) : 1;
+  const limit = Number.isFinite(Number(opts.limit)) ? Math.max(1, Math.min(500, Number(opts.limit))) : 20;
+  const offset = (page - 1) * limit;
+
+  const allowedFilterFields = new Set(["id", "origin_id", "name", "method", "path", "is_active"]);
+  const allowedSortFields = new Set(["id", "name", "method", "path", "created_at", "updated_at", "is_active"]);
+
+  const where = ["folder_id = $1"];
+  const params = [folderId];
+  let idx = 2;
+
+  if (opts.query && String(opts.query).trim()) {
+    where.push(`(name ILIKE $${idx} OR path ILIKE $${idx})`);
+    params.push(`%${String(opts.query).trim()}%`);
+    idx++;
+  }
+
+  if (opts.filter && typeof opts.filter === "object") {
+    for (const [k, v] of Object.entries(opts.filter)) {
+      if (!allowedFilterFields.has(k)) continue;
+      where.push(`${k} = $${idx}`);
+      params.push(v);
+      idx++;
+    }
+  }
+
+  const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  // sort
+  let orderClause = "ORDER BY created_at DESC";
+  if (opts.sort && opts.sort.field) {
+    const f = String(opts.sort.field);
+    const dir = String(opts.sort.dir || "asc").toUpperCase() === "DESC" ? "DESC" : "ASC";
+    const field = allowedSortFields.has(f) ? f : null;
+    if (field) orderClause = `ORDER BY ${field} ${dir}`;
+  }
+
+  // total
+  const qTotal = `SELECT COUNT(*)::int AS cnt FROM endpoints_ful ${whereClause}`;
+  const { rows: totalRows } = await statefulPool.query(qTotal, params);
+  const total = Number(totalRows[0]?.cnt || 0);
+
+  // data
+  const q = `SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful ${whereClause} ${orderClause} LIMIT $${idx} OFFSET $${idx + 1}`;
+  params.push(limit, offset);
+  const { rows } = await statefulPool.query(q, params);
+
+  return { rows, total };
+}
+
 async function getFullDetailById(id) {
   const [endpoint, responses] = await Promise.all([findById(id), ResponseStatefulService.findByEndpointId(id)]);
   if (!endpoint) return null;
