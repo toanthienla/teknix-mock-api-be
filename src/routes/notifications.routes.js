@@ -59,19 +59,24 @@ function NotificationsRoutes() {
       const whereSql = "WHERE " + where.join(" AND ");
 
       // --- query ---
+      // Join to project_request_logs -> endpoints to derive is_stateful if notifications.is_stateful is null
       const { rows } = await req.db.stateless.query(
         `
       SELECT
-        id,
-        project_request_log_id,
-        endpoint_id,
-        user_id,
-        is_stateful,
-        is_read,
-        created_at
-      FROM notifications
+        n.id,
+        n.project_request_log_id,
+        n.endpoint_id,
+        n.user_id,
+        COALESCE(n.is_stateful, e.is_stateful, FALSE) AS is_stateful,
+        n.is_read,
+        n.created_at,
+        prl.request_method,
+        prl.request_path
+      FROM notifications n
+      LEFT JOIN project_request_logs prl ON prl.id = n.project_request_log_id
+      LEFT JOIN endpoints e ON e.id = prl.endpoint_id
       ${whereSql}
-      ORDER BY created_at DESC
+      ORDER BY n.created_at DESC
       `,
         params
       );

@@ -52,10 +52,40 @@ async function onProjectLogInserted(projectRequestLogId, db) {
 
   const notif = ins.rows?.[0];
 
+  // Lấy thông tin log chi tiết để đính kèm vào payload
+  const logRes = await db.query(
+    `
+    SELECT id AS log_id,
+           user_id,
+           request_method,
+           request_path,
+           request_body,
+           response_status_code,
+           response_body,
+           created_at
+    FROM project_request_logs
+    WHERE id = $1
+    LIMIT 1
+  `,
+    [row.log_id]
+  );
+
+  const logRow = logRes.rows?.[0] || null;
+  if (logRow) {
+    // project_request_logs table doesn't have is_stateful column; get it from the joined endpoint value
+    logRow.is_stateful = !!row.is_stateful;
+  }
+
+  // Chuẩn bị payload có đủ trường yêu cầu
+  const payload = {
+    notification: notif,
+    log: logRow,
+  };
+
   // Fanout tới các kênh đích
   const channels = buildChannels(row);
   for (const ch of channels) {
-    await publish(ch, { notification: notif });
+    await publish(ch, payload);
   }
 
   return notif;
