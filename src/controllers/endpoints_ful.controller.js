@@ -20,7 +20,14 @@ async function listEndpoints(req, res) {
     if (req.query.filter) {
       const raw = req.query.filter;
       try {
-        filter = typeof raw === "string" && raw.trim().startsWith("{") ? JSON.parse(raw) : Object.fromEntries(String(raw).split(",").map((p) => p.split(":", 2)));
+        filter =
+          typeof raw === "string" && raw.trim().startsWith("{")
+            ? JSON.parse(raw)
+            : Object.fromEntries(
+                String(raw)
+                  .split(",")
+                  .map((p) => p.split(":", 2))
+              );
       } catch (e) {
         return res.status(400).json({ error: "Invalid filter format" });
       }

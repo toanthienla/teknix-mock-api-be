@@ -301,10 +301,10 @@ async function convertToStateful(endpointId) {
   } catch (e) {
     try {
       await clientStateless.query("ROLLBACK");
-    } catch { }
+    } catch {}
     try {
       await clientStateful.query("ROLLBACK");
-    } catch { }
+    } catch {}
     throw e;
   } finally {
     clientStateless.release();
@@ -786,8 +786,6 @@ async function getBaseSchemaByEndpointId(statelessPool, endpointId) {
     }
     return { name, type };
   });
-  ;
-
   return { fields };
 }
 
@@ -847,19 +845,13 @@ async function deleteByOriginIds(originIds = []) {
 
 // 🔹 Lấy bản ghi stateful bằng origin_id (raw)
 async function findByOriginIdRaw(originId) {
-  const { rows } = await statefulPool.query(
-    "SELECT id, origin_id, advanced_config FROM endpoints_ful WHERE origin_id = $1 LIMIT 1",
-    [originId]
-  );
+  const { rows } = await statefulPool.query("SELECT id, origin_id, advanced_config FROM endpoints_ful WHERE origin_id = $1 LIMIT 1", [originId]);
   return rows[0] || null;
 }
 
 // 🔹 Cập nhật advanced_config theo origin_id
 async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
-  const { rows } = await statefulPool.query(
-    "UPDATE endpoints_ful SET advanced_config = $1, updated_at = NOW() WHERE origin_id = $2 RETURNING id, origin_id, advanced_config",
-    [advancedConfigObj, originId]
-  );
+  const { rows } = await statefulPool.query("UPDATE endpoints_ful SET advanced_config = $1, updated_at = NOW() WHERE origin_id = $2 RETURNING id, origin_id, advanced_config", [advancedConfigObj, originId]);
 
   if (rows.length === 0) {
     return { notFound: true };
