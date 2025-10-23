@@ -26,27 +26,51 @@ const app = express();
 //    Cho phép gọi từ HTML test (http://127.0.0.1:5500) và FE (localhost/127.0.0.1:3000)
 //    Nếu muốn mở hết trong dev: tạm dùng app.use(cors()) là nhanh nhất.
 // ---------------------------------------------
+// const allowedOrigins = [
+//   "http://127.0.0.1:5500", // Live Server (file HTML test)
+//   "http://localhost:3000", // FE React (nếu dùng localhost)
+//   "http://127.0.0.1:3000", // FE React (nếu dùng 127.0.0.1)
+//   "http://localhost:5173", // Vite
+//   "http://localhost:8080", // Một số dev servers khác
+// ];
+
+// app.use(
+//   cors({
+//     origin: (origin, cb) => {
+//       // Cho phép request không có Origin (curl/Postman) để tiện test
+//       if (!origin) return cb(null, true);
+//       return allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error("Not allowed by CORS"));
+//     },
+//     credentials: true, // phần phát token không dùng cookie
+//     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+//     allowedHeaders: ["Content-Type", "Authorization"],
+//   })
+// );
 const allowedOrigins = [
-  "http://127.0.0.1:5500", // Live Server (file HTML test)
-  "http://localhost:3000", // FE React (nếu dùng localhost)
+  "http://localhost:5173",
+  "http://localhost:3000",
+  // FE React (nếu dùng localhost)
   "http://127.0.0.1:3000", // FE React (nếu dùng 127.0.0.1)
   "http://localhost:5173", // Vite
   "http://localhost:8080", // Một số dev servers khác
 ];
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      // Cho phép request không có Origin (curl/Postman) để tiện test
-      if (!origin) return cb(null, true);
-      return allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error("Not allowed by CORS"));
-    },
-    credentials: false, // phần phát token không dùng cookie
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 200,
+};
 
+app.use(cors(corsOptions));
 // ---------------------------------------------
 // 2) Parsers
 // ---------------------------------------------
