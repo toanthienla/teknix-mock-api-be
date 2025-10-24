@@ -17,7 +17,10 @@ router.post("/refresh", authController.refreshToken);
 // POST /auth/logout
 router.post("/logout", authController.logout);
 
-// ✅ Lấy thông tin người dùng hiện tại
-router.get("/me", auth, asyncHandler(authController.getCurrentUser));
+// ✅ Lấy thông tin user hiện tại từ token (cookie hoặc header)
+router.get("/me", auth, async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+  res.json({ id: req.user.id, username: req.user.username });
+});
 
 module.exports = router;

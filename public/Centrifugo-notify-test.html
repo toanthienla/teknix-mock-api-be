@@ -19,18 +19,33 @@
 
       (async function main() {
         try {
+          // 🔐 Đăng nhập trực tiếp để set cookie trong browser
           log("→ Logging in...");
-          const login = await axios.post(`${BE}/auth/login`, {
-            username: "vinh1",
-            password: "12345678",
-          });
-          const ACCESS_TOKEN = login.data?.token;
-          if (!ACCESS_TOKEN) throw new Error("No token from /auth/login");
-          log("✅ Login OK, token:", ACCESS_TOKEN.slice(0, 10) + "...");
+          const loginResp = await axios.post(
+            `${BE}/auth/login`,
+            {
+              username: "vinh1",
+              password: "12345678",
+            },
+            { withCredentials: true }
+          );
+
+          const data = loginResp.data;
+          if (!data?.token) {
+            log("⚠️ Login response:", JSON.stringify(data));
+          } else {
+            log("✅ Login OK, token prefix:", data.token.slice(0, 10));
+          }
+
+          // 🧩 Kiểm tra lại user từ cookie
+          const meResp = await axios.get(`${BE}/auth/me`, { withCredentials: true });
+          const me = meResp.data;
+          log("👤 Logged in as:", me.username, "(id:", me.id, ")");
+          const userId = me.id;
 
           // 1️⃣ Xin connection token
           const connRes = await axios.get(`${BE}/centrifugo/conn-token`, {
-            headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+            withCredentials: true,
           });
           const conn = connRes.data;
           log("✅ conn token ok, user:", conn.user_id);
@@ -41,7 +56,7 @@
           // 3️⃣ Xin sub-token
           const subRes = await axios.get(`${BE}/centrifugo/sub-token`, {
             params: { channel: SUB_CHANNEL },
-            headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+            withCredentials: true,
           });
           const subTok = subRes.data;
 
