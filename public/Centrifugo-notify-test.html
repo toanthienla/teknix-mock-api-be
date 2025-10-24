@@ -17,56 +17,70 @@
       const WS_URL = "ws://127.0.0.1:8000/connection/websocket"; // v6 KHÔNG cần ?format=json
       const SUB_CHANNEL = "notification#mock_logging";
 
-      (async () => {
-        // 1) Xin connection token từ BE
-        const { data: conn } = await axios.get(`${BE}/centrifugo/conn-token`);
-        log("conn token ok, user:", conn.user_id);
+      (async function main() {
+        try {
+          // 🔐 Đăng nhập trực tiếp để set cookie trong browser
+          log("→ Logging in...");
+          const loginResp = await axios.post(
+            `${BE}/auth/login`,
+            {
+              username: "vinh1",
+              password: "12345678",
+            },
+            { withCredentials: true }
+          );
 
-        // 2) Tạo client Centrifuge với connection token
-        if (!window.__CENT_OK__ || !window.Centrifuge) throw new Error("Centrifuge UMD not loaded");
-        const CentCtor = window.Centrifuge?.Centrifuge || window.Centrifuge;
-        const centrifuge = new CentCtor(WS_URL, { token: conn.token });
-
-        // 3) Xin subscription token cho đúng kênh
-        const { data: subTok } = await axios.get(`${BE}/centrifugo/sub-token`, {
-          params: { channel: SUB_CHANNEL, user_id: conn.user_id },
-        });
-
-        // 4) Subscribe
-        const sub = centrifuge.newSubscription(SUB_CHANNEL, { token: subTok.token });
-        sub.on("publication", (ctx) => {
-          try {
-            const data = ctx.data || {};
-            // payload shape: { notification: {...}, log: {...} }
-            const n = data.notification || {};
-            const l = data.log || {};
-
-            const parts = [];
-            parts.push(``);
-            parts.push(`user_id=${l.user_id ?? n.user_id ?? "-"}`);
-            parts.push(`method=${l.request_method ?? "-"}`);
-            parts.push(`path=${l.request_path ?? "-"}`);
-            parts.push(`status=${l.response_status_code ?? "-"}`);
-            parts.push(`is_stateful=${l.is_stateful ?? n.is_stateful ?? false}`);
-            parts.push(`is_read=${n.is_read ?? false}`);
-            parts.push(`created_at=${l.created_at ?? n.created_at ?? new Date().toISOString()}`);
-
-            log("Notification received:", parts.join("\n"));
-            // Also show bodies if present
-            if (l.request_body) log("request_body:", JSON.stringify(l.request_body));
-            if (l.response_body) log("response_body:", JSON.stringify(l.response_body));
-          } catch (e) {
-            log("Notification received (raw):", JSON.stringify(ctx.data));
+          const data = loginResp.data;
+          if (!data?.token) {
+            log("⚠️ Login response:", JSON.stringify(data));
+          } else {
+            log("✅ Login OK, token prefix:", data.token.slice(0, 10));
           }
-        });
-        sub.on("subscribed", () => log("subscribed"));
-        sub.on("error", (e) => log("sub error", e));
-        sub.subscribe();
 
-        centrifuge.on("connected", () => log("connected"));
-        centrifuge.on("error", (e) => log("conn error", e));
-        centrifuge.connect();
-      })().catch((e) => log("init error:", e?.message || e));
+          // 🧩 Kiểm tra lại user từ cookie
+          const meResp = await axios.get(`${BE}/auth/me`, { withCredentials: true });
+          const me = meResp.data;
+          log("👤 Logged in as:", me.username, "(id:", me.id, ")");
+          const userId = me.id;
+
+          // 1️⃣ Xin connection token
+          const connRes = await axios.get(`${BE}/centrifugo/conn-token`, {
+            withCredentials: true,
+          });
+          const conn = connRes.data;
+          log("✅ conn token ok, user:", conn.user_id);
+
+          // 2️⃣ Tạo Centrifuge instance
+          const centrifuge = new window.Centrifuge(WS_URL, { token: conn.token });
+
+          // 3️⃣ Xin sub-token
+          const subRes = await axios.get(`${BE}/centrifugo/sub-token`, {
+            params: { channel: SUB_CHANNEL },
+            withCredentials: true,
+          });
+          const subTok = subRes.data;
+
+          // 4️⃣ Đăng ký subscription
+          const sub = centrifuge.newSubscription(SUB_CHANNEL, { token: subTok.token });
+          sub.on("publication", (ctx) => {
+            log("📨 Notification:", JSON.stringify(ctx.data));
+          });
+          sub.on("subscribed", () => log("✅ subscribed"));
+          sub.on("error", (e) => log("sub error", e));
+          sub.subscribe();
+
+          centrifuge.on("connected", () => log("✅ connected"));
+          centrifuge.on("error", (e) => log("conn error", e));
+          centrifuge.connect();
+        } catch (err) {
+          const data = err.response?.data;
+          if (data) {
+            log("❌ init error:", JSON.stringify(data, null, 2));
+          } else {
+            log("❌ init error:", err.message || err);
+          }
+        }
+      })();
     </script>
   </body>
 </html>
