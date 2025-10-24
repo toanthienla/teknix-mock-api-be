@@ -238,6 +238,7 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
   return { success: false, message: "Unexpected endpoint state." };
 }
 
+
 // Delete endpoint
 async function deleteEndpoint(dbPool, endpointId) {
   // Lấy thông tin endpoint để kiểm tra is_stateful
