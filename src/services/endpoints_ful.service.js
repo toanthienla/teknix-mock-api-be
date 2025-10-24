@@ -851,7 +851,42 @@ async function findByOriginIdRaw(originId) {
 
 // 🔹 Cập nhật advanced_config theo origin_id
 async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
-  const { rows } = await statefulPool.query("UPDATE endpoints_ful SET advanced_config = $1, updated_at = NOW() WHERE origin_id = $2 RETURNING id, origin_id, advanced_config", [advancedConfigObj, originId]);
+  // --- Validate đầu vào ---
+  if (!advancedConfigObj || typeof advancedConfigObj !== "object") {
+    throw new Error("Invalid advancedConfigObj: must be a JSON object");
+  }
+
+  // --- Clone để tránh mutate dữ liệu gốc ---
+  const newConfig = JSON.parse(JSON.stringify(advancedConfigObj));
+
+  // --- Xử lý phần nextCalls ---
+  if (Array.isArray(newConfig.nextCalls)) {
+    let nextId = 1;
+
+    // Tìm id lớn nhất hiện có (nếu có)
+    const existingIds = newConfig.nextCalls
+      .filter(c => typeof c.id === "number")
+      .map(c => c.id);
+    if (existingIds.length > 0) {
+      nextId = Math.max(...existingIds) + 1;
+    }
+
+    newConfig.nextCalls = newConfig.nextCalls.map(call => {
+      if (call.id == null) {
+        call.id = nextId++;
+      }
+      return call;
+    });
+  }
+
+  // --- Cập nhật DB ---
+  const { rows } = await statefulPool.query(
+    `UPDATE endpoints_ful
+     SET advanced_config = $1, updated_at = NOW()
+     WHERE origin_id = $2
+     RETURNING id, origin_id, advanced_config`,
+    [newConfig, originId]
+  );
 
   if (rows.length === 0) {
     return { notFound: true };
