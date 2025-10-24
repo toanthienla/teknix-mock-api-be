@@ -116,6 +116,7 @@ const endpointRoutes = require("./routes/endpoint.routes");
 const endpointResponseRoutes = require("./routes/endpoint_response.routes");
 const folderRoutes = require("./routes/folder.routes");
 const projectRequestLogRoutes = require("./routes/project_request_log.routes");
+const endpointsFulRoutes = require("./routes/endpoints_ful.routes");
 
 const mockRoutes = require("./routes/mock.routes"); // stateless
 const statefulRoutes = require("./routes/stateful.routes"); // API quản trị stateful (không phải handler chính)
@@ -127,6 +128,7 @@ app.use("/workspaces", workspaceRoutes);
 app.use("/projects", projectRoutes);
 app.use("/endpoints", endpointRoutes);
 app.use("/folders", folderRoutes);
+app.use("/endpoints_ful", endpointsFulRoutes);
 app.use(mockRoutes);
 
 // Các route dùng path gốc (giữ như cũ để không phá flow hiện tại)

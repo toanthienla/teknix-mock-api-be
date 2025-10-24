@@ -866,6 +866,7 @@ async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
 module.exports = {
   findById,
   findByFolderId,
+  findByFolderIdPaged,
   getFullDetailById,
   deleteById,
   deleteByOriginIds,
