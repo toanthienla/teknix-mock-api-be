@@ -50,10 +50,12 @@ function NotificationsRoutes() {
       }
 
       // --- build WHERE ---
-      const where = ["user_id = $1"];
+      // Prefix column names to avoid ambiguity with joined tables (project_request_logs also has user_id)
+      const where = ["n.user_id = $1"];
       const params = [userId];
       if (isReadFilter !== null) {
-        where.push(`is_read = $${params.length + 1}`);
+        // prefix is_read with notifications alias to be explicit
+        where.push(`n.is_read = $${params.length + 1}`);
         params.push(isReadFilter);
       }
       const whereSql = "WHERE " + where.join(" AND ");
