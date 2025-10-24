@@ -1,30 +1,39 @@
 const express = require("express");
 const router = express.Router();
 const { createConnectionToken, createSubscriptionToken } = require("../centrifugo/centrifugo.token.service");
+const auth = require("../middlewares/authMiddleware");
 
 // Giả định bạn có middleware auth lấy user từ session/jwt app của bạn.
 // Ở đây demo đơn giản nhận userId qua query/body (dev only).
 // Production: lấy userId từ auth thực tế của bạn.
 
-router.get("/centrifugo/conn-token", async (req, res) => {
+// ✅ Đảm bảo route này chỉ được truy cập khi người dùng đã đăng nhập
+router.get("/centrifugo/conn-token", auth, async (req, res) => {
   try {
-    const userId = req.query.user_id || "user_123"; // thay bằng req.user.id trong thực tế
-    const token = await createConnectionToken(userId, "15m");
-    res.json({ token, user_id: userId, exp: "15m" });
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const token = await createConnectionToken(String(userId), "15m");
+    return res.json({ token, user_id: userId, exp: "15m" });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error("conn-token error:", e.message);
+    return res.status(500).json({ error: e.message });
   }
 });
 
-router.get("/centrifugo/sub-token", async (req, res) => {
+router.get("/centrifugo/sub-token", auth, async (req, res) => {
   try {
-    const userId = req.query.user_id || "user_123";
-    const channel = req.query.channel;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const { channel } = req.query;
     if (!channel) return res.status(400).json({ error: "channel required" });
-    const token = await createSubscriptionToken(userId, channel, "15m");
-    res.json({ token, user_id: userId, channel, exp: "15m" });
+
+    const token = await createSubscriptionToken(String(userId), channel, "15m");
+    return res.json({ token, user_id: userId, channel, exp: "15m" });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error("sub-token error:", e.message);
+    return res.status(500).json({ error: e.message });
   }
 });
 

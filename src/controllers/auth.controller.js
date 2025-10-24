@@ -181,7 +181,7 @@ exports.getCurrentUser = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    return res.json({ username: result.rows[0].username });
+    return res.json({ user_id: userId, username: result.rows[0].username });
   } catch (error) {
     console.error("Error in getCurrentUser:", error);
     return res.status(500).json({ message: "Internal Server Error" });
