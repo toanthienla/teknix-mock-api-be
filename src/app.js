@@ -47,7 +47,7 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-api-key"],
     optionsSuccessStatus: 204,
   })
 );
@@ -66,6 +66,8 @@ app.use(
 // ---------------------------------------------
 app.use(express.json());
 app.use(cookieParser());
+const fileUpload = require("express-fileupload");
+app.use(fileUpload());
 
 // ---------------------------------------------
 // 3) Static assets (nếu cần phục vụ file tĩnh từ /public)

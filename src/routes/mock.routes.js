@@ -440,13 +440,32 @@ router.use(authMiddleware, async (req, res, next) => {
         try {
           const ctx = { params, query: req.query };
           const resolvedUrl = renderTemplate(r.proxy_url, ctx);
-          const proxyResp = await axios({
+          const contentType = (req.headers["content-type"] || "").toLowerCase();
+          let axiosConfig = {
             method: r.proxy_method || req.method,
             url: resolvedUrl,
-            data: req.body,
             validateStatus: () => true,
             httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-          });
+          };
+
+          // --- Detect multipart/form-data (upload) ---
+          if (contentType.includes("multipart/form-data") && req.files) {
+            const form = new FormData();
+            Object.entries(req.body || {}).forEach(([key, val]) => form.append(key, val));
+            for (const [field, files] of Object.entries(req.files)) {
+              const arr = Array.isArray(files) ? files : [files];
+              for (const f of arr) {
+                form.append(field, fs.createReadStream(f.path), f.originalname);
+              }
+            }
+            axiosConfig.data = form;
+            axiosConfig.headers = { ...req.headers, ...form.getHeaders() };
+          } else {
+            axiosConfig.data = req.body;
+            axiosConfig.headers = req.headers;
+          }
+
+          const proxyResp = await axios(axiosConfig);
           let safeResponseBody;
           if (proxyResp.data && typeof proxyResp.data === "object") {
             safeResponseBody = proxyResp.data;
