@@ -68,6 +68,7 @@ app.use(express.json());
 app.use(cookieParser());
 const fileUpload = require("express-fileupload");
 app.use(fileUpload());
+const https = require("https");
 
 // ---------------------------------------------
 // 3) Static assets (nếu cần phục vụ file tĩnh từ /public)

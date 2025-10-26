@@ -7,6 +7,8 @@ const https = require("https");
 const { onProjectLogInserted } = require("../services/notification.service");
 const logSvc = require("../services/project_request_log.service");
 const { getCollection } = require("../config/db");
+const FormData = require("form-data");
+const cloudscraper = require("cloudscraper");
 
 // === ADD: helper lấy danh sách id từ request theo thứ tự ưu tiên
 const pickIdsFromReq = (req) => {
@@ -455,17 +457,153 @@ router.use(authMiddleware, async (req, res, next) => {
             for (const [field, files] of Object.entries(req.files)) {
               const arr = Array.isArray(files) ? files : [files];
               for (const f of arr) {
-                form.append(field, fs.createReadStream(f.path), f.originalname);
+                // express-fileupload: f.data là Buffer, f.name là tên file
+                form.append(field, f.data, {
+                  filename: f.name,
+                  contentType: f.mimetype,
+                });
               }
             }
+            // --- FIX: thêm Content-Length để tránh socket hang up ---
+            const formHeaders = form.getHeaders();
+            const contentLength = await new Promise((resolve, reject) => {
+              form.getLength((err, length) => {
+                if (err) reject(err);
+                else resolve(length);
+              });
+            });
             axiosConfig.data = form;
-            axiosConfig.headers = { ...req.headers, ...form.getHeaders() };
+            axiosConfig.headers = {
+              ...req.headers,
+              ...formHeaders,
+              "Content-Length": contentLength,
+            };
+            console.log("🚀 Forwarding proxy to", resolvedUrl);
+            console.log("🧾 Headers to proxy:", axiosConfig.headers);
           } else {
             axiosConfig.data = req.body;
             axiosConfig.headers = req.headers;
           }
 
-          const proxyResp = await axios(axiosConfig);
+          // Thử gọi bằng axios trước
+          let proxyResp;
+          try {
+            proxyResp = await axios(axiosConfig);
+          } catch (axiosErr) {
+            // nếu axios có response kèm theo, lấy nó để decide fallback
+            proxyResp = axiosErr?.response || null;
+          }
+
+          // Nếu bị 403 hoặc nhận HTML Cloudflare (Attention Required...), thử fallback bằng cloudscraper
+          const looksLikeCloudflareBlock = (r) => {
+            if (!r) return false;
+            try {
+              const body = typeof r.data === "string" ? r.data : r.data && typeof r.data === "object" ? JSON.stringify(r.data) : "";
+              if (r.status === 403) return true;
+              if (typeof body === "string" && body.includes("Attention Required")) return true;
+            } catch (e) {}
+            return false;
+          };
+
+          if (looksLikeCloudflareBlock(proxyResp)) {
+            try {
+              console.warn("[Proxy] axios returned 403/Cloudflare HTML — trying cloudscraper fallback");
+
+              // Build headers for cloudscraper - keep important ones
+              const csHeaders = {
+                "User-Agent": req.headers["user-agent"] || "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                Accept: req.headers["accept"] || "*/*",
+                Referer: req.headers["referer"] || `https://${new URL(resolvedUrl).hostname}/`,
+              };
+              if (req.headers["authorization"]) csHeaders["Authorization"] = req.headers["authorization"];
+
+              // If multipart -> build formData object acceptable by cloudscraper (request lib)
+              if (contentType.includes("multipart/form-data") && req.files) {
+                const csForm = {};
+                Object.entries(req.body || {}).forEach(([k, v]) => {
+                  csForm[k] = v;
+                });
+                for (const [field, files] of Object.entries(req.files)) {
+                  const arr = Array.isArray(files) ? files : [files];
+                  for (const f of arr) {
+                    // cloudscraper/request accepts Buffer with options
+                    csForm[field] = csForm[field] || [];
+                    csForm[field].push({
+                      value: f.data, // Buffer
+                      options: { filename: f.name, contentType: f.mimetype },
+                    });
+                  }
+                }
+
+                // cloudscraper with formData (resolveWithFullResponse để lấy status)
+                const csResp = await cloudscraper({
+                  method: axiosConfig.method || "POST",
+                  uri: resolvedUrl,
+                  formData: csForm,
+                  headers: csHeaders,
+                  gzip: true, // ✅ tự động decompress
+                  resolveWithFullResponse: true,
+                });
+
+                const zlib = require("zlib");
+                let decodedBody = csResp.body;
+                // Nếu server trả gzip/deflate/br -> tự giải nén
+                const enc = csResp.headers["content-encoding"];
+                try {
+                  if (Buffer.isBuffer(csResp.body)) {
+                    if (enc === "gzip") decodedBody = zlib.gunzipSync(csResp.body);
+                    else if (enc === "deflate") decodedBody = zlib.inflateSync(csResp.body);
+                    else if (enc === "br") decodedBody = zlib.brotliDecompressSync(csResp.body);
+                  }
+                  if (Buffer.isBuffer(decodedBody)) decodedBody = decodedBody.toString("utf8");
+                } catch (deErr) {
+                  console.warn("[Proxy decompress warn]", deErr.message);
+                }
+
+                proxyResp = {
+                  status: csResp.statusCode,
+
+                  data: (() => {
+                    try {
+                      return JSON.parse(decodedBody);
+                    } catch {
+                      return decodedBody;
+                    }
+                  })(),
+                  headers: (() => {
+                    const h = { ...csResp.headers };
+                    delete h["content-encoding"]; // tránh decompress lỗi ở client
+                    delete h["transfer-encoding"];
+                    return h;
+                  })(),
+                };
+              } else {
+                // Non-multipart: send JSON/body via cloudscraper
+                const csResp = await cloudscraper({
+                  method: axiosConfig.method || "GET",
+                  uri: resolvedUrl,
+                  body: axiosConfig.data,
+                  headers: { ...csHeaders, "Content-Type": req.headers["content-type"] || "application/json" },
+                  gzip: true, // ✅ tự động decompress
+                  json: true,
+                  resolveWithFullResponse: true,
+                });
+                proxyResp = {
+                  status: csResp.statusCode,
+                  data: csResp.body,
+                  headers: csResp.headers,
+                };
+              }
+            } catch (csErr) {
+              console.error("[Proxy cloudscraper error]", csErr && csErr.message ? csErr.message : csErr);
+              // if fallback fails, return original axios error if present
+              return res.status(502).json({
+                error: "Bad Gateway (proxy failed)",
+                message: csErr?.message || "cloudscraper fallback failed",
+                detail: csErr?.response || null,
+              });
+            }
+          }
           let safeResponseBody;
           if (proxyResp.data && typeof proxyResp.data === "object") {
             safeResponseBody = proxyResp.data;
@@ -509,7 +647,17 @@ router.use(authMiddleware, async (req, res, next) => {
           }
           return res.status(proxyResp.status).set(proxyResp.headers).send(proxyResp.data);
         } catch (err) {
-          return res.status(502).json({ error: "Bad Gateway (proxy failed)" });
+          console.error("[Proxy Error]", err.message, err.code, err?.response?.status, err?.response?.statusText);
+          if (err?.response) {
+            console.error("[Proxy Response Data]", err.response.data);
+          }
+          return res.status(502).json({
+            error: "Bad Gateway (proxy failed)",
+            message: err.message,
+            code: err.code,
+            status: err?.response?.status || null,
+            response: err?.response?.data || null,
+          });
         }
       };
       if (delay > 0) {
