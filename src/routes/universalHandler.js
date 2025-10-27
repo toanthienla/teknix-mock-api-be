@@ -122,7 +122,7 @@ router.use(async (req, res, next) => {
         return false;
       }
     });
-    console.log(`[universal] candidateRows.length=${candidateRows.length} paths=${JSON.stringify(candidateRows.map(r=>r.path))}`);
+    console.log(`[universal] candidateRows.length=${candidateRows.length} paths=${JSON.stringify(candidateRows.map((r) => r.path))}`);
 
     if (!candidateRows.length) {
       return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
