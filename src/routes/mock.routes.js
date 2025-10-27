@@ -114,6 +114,29 @@ router.use(authMiddleware, async (req, res, next) => {
   const started = Date.now();
   try {
     const method = req.method.toUpperCase();
+    // ===== BEGIN INSERT: BYPASS ADMIN/APIs KHÔNG CẦN /:workspace/:project =====
+    // Cho phép các API quản trị/FE đi thẳng tới router riêng (không bị ép /ws/pj)
+    const adminPrefixes = [
+      "/auth",
+      "/endpoint_responses",
+      "/endpoints",
+      "/folders",
+      "/projects",
+      "/workspaces",
+      "/notifications",
+      "/project_request_logs", // ✅ BYPASS cho trang log project
+      "/centrifugo",
+      "/conn-token",
+      "/sub-token",
+      "/logs",
+      "/users",
+      "/health",
+    ];
+    const reqPathNoQuery = (req.originalUrl || req.url || req.path || "").split("?")[0];
+    if (adminPrefixes.some((pre) => reqPathNoQuery.startsWith(pre))) {
+      return next();
+    }
+    // ===== END INSERT =====
     // ===== BEGIN FIX: enforce /:workspace/:project + resolve projectId (robust) =====
     // Lấy full URL nội bộ rồi tách segs an toàn: ưu tiên baseUrl, fallback originalUrl/path
     const rawBase = (req.baseUrl || "").toString();
@@ -274,15 +297,6 @@ router.use(authMiddleware, async (req, res, next) => {
       const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE path = $1 LIMIT 1", [ep.path]);
       const schema = schRows?.[0]?.schema || null;
 
-      const method = req.method.toUpperCase();
-      // ===== BEGIN INSERT: BYPASS NỘI BỘ (KHÔNG ÉP /ws/pj CHO ADMIN APIs) =====
-      // Các API quản trị FE: để router tương ứng xử lý, không đi vào mock handler
-      const adminPrefixes = ["/auth", "/endpoint_responses", "/endpoints", "/folders", "/projects", "/workspaces", "/notifications", "/centrifugo", "/conn-token", "/sub-token", "/logs", "/users", "/health"];
-      const reqPathNoQuery = (req.originalUrl || req.url || req.path || "").split("?")[0];
-      if (adminPrefixes.some((pre) => reqPathNoQuery.startsWith(pre))) {
-        return next(); // để route nội bộ xử lý (tránh trả 400)
-      }
-      // ===== END INSERT =====
       const matchRes = getMatcher(ep.path)(pathForMatch);
       const params = (matchRes && matchRes.params) || {};
 

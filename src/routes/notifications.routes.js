@@ -27,7 +27,7 @@ function NotificationsRoutes() {
   // ====================================================================================
   router.get("/notifications", async (req, res) => {
     try {
-      const currentUserId = req.user?.id;
+      const currentUserId = req.user?.user_id;
       if (!currentUserId) return res.status(401).json({ message: "Unauthorized" });
 
       // --- user_id filter (tuỳ chọn) ---
@@ -99,7 +99,7 @@ function NotificationsRoutes() {
   // ====================================================================================
   router.put("/notifications/bulk-read", async (req, res) => {
     try {
-      const userId = req.user?.id;
+      const userId = req.user?.user_id;
       if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
       const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -133,7 +133,7 @@ function NotificationsRoutes() {
   // ====================================================================================
   router.put("/notifications/mark-all-read", async (req, res) => {
     try {
-      const userId = req.user?.id;
+      const userId = req.user?.user_id;
       if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
       const projectId = req.query.project_id != null ? Number(req.query.project_id) : null;
@@ -184,7 +184,7 @@ function NotificationsRoutes() {
   // ====================================================================================
   router.delete("/notifications/read", async (req, res) => {
     try {
-      const userId = req.user?.id;
+      const userId = req.user?.user_id;
       if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
       const result = await req.db.stateless.query(
@@ -213,7 +213,7 @@ function NotificationsRoutes() {
   // ====================================================================================
   router.put("/notifications/:id", async (req, res) => {
     try {
-      const userId = req.user?.id;
+      const userId = req.user?.user_id;
       if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
       const id = Number(req.params.id);
@@ -263,7 +263,7 @@ function NotificationsRoutes() {
   // ====================================================================================
   router.delete("/notifications/:id", async (req, res) => {
     try {
-      const userId = req.user?.id;
+      const userId = req.user?.user_id;
       if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
       const id = Number(req.params.id);
