@@ -21,33 +21,22 @@ const centrifugoTokenRoutes = require("./centrifugo/centrifugo.token.routes");
 const app = express();
 
 // ---------------------------------------------
-// 1) CORS — ĐẶT TRƯỚC MỌI ROUTE
-//    Đọc danh sách origin từ .env (CORS_ORIGINS)
-//    Hỗ trợ nhiều origin, cách nhau bằng dấu phẩy
+// 1) CORS — Load toàn bộ từ .env
 // ---------------------------------------------
 const rawCorsOrigins = process.env.CORS_ORIGINS || "";
-const envOrigins = rawCorsOrigins
-  .split(",")
-  .map((o) => o.trim())
-  .filter((o) => o.length > 0);
-
-const allowedOrigins = new Set([
-  ...envOrigins,
-  "http://127.0.0.1:5500", // fallback Live Server
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "http://localhost:5173",
-  "http://localhost:18080",
-]);
+const allowedOrigins = new Set(
+  rawCorsOrigins
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0)
+);
 
 app.use(
   cors({
     origin: (origin, cb) => {
       // Cho phép request không có Origin (Postman, curl)
       if (!origin) return cb(null, true);
-      // Cho phép mọi localhost:* trong dev
-      if (origin.startsWith("http://localhost:")) return cb(null, true);
-      // Whitelist cụ thể
+      // Whitelist từ .env
       if (allowedOrigins.has(origin)) return cb(null, true);
       return cb(new Error(`Not allowed by CORS: ${origin}`));
     },
