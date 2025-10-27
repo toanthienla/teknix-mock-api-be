@@ -301,10 +301,10 @@ async function convertToStateful(endpointId) {
   } catch (e) {
     try {
       await clientStateless.query("ROLLBACK");
-    } catch {}
+    } catch { }
     try {
       await clientStateful.query("ROLLBACK");
-    } catch {}
+    } catch { }
     throw e;
   } finally {
     clientStateless.release();
@@ -852,12 +852,17 @@ async function findByOriginIdRaw(originId) {
 // 🔹 Cập nhật advanced_config theo origin_id
 async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
   // --- Validate đầu vào ---
-  if (!advancedConfigObj || typeof advancedConfigObj !== "object") {
-    throw new Error("Invalid advancedConfigObj: must be a JSON object");
+  if (
+    !advancedConfigObj ||
+    typeof advancedConfigObj !== "object" ||
+    !advancedConfigObj.advanced_config ||
+    typeof advancedConfigObj.advanced_config !== "object"
+  ) {
+    throw new Error("Invalid payload: must include 'advanced_config' object");
   }
 
   // --- Clone để tránh mutate dữ liệu gốc ---
-  const newConfig = JSON.parse(JSON.stringify(advancedConfigObj));
+  const newConfig = JSON.parse(JSON.stringify(advancedConfigObj.advanced_config));
 
   // --- Xử lý phần nextCalls ---
   if (Array.isArray(newConfig.nextCalls)) {
@@ -865,13 +870,13 @@ async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
 
     // Tìm id lớn nhất hiện có (nếu có)
     const existingIds = newConfig.nextCalls
-      .filter(c => typeof c.id === "number")
-      .map(c => c.id);
+      .filter((c) => typeof c.id === "number")
+      .map((c) => c.id);
     if (existingIds.length > 0) {
       nextId = Math.max(...existingIds) + 1;
     }
 
-    newConfig.nextCalls = newConfig.nextCalls.map(call => {
+    newConfig.nextCalls = newConfig.nextCalls.map((call) => {
       if (call.id == null) {
         call.id = nextId++;
       }
