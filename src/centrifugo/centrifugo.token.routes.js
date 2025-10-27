@@ -13,8 +13,8 @@ router.get("/centrifugo/conn-token", auth, async (req, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-    const token = await createConnectionToken(String(userId), "15m");
-    return res.json({ token, user_id: userId, exp: "15m" });
+    const token = await createConnectionToken(String(userId), "7d");
+    return res.json({ token, user_id: userId, exp: "7d" });
   } catch (e) {
     console.error("conn-token error:", e.message);
     return res.status(500).json({ error: e.message });
@@ -29,8 +29,8 @@ router.get("/centrifugo/sub-token", auth, async (req, res) => {
     const { channel } = req.query;
     if (!channel) return res.status(400).json({ error: "channel required" });
 
-    const token = await createSubscriptionToken(String(userId), channel, "15m");
-    return res.json({ token, user_id: userId, channel, exp: "15m" });
+    const token = await createSubscriptionToken(String(userId), channel, "7d");
+    return res.json({ token, user_id: userId, channel, exp: "7d" });
   } catch (e) {
     console.error("sub-token error:", e.message);
     return res.status(500).json({ error: e.message });
