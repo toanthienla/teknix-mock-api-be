@@ -882,6 +882,9 @@ async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
       }
       return call;
     });
+    console.log("originId:", originId);
+    console.log("newConfig:", newConfig);
+
   }
 
   // --- Cập nhật DB ---
@@ -891,6 +894,7 @@ async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
      WHERE origin_id = $2
      RETURNING id, origin_id, advanced_config`,
     [newConfig, originId]
+
   );
 
   if (rows.length === 0) {

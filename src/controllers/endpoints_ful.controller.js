@@ -212,7 +212,8 @@ async function updateAdvancedConfig(req, res) {
       return res.status(400).json({ error: "Trường 'advanced_config' phải là object JSON hợp lệ." });
     }
 
-    const result = await EndpointStatefulService.updateAdvancedConfigByOriginId(originId, advanced_config);
+    const result = await EndpointStatefulService.updateAdvancedConfigByOriginId(originId, req.body);
+
     if (result.notFound) {
       return res.status(404).json({ error: "Không tìm thấy endpoint stateful với origin_id này." });
     }
