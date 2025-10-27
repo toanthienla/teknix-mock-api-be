@@ -114,6 +114,52 @@ router.use(authMiddleware, async (req, res, next) => {
   const started = Date.now();
   try {
     const method = req.method.toUpperCase();
+    // ===== BEGIN FIX: enforce /:workspace/:project + resolve projectId (robust) =====
+    // Lấy full URL nội bộ rồi tách segs an toàn: ưu tiên baseUrl, fallback originalUrl/path
+    const rawBase = (req.baseUrl || "").toString();
+    const rawFull = (req.originalUrl || req.url || req.path || "").toString();
+    // Nếu baseUrl rỗng (router mount "/"), tự tách từ full path
+    const source = rawBase && rawBase !== "/" ? rawBase : rawFull;
+    const segs = source.split("?")[0].split("/").filter(Boolean);
+    const workspaceName = segs[0] || null;
+    const projectName = segs[1] || null;
+    if (!workspaceName || !projectName) {
+      return res.status(400).json({
+        message: "Full route required: /{workspaceName}/{projectName}/{path}",
+        detail: { method: req.method, url: req.originalUrl || req.url || "" },
+      });
+    }
+    if (!req.universal) req.universal = {};
+    req.universal.workspaceName = workspaceName;
+    req.universal.projectName = projectName;
+    // subPath = phần sau 2 segs đầu (giữ prefix "/"; nếu rỗng thì "/")
+    const subParts = segs.slice(2);
+    req.universal.subPath = "/" + subParts.join("/");
+    if (req.universal.subPath === "/") {
+      // Nếu router đã set req.path như "/WP_2/pj3/..." thì dùng lại để chắc chắn
+      const p = (req.path || "").toString();
+      // Nếu req.path bắt đầu bằng "/workspace/project", cắt bỏ hai segs đầu
+      const pSegs = p.split("/").filter(Boolean);
+      if (pSegs.length >= 2) req.universal.subPath = "/" + pSegs.slice(2).join("/");
+    }
+    // Chuẩn hoá: đảm bảo luôn có dấu "/" đầu, không có "//"
+    if (!req.universal.subPath.startsWith("/")) req.universal.subPath = "/" + req.universal.subPath;
+
+    // Resolve projectId từ tên workspace/project (STATeleSS DB)
+    const { rows: prjRows } = await req.db.stateless.query(
+      `SELECT p.id
+         FROM projects p
+         JOIN workspaces w ON w.id = p.workspace_id
+        WHERE w.name = $1 AND p.name = $2
+        LIMIT 1`,
+      [workspaceName, projectName]
+    );
+    const projectId = prjRows?.[0]?.id || null;
+    if (!projectId) {
+      return res.status(404).json({ message: "Project not found", workspace: workspaceName, project: projectName });
+    }
+    req.universal.projectId = projectId;
+    // ===== END FIX =====
 
     // Nếu gọi qua /:workspace/:project/... thì universal đã gắn subPath & projectId
     // subPath là phần sau /:workspace/:project, ví dụ "/cat" hoặc "/cat/1"
@@ -150,37 +196,22 @@ router.use(authMiddleware, async (req, res, next) => {
       });
     }
 
-    // Ưu tiên endpoint đúng project nếu universal cung cấp projectId,
-    // còn nếu không có projectId (gọi thẳng /cat) thì chọn ứng viên "tốt nhất":
-    // stateless trước, active trước, và có response trước.
+    // Luôn khóa theo đúng project; tuyệt đối không “trôi” sang project khác
     let ep = null;
     if (matches.length > 0) {
-      if (req.universal && req.universal.projectId) {
-        ep = matches.find((e) => e.project_id === req.universal.projectId) || matches[0];
+      const inThisProject = matches.filter((e) => e.project_id === req.universal.projectId);
+      if (inThisProject.length === 0) {
+        // Không có endpoint nào của đúng project khớp path ⇒ để 404 thay vì lấy của project khác
+        return next();
+      }
+      // Loại nhanh endpoint stateless INACTIVE để tránh trả nhầm
+      const statelessActive = inThisProject.filter((e) => !e.is_stateful && e.is_active !== false);
+      if (statelessActive.length > 0) {
+        ep = statelessActive[0];
       } else {
-        // Lấy danh sách id để kiểm tra có response hay không
-        const ids = matches.map((m) => m.id);
-        const { rows: respCounts } = await req.db.stateless.query(
-          `SELECT endpoint_id, COUNT(*)::int AS cnt
-             FROM endpoint_responses
-            WHERE endpoint_id = ANY($1)
-            GROUP BY endpoint_id`,
-          [ids]
-        );
-        const countMap = new Map(respCounts.map((r) => [Number(r.endpoint_id), Number(r.cnt)]));
-        // xếp hạng: stateless > active > có response
-        matches.sort((a, b) => {
-          const sa = a.is_stateful ? 1 : 0;
-          const sb = b.is_stateful ? 1 : 0;
-          if (sa !== sb) return sa - sb; // stateless (0) trước stateful (1)
-          const aa = a.is_active ? 1 : 0;
-          const ab = b.is_active ? 1 : 0;
-          if (aa !== ab) return ab - aa; // active (1) trước inactive (0)
-          const ca = countMap.get(a.id) || 0;
-          const cb = countMap.get(b.id) || 0;
-          return cb - ca; // nhiều response trước
-        });
-        ep = matches[0];
+        // Nếu không có stateless active thì chọn cái đầu tiên trong đúng project
+        // (có thể là stateful để rẽ nhánh stateful ở bên dưới)
+        ep = inThisProject[0];
       }
     }
 
@@ -244,6 +275,14 @@ router.use(authMiddleware, async (req, res, next) => {
       const schema = schRows?.[0]?.schema || null;
 
       const method = req.method.toUpperCase();
+      // ===== BEGIN INSERT: BYPASS NỘI BỘ (KHÔNG ÉP /ws/pj CHO ADMIN APIs) =====
+      // Các API quản trị FE: để router tương ứng xử lý, không đi vào mock handler
+      const adminPrefixes = ["/auth", "/endpoint_responses", "/endpoints", "/folders", "/projects", "/workspaces", "/notifications", "/centrifugo", "/conn-token", "/sub-token", "/logs", "/users", "/health"];
+      const reqPathNoQuery = (req.originalUrl || req.url || req.path || "").split("?")[0];
+      if (adminPrefixes.some((pre) => reqPathNoQuery.startsWith(pre))) {
+        return next(); // để route nội bộ xử lý (tránh trả 400)
+      }
+      // ===== END INSERT =====
       const matchRes = getMatcher(ep.path)(pathForMatch);
       const params = (matchRes && matchRes.params) || {};
 
