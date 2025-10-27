@@ -904,6 +904,50 @@ async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
   return rows[0];
 }
 
+async function getEndpointsByOriginId(originId) {
+  // 1️⃣ Lấy folder_id từ DB stateful
+  const queryFul = `
+    SELECT folder_id
+    FROM endpoints_ful
+    WHERE origin_id = $1
+    LIMIT 1;
+  `;
+  const { rows: fulRows } = await statefulPool.query(queryFul, [originId]);
+  if (fulRows.length === 0) {
+    return { notFound: true, message: "Không tìm thấy dữ liệu trong endpoints_ful." };
+  }
+  const folderId = fulRows[0].folder_id;
+
+  // 2️⃣ Từ folder_id → lấy project_id trong DB stateless
+  const queryProject = `
+    SELECT project_id
+    FROM folders
+    WHERE id = $1
+    LIMIT 1;
+  `;
+  const { rows: projectRows } = await statelessPool.query(queryProject, [folderId]);
+  if (projectRows.length === 0) {
+    return { notFound: true, message: "Không tìm thấy project tương ứng với folder_id." };
+  }
+  const projectId = projectRows[0].project_id;
+
+  // 3️⃣ Lấy toàn bộ endpoint theo project_id từ DB stateless
+  const queryEndpoints = `
+    SELECT e.*, f.name AS folder_name, f.project_id
+    FROM endpoints e
+    JOIN folders f ON e.folder_id = f.id
+    WHERE f.project_id = $1
+    ORDER BY e.id;
+  `;
+  const { rows } = await statelessPool.query(queryEndpoints, [projectId]);
+
+  if (rows.length === 0) {
+    return { notFound: true, message: "Không tìm thấy endpoint nào trong project tương ứng." };
+  }
+
+  return rows;
+}
+
 // ------------------------
 // Exports (function-based)
 // ------------------------
@@ -931,4 +975,5 @@ module.exports = {
   getBaseSchemaByEndpointId,
   findByOriginIdRaw,
   updateAdvancedConfigByOriginId,
+  getEndpointsByOriginId,
 };
