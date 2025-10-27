@@ -232,6 +232,36 @@ async function updateAdvancedConfig(req, res) {
   }
 }
 
+// controllers/endpoints.controller.js
+async function getEndpointsByOrigin(req, res) {
+  try {
+    const { origin_id } = req.params;
+    if (!origin_id) {
+      return res.status(400).json({ error: "Thiếu origin_id" });
+    }
+
+    const data = await EndpointStatefulService.getEndpointsByOriginId(origin_id);
+
+    if (data.notFound) {
+      return res.status(404).json(data);
+    }
+
+    return res.status(200).json({
+      code: 200,
+      message: "Success",
+      data,
+      success: true
+    });
+  } catch (err) {
+    console.error("[getEndpointsByOrigin] error:", err);
+    return res.status(500).json({
+      error: "Lỗi máy chủ khi lấy danh sách endpoint theo origin_id."
+    });
+  }
+}
+
+
+
 // --- Export tất cả các hàm ra ngoài tại một nơi duy nhất ---
 
 module.exports = {
@@ -245,4 +275,5 @@ module.exports = {
   getBaseSchemaByEndpoint,
   getAdvancedConfig,
   updateAdvancedConfig,
+  getEndpointsByOrigin,
 };
