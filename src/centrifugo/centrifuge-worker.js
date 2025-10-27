@@ -6,7 +6,7 @@ const jwt = require("jsonwebtoken");
 // Polyfill WebSocket cho môi trường Node
 global.WebSocket = WebSocket;
 
-const WS_URL = process.env.CENTRIFUGO_WS || "ws://127.0.0.1:8000/connection/websocket";
+const WS_URL = process.env.CENTRIFUGO_WS || "ws://127.0.0.1:18080/connection/websocket";
 const SECRET = process.env.CENTRIFUGO_HMAC_SECRET;
 const CHANNEL = process.env.CENTRIFUGO_SUB_CHANNEL || "notification#mock_logging";
 const WORKERID = process.env.CENTRIFUGO_WORKER_ID || "node-worker";
