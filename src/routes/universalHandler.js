@@ -38,7 +38,7 @@ function normalizePath(raw) {
   let p = raw.split("?")[0];
   try {
     p = decodeURIComponent(p);
-  } catch { }
+  } catch {}
   p = p.replace(/\/{2,}/g, "/"); // nén nhiều slash
   if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
   if (!p.startsWith("/")) p = "/" + p;
@@ -74,10 +74,7 @@ router.use(async (req, res, next) => {
     // ——— Raw path resolution ———
     // Use req.originalUrl first (full raw URL client requested, includes mount prefix).
     // Fallback to baseUrl+path if originalUrl not available (safer when router is mounted).
-    const rawPath =
-      (typeof req.originalUrl === "string" && req.originalUrl.split("?")[0]) ||
-      (req.baseUrl ? (req.baseUrl + (req.path || "")) : req.path) ||
-      "/";
+    const rawPath = (typeof req.originalUrl === "string" && req.originalUrl.split("?")[0]) || (req.baseUrl ? req.baseUrl + (req.path || "") : req.path) || "/";
     const normPath = normalizePath(rawPath);
     // If request contains workspace/project prefix (e.g. /<workspace>/<project>/...),
     // strip the first two segments for lookup in `endpoints` (which store paths without prefix).
@@ -93,7 +90,7 @@ router.use(async (req, res, next) => {
       projectName = segsAll[1];
       pathForLookup = "/" + segsAll.slice(2).join("/");
     }
-const { base: baseCandidate, id: idCandidate } = splitBaseAndNumericId(pathForLookup);
+    const { base: baseCandidate, id: idCandidate } = splitBaseAndNumericId(pathForLookup);
 
     const candidates = idCandidate !== null && baseCandidate !== pathForLookup ? [pathForLookup, baseCandidate] : [pathForLookup];
 
@@ -144,11 +141,7 @@ const { base: baseCandidate, id: idCandidate } = splitBaseAndNumericId(pathForLo
       }
     });
 
-    console.log(
-      `[universal] candidateRows.length=${candidateRows.length} paths=${JSON.stringify(
-        candidateRows.map((r) => r.path)
-      )}`
-    );
+    console.log(`[universal] candidateRows.length=${candidateRows.length} paths=${JSON.stringify(candidateRows.map((r) => r.path))}`);
 
     if (!candidateRows.length) {
       return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
@@ -166,7 +159,7 @@ const { base: baseCandidate, id: idCandidate } = splitBaseAndNumericId(pathForLo
 
     // ===============================
     // 🔹 Nếu endpoint là STATEFUL
-// ===============================
+    // ===============================
     if (matchedStateless.is_stateful === true) {
       // a) Tìm endpoint ở DB stateful
       let st = await req.db.stateful.query(
@@ -262,7 +255,7 @@ const { base: baseCandidate, id: idCandidate } = splitBaseAndNumericId(pathForLo
     }
 
     // Detect optional workspace/project prefix for stateless endpoints.
-// If request path is like /:workspace/:project/..., resolve projectId and attach subPath so
+    // If request path is like /:workspace/:project/..., resolve projectId and attach subPath so
     // downstream `mock.routes` can match using req.universal.subPath and req.universal.projectId.
     const segs = (req.path || "").split("/").filter(Boolean);
     if (segs.length >= 3) {
@@ -353,7 +346,7 @@ const { base: baseCandidate, id: idCandidate } = splitBaseAndNumericId(pathForLo
   } catch (err) {
     console.error("❌ universalHandler error:", err);
     res.status(500).json({ error: "Internal Server Error", message: err.message });
-}
+  }
 });
 
 module.exports = router;
