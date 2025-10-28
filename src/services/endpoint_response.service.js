@@ -76,47 +76,16 @@ async function create(dbPool, { endpoint_id, name, status_code, response_body = 
 //  - Không thay đổi priority ở API này (chỉ update dữ liệu)
 //  - Nếu proxy_url/proxy_method null → xóa cấu hình proxy
 // Trả về: response sau khi cập nhật hoặc null nếu không tồn tại
-async function update(
-  dbPool,
-  dbPoolfull,
-  id,
-  { name, status_code, response_body, condition, is_default, delay_ms, proxy_url = null, proxy_method = null }
-) {
-  // ==============================================
-  // 1️⃣ Kiểm tra xem response này có nằm trong DB stateful không
-  // ==============================================
-  const {
-    rows: statefulCheck,
-  } = await dbPoolfull.query(
-    `SELECT rf.id AS response_ful_id,
-            rf.endpoint_id,
-            ef.id AS endpoint_ful_id,
-            ef.origin_id AS endpoint_origin_id,
-            ef.is_active,
-            ef.method
-     FROM endpoint_responses_ful rf
-     JOIN endpoints_ful ef ON rf.endpoint_id = ef.id
-     WHERE rf.id = $1
-     LIMIT 1`,
-    [id]
-  );
-
-  const isStateful = statefulCheck.length > 0 && statefulCheck[0].is_active === true;
-
-  // ==============================================
-  // 2️⃣ Nếu không phải stateful → xử lý stateless như cũ
-  // ==============================================
-  if (!isStateful) {
+async function update(dbPool, dbPoolfull, id, { name, status_code, response_body, condition, is_default, delay_ms, proxy_url = null, proxy_method = null }) {
+  // PRIORITY FIX: if the response exists in stateless DB, always treat update as stateless.
+  // This avoids accidentally updating stateful rows when same id exists in both DBs.
+  const existingStateless = await getById(dbPool, id);
+  if (existingStateless) {
     let endpointId;
     if (typeof is_default !== "undefined") {
-      const current = await getById(dbPool, id);
-      endpointId = current?.endpoint_id;
-      if (!current) return null;
+      endpointId = existingStateless?.endpoint_id;
       if (is_default === true && endpointId) {
-        await dbPool.query(
-          "UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1 AND id <> $2",
-          [endpointId, id]
-        );
+        await dbPool.query("UPDATE endpoint_responses SET is_default = FALSE WHERE endpoint_id = $1 AND id <> $2", [endpointId, id]);
       }
     }
 
@@ -137,6 +106,33 @@ async function update(
     );
 
     return rows[0] || null;
+  }
+
+  // ==============================================
+  // 1️⃣ Kiểm tra xem response này có nằm trong DB stateful không
+  // ==============================================
+  const { rows: statefulCheck } = await dbPoolfull.query(
+    `SELECT rf.id AS response_ful_id,
+            rf.endpoint_id,
+            ef.id AS endpoint_ful_id,
+            ef.origin_id AS endpoint_origin_id,
+            ef.is_active,
+            ef.method
+     FROM endpoint_responses_ful rf
+     JOIN endpoints_ful ef ON rf.endpoint_id = ef.id
+     WHERE rf.id = $1
+     LIMIT 1`,
+    [id]
+  );
+
+  const isStateful = statefulCheck.length > 0 && statefulCheck[0].is_active === true;
+
+  // ==============================================
+  // 2️⃣ Nếu không phải stateful → (đã xử lý ở trên vì tồn tại stateless)
+  // ==============================================
+  if (!isStateful) {
+    // not found anywhere
+    return null;
   }
 
   // ==============================================
@@ -204,7 +200,6 @@ async function update(
     };
   }
 }
-
 
 // Hàm check nhanh xem response thuộc endpoint stateful hay không
 async function checkIsStatefull(dbPool, dbPoolfull, responseId) {
