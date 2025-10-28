@@ -102,19 +102,23 @@ async function getTemplateResponse(statefulPool, epFulId, name, fallback) {
 }
 // === END ADD
 
+// --- Match helpers: hỗ trợ match “sâu” cho pattern không có param/wildcard
 const matcherCache = new Map();
-
-function getMatcher(pattern) {
-  let fn = matcherCache.get(pattern);
+function getMatcher(pattern, end = true) {
+  const key = `${pattern}__end=${end ? 1 : 0}`;
+  let fn = matcherCache.get(key);
   if (!fn) {
-    fn = match(pattern, {
-      decode: decodeURIComponent,
-      strict: false,
-      end: true,
-    });
-    matcherCache.set(pattern, fn);
+    fn = match(pattern, { decode: decodeURIComponent, strict: false, end });
+    matcherCache.set(key, fn);
   }
   return fn;
+}
+function buildLoosePatternIfNeeded(pattern) {
+  // Nếu KHÔNG có ":" hoặc "*" thì tự mở rộng để match sâu: "/a/b" => "/a/b/:rest(.*)?"
+  if (!pattern.includes(":") && !pattern.includes("*")) {
+    return pattern.endsWith("/") ? `${pattern}:rest(.*)?` : `${pattern}/:rest(.*)?`;
+  }
+  return pattern;
 }
 
 function getClientIp(req) {
@@ -160,9 +164,14 @@ router.use(authMiddleware, async (req, res, next) => {
   try {
     const method = req.method.toUpperCase();
 
-    // Nếu gọi qua /:workspace/:project/... thì universal đã gắn subPath & projectId
-    // subPath là phần sau /:workspace/:project, ví dụ "/cat" hoặc "/cat/1"
-    const pathForMatch = req.universal && req.universal.subPath ? req.universal.subPath : req.path;
+    // Chuẩn hoá pathForMatch: ưu tiên subPath do universal gắn,
+    // nếu không có thì tự cắt "/:workspace/:project" nếu URL có dạng đó.
+    const pathForMatch = (() => {
+      if (req.universal && req.universal.subPath) return req.universal.subPath;
+      const p = req.path || "";
+      const m = p.match(/^\/[^/]+\/[^/]+(\/.*)$/); // "/<ws>/<pj>/<...>" -> "/<...>"
+      return m ? m[1] : p;
+    })();
 
     const { rows: endpoints } = await req.db.stateless.query(
       `SELECT e.id, e.method, e.path, e.folder_id, e.is_stateful, e.is_active, f.project_id
@@ -175,7 +184,10 @@ router.use(authMiddleware, async (req, res, next) => {
     // Tập ứng viên khớp path (dùng subPath nếu có)
     let matches = endpoints.filter((e) => {
       try {
-        const fn = getMatcher(e.path);
+        // Với pattern không có param/wildcard → cho phép match sâu
+        const hasParams = e.path.includes(":") || e.path.includes("*");
+        const pat = hasParams ? e.path : buildLoosePatternIfNeeded(e.path);
+        const fn = getMatcher(pat, hasParams /* end=true nếu có param; ngược lại đã có :rest */);
         return Boolean(fn(pathForMatch));
       } catch (_) {
         return false;
@@ -187,7 +199,9 @@ router.use(authMiddleware, async (req, res, next) => {
       const altPath = pathForMatch.endsWith("/") ? pathForMatch.slice(0, -1) : pathForMatch + "/";
       matches = endpoints.filter((e) => {
         try {
-          const fn = getMatcher(e.path);
+          const hasParams = e.path.includes(":") || e.path.includes("*");
+          const pat = hasParams ? e.path : buildLoosePatternIfNeeded(e.path);
+          const fn = getMatcher(pat, hasParams);
           return Boolean(fn(altPath));
         } catch (_) {
           return false;
@@ -235,11 +249,10 @@ router.use(authMiddleware, async (req, res, next) => {
       return next(); // rơi về 404 Express (đúng kỳ vọng vì đã chuyển stateful)
     }
 
-    // Nếu endpoint đã stateful ⇒ chuyển qua nhánh stateful (cho dù stateless inactive)
+    // Nếu endpoint là STATEFUL thì NHƯỜNG CHO universalHandler + statefulHandler
+    // để trả đúng format { code, message, data, success }
     if (ep.is_stateful === true) {
-      // → vào block xử lý STATEFUL (endpoints_ful + endpoint_data_ful + endpoint_responses_ful)
-    } else {
-      // → vào block xử lý STATELESS (endpoint_responses) như trước
+      return next();
     }
     // Helper function để validate dữ liệu dựa trên schema
     const validateSchema = (schema, data) => {
@@ -369,10 +382,12 @@ router.use(authMiddleware, async (req, res, next) => {
       //  kết thúc xử lý stateful
     }
 
-    // Logic cho stateless endpoints    const matchFn = getMatcher(ep.path);
-    const matchRes = getMatcher(ep.path)(pathForMatch);
+    // Logic cho stateless endpoints
+    const hasParams = ep.path.includes(":") || ep.path.includes("*");
+    const patForParams = hasParams ? ep.path : buildLoosePatternIfNeeded(ep.path);
+    const matchRes = getMatcher(patForParams, hasParams)(pathForMatch);
     const params = (matchRes && matchRes.params) || {};
-    const hasParams = Object.keys(params).length > 0;
+    const hasParamsInUrl = Object.keys(params).length > 0;
 
     const { rows: responses } = await req.db.stateless.query(
       `SELECT id, endpoint_id, name, status_code, response_body, is_default, priority, condition, delay_ms, proxy_url, proxy_method 
@@ -383,7 +398,7 @@ router.use(authMiddleware, async (req, res, next) => {
 
     if (responses.length === 0) {
       const status = req.method.toUpperCase() === "GET" ? 200 : 501;
-      const body = req.method.toUpperCase() === "GET" ? (hasParams ? {} : []) : { error: { message: "No response configured" } };
+      const body = req.method.toUpperCase() === "GET" ? (hasParamsInUrl ? {} : []) : { error: { message: "No response configured" } };
       try {
         const _log = await logSvc.insertLog(req.db.stateless, {
           project_id: ep.project_id || null,
