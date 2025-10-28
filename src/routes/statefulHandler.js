@@ -38,83 +38,13 @@ function expandStaticPlaceholders(str, logicalPath) {
 }
 
 /* ========== Helpers for nextCalls ========== */
-function parseTargetEndpoint(target) {
-  // expected: "/workspace/project/path/...."
-  const segs = String(target || "")
-    .split("?")[0]
-    .split("/")
-    .filter(Boolean);
-  if (segs.length < 3) return null;
-  const workspaceName = segs[0];
-  const projectName = segs[1];
-  const logicalPath = "/" + segs.slice(2).join("/");
-  return { workspaceName, projectName, logicalPath };
-}
+// remove hepler parseTargetEndpoint
 
-async function resolveEndpointForTenant(req, { workspaceName, projectName, method, logicalPath }) {
-  // 1) stateful: candidates by method+path
-  const qEf = await req.db.stateful.query(
-    `SELECT id, origin_id, folder_id
-       FROM endpoints_ful
-      WHERE is_active = TRUE
-        AND method    = $1
-        AND path      = $2
-      ORDER BY id ASC`,
-    [method, logicalPath]
-  );
-  if (!qEf.rows.length) return null;
+// remove hepler resolveEndpointForTenant
 
-  // 2) stateless: match folder -> project -> workspace
-  const folderIds = qEf.rows.map((r) => Number(r.folder_id)).filter(Boolean);
-  const qFold = await req.db.stateless.query(
-    `SELECT f.id AS folder_id, f.is_public, p.id AS project_id, p.name AS project_name, w.name AS workspace_name
-       FROM folders f
-       JOIN projects  p ON p.id = f.project_id
-       JOIN workspaces w ON w.id = p.workspace_id
-      WHERE f.id = ANY($1::int[])`,
-    [folderIds]
-  );
-  const match = qFold.rows.find((r) => String(r.workspace_name || "").toLowerCase() === String(workspaceName).toLowerCase() && String(r.project_name || "").toLowerCase() === String(projectName).toLowerCase());
-  if (!match) return null;
+// remove hepler renderNextCallBody
 
-  const chosen = qEf.rows.find((r) => Number(r.folder_id) === Number(match.folder_id));
-  if (!chosen) return null;
-  return {
-    statefulId: Number(chosen.id),
-    originId: Number(chosen.origin_id),
-    folderId: Number(chosen.folder_id),
-    projectId: Number(match.project_id),
-    isPublic: !!match.is_public,
-  };
-}
-
-function renderNextCallBody(tplBody, prevCtx, logicalPath) {
-  if (tplBody == null) return undefined;
-  // Flatten response: hoist fields from response.body.data (if object) lên response.body
-  const rawRespBody = (prevCtx?.response && prevCtx.response.body) || {};
-  const hoisted = rawRespBody && typeof rawRespBody === "object" && rawRespBody.data && typeof rawRespBody.data === "object" ? { ...rawRespBody, ...rawRespBody.data } : rawRespBody;
-  const ctx = {
-    request: prevCtx?.request || {},
-    response: { body: hoisted },
-    params: {},
-    logicalPath,
-  };
-  return renderTemplateDeepOrdered(tplBody, ctx);
-}
-
-function createCaptureRes() {
-  const bag = { statusCode: 200, body: null };
-  return {
-    status(code) {
-      bag.statusCode = code;
-      return this;
-    },
-    json(obj) {
-      bag.body = obj;
-      return bag; // return captured result to caller
-    },
-  };
-}
+// remove hepler createCaptureRes
 
 /* ========== Template helpers ========== */
 function getByPathSafe(obj, path) {
@@ -357,12 +287,7 @@ async function loadInitializedDoc(col) {
   return null;
 }
 
-// helper: tách "/workspace/project/path" -> { workspaceName, projectName, path }
-function splitTargetEndpoint(s) {
-  const m = String(s || "").match(/^\/([^/]+)\/([^/]+)(\/.*)$/);
-  if (!m) return null;
-  return { workspaceName: m[1], projectName: m[2], path: m[3] };
-}
+// remove hepler splitTargetEndpoint
 
 /* ========== MAIN ========== */
 async function statefulHandler(req, res, next) {
@@ -388,186 +313,7 @@ async function statefulHandler(req, res, next) {
     return res.status(status).json(body);
   }
 
-  // Cho phép resolve lại từ DB theo ws+pr+method+path
-  // nextCalls container (đọc từ advanced_config) + capture response gửi ra cho user
-  let nextCalls = [];
-  const _captured = { status: null, body: null };
-  const _origStatus = res.status.bind(res);
-  const _origJson = res.json.bind(res);
-  res.status = (code) => {
-    _captured.status = code;
-    return _origStatus(code);
-  };
-  res.json = (obj) => {
-    if (_captured.status == null) _captured.status = 200;
-    _captured.body = obj;
-    // schedule nextCalls (fire-and-forget) once we already know array
-    if (Array.isArray(nextCalls) && nextCalls.length) {
-      const prevCtx = { status: _captured.status, request: { body: req.body }, response: { body: _captured.body } };
-      const baseMeta = { workspaceName, projectName };
-      // do not await
-      (async () => {
-        try {
-          console.log("[nextCalls] scheduling chain (count =", nextCalls.length, ") for", `${workspaceName}/${projectName}${logicalPath}`, "status =", prevCtx.status);
-          for (const step of nextCalls) {
-            // each step sequentially
-            await (async () => {
-              const cfg = normalizeJsonb(step) || {};
-              // condition: number | number[] | "2xx" | undefined
-              let cond = null;
-              if (Array.isArray(cfg.condition)) {
-                cond = cfg.condition.map((n) => Number(n)).filter(Number.isFinite);
-              } else if (typeof cfg.condition === "string" && cfg.condition.toLowerCase() === "2xx") {
-                cond = "2xx";
-              } else if (cfg.condition != null) {
-                const n = Number(cfg.condition);
-                cond = Number.isFinite(n) ? n : null;
-              }
-              if (cond != null) {
-                const st = prevCtx.status;
-                const ok = Array.isArray(cond) ? cond.includes(st) : cond === "2xx" ? st >= 200 && st < 300 : st === cond;
-                if (!ok) {
-                  console.log("[nextCalls] skip step id=", cfg.id, "cond=", cond, "prevStatus=", st);
-                  return;
-                }
-              }
-              const parsed = parseTargetEndpoint(cfg.target_endpoint);
-              if (!parsed) {
-                console.warn("[nextCalls] invalid target_endpoint:", cfg.target_endpoint);
-                return;
-              }
-              const stepMethod = String(cfg.method || "GET").toUpperCase();
-              const target = {
-                workspaceName: parsed.workspaceName,
-                projectName: parsed.projectName,
-                method: stepMethod,
-                logicalPath: parsed.logicalPath,
-              };
-              console.log("[nextCalls] resolving target:", target);
-              const resolved = await resolveEndpointForTenant(req, target);
-              if (!resolved) {
-                console.warn("[nextCalls] target not found:", target);
-                return;
-              }
-              // build fake req/res
-              const fakeReq = {
-                ...req,
-                method: stepMethod,
-                baseUrl: `/${target.workspaceName}/${target.projectName}`,
-                path: target.logicalPath,
-                originalUrl: `${target.logicalPath}`,
-                // 🛡️ đảm bảo có headers/connection cho getClientIp & logging
-                headers: { ...(req.headers || {}) },
-                connection: req.connection || { remoteAddress: null },
-                universal: {
-                  ...(req.universal || {}),
-                  method: stepMethod,
-                  basePath: target.logicalPath,
-                  rawPath: target.logicalPath,
-                  idInUrl: null,
-                },
-                body: renderNextCallBody(cfg.body, prevCtx, target.logicalPath),
-              };
-              const fakeRes = createCaptureRes();
-              // recursive call
-              // recursive call
-              console.log("[nextCalls] → invoke", stepMethod, `/${target.workspaceName}/${target.projectName}${target.logicalPath}`, "body =", JSON.stringify(fakeReq.body || {}));
-
-              // GỌI THẬT vào chính statefulHandler (đệ quy)
-              const sub = await statefulHandler(fakeReq, fakeRes, () => {});
-
-              // Nếu handler trả capture bag thì dùng nó; nếu không, dùng fakeRes đã capture
-              const bag = sub && sub.statusCode ? sub : fakeRes;
-
-              console.log("[nextCalls] ← done", stepMethod, `/${target.workspaceName}/${target.projectName}${target.logicalPath}`, "status =", bag.statusCode, "resp =", JSON.stringify(bag.body || {}));
-
-              // recursive: also check if the invoked endpoint itself has nextCalls
-              // load its advanced_config and run deeper if present
-              try {
-                const qCfg = await req.db.stateful.query(`SELECT advanced_config FROM endpoints_ful WHERE id = $1 LIMIT 1`, [resolved.statefulId]);
-                const adv = normalizeJsonb(qCfg.rows?.[0]?.advanced_config) || {};
-                // hỗ trợ 2 shape
-                const advRoot2 = adv && Array.isArray(adv.nextCalls) ? adv : adv && adv.advanced_config && Array.isArray(adv.advanced_config.nextCalls) ? adv.advanced_config : null;
-                if (advRoot2 && Array.isArray(advRoot2.nextCalls) && advRoot2.nextCalls.length) {
-                  console.log("[nextCalls] deeper chain found (count =", advRoot2.nextCalls.length, ") at id =", resolved.statefulId);
-                  const deeperPrev = { status: bag.statusCode || 200, request: { body: fakeReq.body }, response: { body: bag.body } };
-                  // simple recursion by reusing the same scheduler pattern
-                  for (const subStep of advRoot2.nextCalls) {
-                    // reuse outer loop by creating a one-item array
-                    await (async () => {
-                      const cfg2 = normalizeJsonb(subStep) || {};
-                      let cond2 = null;
-                      if (Array.isArray(cfg2.condition)) {
-                        cond2 = cfg2.condition.map((n) => Number(n)).filter(Number.isFinite);
-                      } else if (typeof cfg2.condition === "string" && cfg2.condition.toLowerCase() === "2xx") {
-                        cond2 = "2xx";
-                      } else if (cfg2.condition != null) {
-                        const n2 = Number(cfg2.condition);
-                        cond2 = Number.isFinite(n2) ? n2 : null;
-                      }
-                      if (cond2 != null) {
-                        const st2 = deeperPrev.status;
-                        const ok2 = Array.isArray(cond2) ? cond2.includes(st2) : cond2 === "2xx" ? st2 >= 200 && st2 < 300 : st2 === cond2;
-                        if (!ok2) {
-                          console.log("[nextCalls][deep] skip step id=", cfg2.id, "cond=", cond2, "prevStatus=", st2);
-                          return;
-                        }
-                      }
-                      const parsed2 = parseTargetEndpoint(cfg2.target_endpoint);
-                      if (!parsed2) {
-                        console.warn("[nextCalls][deep] invalid target_endpoint:", cfg2.target_endpoint);
-                        return;
-                      }
-                      const m2 = String(cfg2.method || "GET").toUpperCase();
-                      const t2 = { workspaceName: parsed2.workspaceName, projectName: parsed2.projectName, method: m2, logicalPath: parsed2.logicalPath };
-                      console.log("[nextCalls][deep] resolving target:", t2);
-                      const r2 = await resolveEndpointForTenant(req, t2);
-                      if (!r2) {
-                        console.warn("[nextCalls][deep] target not found:", t2);
-                        return;
-                      }
-                      const childReq = {
-                        ...req,
-                        method: m2,
-                        baseUrl: `/${t2.workspaceName}/${t2.projectName}`, // ✅ đảm bảo tách đúng ws/pr
-                        path: t2.logicalPath,
-                        originalUrl: `${t2.logicalPath}`,
-                        headers: { ...(req.headers || {}) }, // ✅ để getClientIp & log không lỗi
-                        connection: req.connection || { remoteAddress: null }, // ✅ phòng trường hợp thiếu
-                        universal: {
-                          ...(req.universal || {}),
-                          method: m2,
-                          basePath: t2.logicalPath,
-                          rawPath: t2.logicalPath,
-                          idInUrl: null,
-                        },
-                        body: renderNextCallBody(cfg2.body, deeperPrev, t2.logicalPath),
-                      };
-                      const childRes = createCaptureRes();
-
-                      console.log("[nextCalls][deep] → invoke", m2, `/${t2.workspaceName}/${t2.projectName}${t2.logicalPath}`, "body =", JSON.stringify(childReq.body || {}));
-
-                      await statefulHandler(childReq, childRes, () => {}); // ✅ đi qua cùng handler → ghi log như thường
-
-                      console.log("[nextCalls][deep] ← done", m2, `/${t2.workspaceName}/${t2.projectName}${t2.logicalPath}`, "status =", childRes.statusCode, "resp =", JSON.stringify(childRes.body || {}));
-                    })();
-                  }
-                }
-                console.log("[nextCalls] chain finished.");
-              } catch (e) {
-                console.error("[nextCalls deeper] error:", e?.message || e);
-              }
-            })();
-          }
-        } catch (e) {
-          console.error("[nextCalls] chain error:", e?.message || e);
-        }
-      })();
-    } else {
-      console.log("[nextCalls] none configured for", `${workspaceName}/${projectName}${logicalPath}`);
-    }
-    return _origJson(obj);
-  };
+  // (Removed) nextCalls chain: no res wrappers, no capture/forward logic.
 
   try {
     /* 1) RÀNG BUỘC & RESOLVE endpoint theo workspace + project + method + path (đúng DB) */
@@ -650,18 +396,11 @@ async function statefulHandler(req, res, next) {
     const docId = doc._id;
     const current = Array.isArray(doc.data_current) ? doc.data_current : doc.data_current ? [doc.data_current] : [];
 
-    // 4) LOAD SCHEMA ở DB STATEFUL
+    // 4) LOAD SCHEMA ở DB STATEFUL (không còn đọc/khởi tạo nextCalls/advanced_config)
     let endpointSchemaDb = {};
-    let advancedConfig = {};
     if (statefulId != null) {
-      const { rows: schRows } = await req.db.stateful.query("SELECT schema, advanced_config FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
+      const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
       endpointSchemaDb = normalizeJsonb(schRows?.[0]?.schema) || {};
-      advancedConfig = normalizeJsonb(schRows?.[0]?.advanced_config) || {};
-
-      // 🔎 hỗ trợ cả 2 shape: {nextCalls:[...]} hoặc {advanced_config:{nextCalls:[...]}}
-      const advRoot = advancedConfig && Array.isArray(advancedConfig.nextCalls) ? advancedConfig : advancedConfig && advancedConfig.advanced_config && Array.isArray(advancedConfig.advanced_config.nextCalls) ? advancedConfig.advanced_config : null;
-      nextCalls = advRoot ? advRoot.nextCalls.map(normalizeJsonb) : [];
-      console.log("[nextCalls] loaded for endpoint", statefulId, "count =", nextCalls.length);
     }
 
     // 5) BASE SCHEMA ở DB STATELESS (theo folderId)
