@@ -9,6 +9,51 @@ const logSvc = require("../services/project_request_log.service");
 const { getCollection } = require("../config/db");
 const FormData = require("form-data");
 const cloudscraper = require("cloudscraper");
+const os = require("os");
+
+// === NEW: sanitize headers (both directions)
+const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
+function sanitizeForwardHeaders(h) {
+  const out = {};
+  if (!h) return out;
+  for (const [k, v] of Object.entries(h)) {
+    const key = k.toLowerCase();
+    if (HOP_BY_HOP.has(key)) continue;
+    if (key === "host") continue;
+    if (key === "content-length") continue;
+    if (key === "content-encoding") continue; // tránh mismatch decompress
+    if (key === "accept-encoding") continue; // tránh CF/chuẩn hoá
+    // Không forward header nội bộ dùng để điều khiển proxy
+    if (key === "x-proxy-authorization") continue;
+    if (key === "x-proxy-auth-profile") continue;
+    out[k] = v;
+  }
+  return out;
+}
+function sanitizeResponseHeaders(h) {
+  const out = {};
+  if (!h) return out;
+  for (const [k, v] of Object.entries(h)) {
+    const key = k.toLowerCase();
+    if (HOP_BY_HOP.has(key)) continue;
+    if (key === "content-encoding") continue; // body đã được axios giải nén
+    if (key === "transfer-encoding") continue;
+    if (key === "content-length") continue; // để Node tự set lại
+    out[k] = v;
+  }
+  return out;
+}
+// === NEW: Authorization override (từ header nội bộ hoặc env profile)
+function resolveAuthOverride(req) {
+  const h = req.headers || {};
+  if (h["x-proxy-authorization"]) return String(h["x-proxy-authorization"]);
+  const profile = h["x-proxy-auth-profile"];
+  if (profile) {
+    const envKey = `PROXY_AUTH_${String(profile).toUpperCase()}`;
+    if (process.env[envKey]) return process.env[envKey];
+  }
+  return null;
+}
 
 // === ADD: helper lấy danh sách id từ request theo thứ tự ưu tiên
 const pickIdsFromReq = (req) => {
@@ -450,6 +495,15 @@ router.use(authMiddleware, async (req, res, next) => {
             httpsAgent: new https.Agent({ rejectUnauthorized: false }),
           };
 
+          // Chuẩn hoá header forward & Authorization override
+          const authOverride = resolveAuthOverride(req);
+          let fwdHeaders = sanitizeForwardHeaders(req.headers);
+          if (authOverride) {
+            fwdHeaders["Authorization"] = authOverride;
+          }
+          // Default UA để giảm CF block
+          fwdHeaders["User-Agent"] = fwdHeaders["User-Agent"] || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
+
           // --- Detect multipart/form-data (upload) ---
           if (contentType.includes("multipart/form-data") && req.files) {
             const form = new FormData();
@@ -474,15 +528,18 @@ router.use(authMiddleware, async (req, res, next) => {
             });
             axiosConfig.data = form;
             axiosConfig.headers = {
-              ...req.headers,
+              ...fwdHeaders,
               ...formHeaders,
               "Content-Length": contentLength,
             };
             console.log("🚀 Forwarding proxy to", resolvedUrl);
-            console.log("🧾 Headers to proxy:", axiosConfig.headers);
+            console.log("🧾 Headers to proxy:", {
+              ...axiosConfig.headers,
+              Authorization: axiosConfig.headers.Authorization ? "[REDACTED]" : undefined,
+            });
           } else {
             axiosConfig.data = req.body;
-            axiosConfig.headers = req.headers;
+            axiosConfig.headers = fwdHeaders;
           }
 
           // Thử gọi bằng axios trước
@@ -515,7 +572,9 @@ router.use(authMiddleware, async (req, res, next) => {
                 Accept: req.headers["accept"] || "*/*",
                 Referer: req.headers["referer"] || `https://${new URL(resolvedUrl).hostname}/`,
               };
-              if (req.headers["authorization"]) csHeaders["Authorization"] = req.headers["authorization"];
+              // Ưu tiên override nếu có
+              if (authOverride) csHeaders["Authorization"] = authOverride;
+              else if (req.headers["authorization"]) csHeaders["Authorization"] = req.headers["authorization"];
 
               // If multipart -> build formData object acceptable by cloudscraper (request lib)
               if (contentType.includes("multipart/form-data") && req.files) {
@@ -576,6 +635,7 @@ router.use(authMiddleware, async (req, res, next) => {
                     delete h["transfer-encoding"];
                     return h;
                   })(),
+                  headers: sanitizeResponseHeaders(csResp.headers),
                 };
               } else {
                 // Non-multipart: send JSON/body via cloudscraper
@@ -591,7 +651,7 @@ router.use(authMiddleware, async (req, res, next) => {
                 proxyResp = {
                   status: csResp.statusCode,
                   data: csResp.body,
-                  headers: csResp.headers,
+                  headers: sanitizeResponseHeaders(csResp.headers),
                 };
               }
             } catch (csErr) {
@@ -613,6 +673,8 @@ router.use(authMiddleware, async (req, res, next) => {
               raw_body: String(proxyResp.data ?? ""),
             };
           }
+          const outHeaders = sanitizeResponseHeaders(proxyResp.headers);
+          console.log(`[Proxy] ${axiosConfig.method || req.method} ${resolvedUrl} -> ${proxyResp.status}`);
           const _log = await logSvc.insertLog(req.db.stateless, {
             project_id: ep.project_id || null,
             endpoint_id: ep.id,
@@ -645,7 +707,7 @@ router.use(authMiddleware, async (req, res, next) => {
           } else {
             console.warn("[after insertLog] missing logId - skip notify");
           }
-          return res.status(proxyResp.status).set(proxyResp.headers).send(proxyResp.data);
+          return res.status(proxyResp.status).set(outHeaders).send(proxyResp.data);
         } catch (err) {
           console.error("[Proxy Error]", err.message, err.code, err?.response?.status, err?.response?.statusText);
           if (err?.response) {
