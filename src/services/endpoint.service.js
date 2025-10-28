@@ -172,19 +172,13 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
     }
 
     // Kiểm tra trùng name trong cùng folder
-    const { rows: dupRows } = await clientStateless.query(
-      "SELECT id FROM endpoints WHERE folder_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3",
-      [folder_id, value, endpointId]
-    );
+    const { rows: dupRows } = await clientStateless.query("SELECT id FROM endpoints WHERE folder_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3", [folder_id, value, endpointId]);
     if (dupRows.length > 0) {
       return { success: false, message: "An endpoint with this name already exists in the folder." };
     }
 
     // Update name
-    const { rows: updatedRows } = await clientStateless.query(
-      "UPDATE endpoints SET name=$1, updated_at=NOW() WHERE id=$2 RETURNING *",
-      [value, endpointId]
-    );
+    const { rows: updatedRows } = await clientStateless.query("UPDATE endpoints SET name=$1, updated_at=NOW() WHERE id=$2 RETURNING *", [value, endpointId]);
     return { success: true, data: updatedRows[0] };
   }
 
@@ -238,28 +232,47 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
   return { success: false, message: "Unexpected endpoint state." };
 }
 
-
 // Delete endpoint
 async function deleteEndpoint(dbPool, endpointId) {
-  // Lấy thông tin endpoint để kiểm tra is_stateful
   const endpoint = await getEndpointById(dbPool, endpointId);
   if (!endpoint) return null;
 
-  // Nếu là stateful, gọi service xóa của stateful
-  if (endpoint.is_stateful === true) {
-    // Tìm stateful endpoint bằng origin_id
-    const statefulEndpoint = await statefulEndpointSvc.findByOriginId(endpoint.id);
-    if (statefulEndpoint) {
-      await statefulEndpointSvc.deleteById(statefulEndpoint.id);
+  // dùng 1 transaction để đảm bảo tính nhất quán
+  await dbPool.query("BEGIN");
+  try {
+    // 1) Nếu là stateful, xóa bản ghi ở stateful trước (nếu có)
+    if (endpoint.is_stateful === true) {
+      const statefulEndpoint = await statefulEndpointSvc.findByOriginId(endpoint.id);
+      if (statefulEndpoint) {
+        await statefulEndpointSvc.deleteById(statefulEndpoint.id);
+      }
     }
+
+    // 2) Nullify notifications ràng buộc tới endpoint này
+    //    (theo yêu cầu: set NULL cho cả 3 cột)
+    await dbPool.query(
+      `
+        UPDATE notifications
+           SET project_request_log_id = NULL,
+               endpoint_id = NULL,
+               user_id = NULL
+        WHERE endpoint_id = $1
+      `,
+      [endpointId]
+    );
+
+    // 3) Nullify logs + xóa endpoint_responses (logic đã có sẵn)
+    await logSvc.nullifyEndpointAndResponses(dbPool, endpointId);
+
+    // 4) Xóa endpoint gốc
+    await dbPool.query("DELETE FROM endpoints WHERE id=$1", [endpointId]);
+
+    await dbPool.query("COMMIT");
+    return { success: true, data: endpoint };
+  } catch (err) {
+    await dbPool.query("ROLLBACK");
+    throw err;
   }
-
-  // Luôn thực hiện xóa cho stateless (xóa bản ghi gốc)
-  // Logic cũ để null hóa log và xóa vẫn được giữ lại
-  await logSvc.nullifyEndpointAndResponses(dbPool, endpointId);
-  await dbPool.query("DELETE FROM endpoints WHERE id=$1", [endpointId]);
-
-  return { success: true, data: endpoint };
 }
 
 module.exports = {
