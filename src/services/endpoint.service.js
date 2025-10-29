@@ -153,7 +153,7 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
   const endpoint = epRows[0];
   if (!endpoint) return { success: false, message: "Endpoint not found." };
 
-  const { is_active, is_stateful, folder_id } = endpoint;
+  const { is_active, is_stateful, folder_id, name: oldName } = endpoint;
 
   // 2️⃣ Xác định loại endpoint
   const isStateless = is_active === true && is_stateful === false;
@@ -197,6 +197,17 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
     const statefulEp = sfRows[0];
     if (!statefulEp) return { success: false, message: "Stateful endpoint not found." };
 
+    // Nếu update name → kiểm tra trùng name trong folder tương ứng
+    if (field === "name") {
+      const { rows: dupRows } = await clientStateful.query(
+        "SELECT id FROM endpoints_ful WHERE folder_id=$1 AND LOWER(name)=LOWER($2) AND origin_id<>$3",
+        [folder_id, value, endpointId]
+      );
+      if (dupRows.length > 0) {
+        return { success: false, message: "An endpoint with this name already exists in the folder." };
+      }
+    }
+
     const updates = [];
     const values = [];
     let idx = 1;
@@ -207,7 +218,6 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
     }
 
     if (field === "schema") {
-      // schema có thể là dạng fields hoặc rules object — UI đã đảm bảo
       if (typeof value !== "object" || Array.isArray(value) || Object.keys(value).length === 0) {
         return { success: false, message: "Invalid schema format." };
       }
@@ -234,10 +244,8 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
     return { success: true, data: updatedRows[0] };
   }
 
-  // Nếu đến đây tức là không thỏa điều kiện nào
   return { success: false, message: "Unexpected endpoint state." };
 }
-
 
 // Delete endpoint
 async function deleteEndpoint(dbPool, endpointId) {
