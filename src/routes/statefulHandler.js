@@ -2,6 +2,8 @@
 const { getCollection } = require("../config/db");
 const logSvc = require("../services/project_request_log.service");
 const { onProjectLogInserted } = require("../services/notification.service");
+const { runNextCalls, buildPlanFromAdvancedConfig } = require("./nextcallRouter");
+
 /* ========== Utils ========== */
 function getClientIp(req) {
   return req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.connection?.remoteAddress || req.ip || null;
@@ -259,6 +261,12 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
       }
     }
     if (logId) {
+      // expose logId cho caller (để nextCall dùng làm parent_log_id)
+      try {
+        req.res = req.res || {};
+        req.res.locals = req.res.locals || {};
+        req.res.locals.lastLogId = logId;
+      } catch {}
       try {
         await onProjectLogInserted(logId, req.db.stateless);
       } catch (e) {
@@ -306,14 +314,53 @@ async function statefulHandler(req, res, next) {
   const workspaceName = baseSegs[0] || null;
   const projectName = baseSegs[1] || null;
 
+  // Vars for selected endpoint / tenant
+  let statefulId = null;
+  let originId = null;
+  let folderId = null;
+  let projectId = null;
+  let isPublic = false;
+
+  // nextCall flags
+  const isNextCall = req.flags?.isNextCall === true;
+  const suppressNextCalls = req.flags?.suppressNextCalls === true;
+  let advancedConfig = null; // sẽ được nạp lúc đọc endpoints_ful
+
   if (!workspaceName || !projectName || !basePath) {
+    console.warn("[nextCalls] skip: missing full route prefix /:workspace/:project");
     const status = 400;
     const body = { message: "Full route required: /{workspaceName}/{projectName}/{path}", detail: { method, path: rawPath } };
     await logWithStatefulResponse(req, { projectId: null, originId: null, statefulId: null, method, path: rawPath, status, responseBody: body, started, payload: req.body, statefulResponseId: null });
-    return res.status(status).json(body);
+    res.status(status).json(body);
+    fireNextCallsIfAny(status, body);
+    return;
   }
 
   // (Removed) nextCalls chain: no res wrappers, no capture/forward logic.
+
+  // 👉 Helper: sau khi trả response chính thì mới bắn nextCalls (fire-and-forget)
+  function fireNextCallsIfAny(status, body, insertedLogId) {
+    try {
+      if (isNextCall || suppressNextCalls) return;
+      if (!advancedConfig?.nextCalls?.length) return;
+      const parentId = insertedLogId ?? req.res?.locals?.lastLogId ?? null;
+
+      const rootCtx = {
+        workspaceName,
+        projectName,
+        user: req.user ?? null,
+        res: { status, body },
+        log: { id: parentId },
+      };
+      const plan = buildPlanFromAdvancedConfig(advancedConfig.nextCalls);
+      console.log(`[nextCalls] scheduling chain (count = ${advancedConfig.nextCalls.length}) for ${workspaceName}/${projectName}${logicalPath} status = ${status}`);
+      runNextCalls(plan, rootCtx, {
+        statefulDb: req.db.stateful,
+        statelessDb: req.db.stateless,
+        user: req.user,
+      }).catch(() => {});
+    } catch {}
+  }
 
   try {
     /* 1) RÀNG BUỘC & RESOLVE endpoint theo workspace + project + method + path (đúng DB) */
@@ -338,7 +385,9 @@ async function statefulHandler(req, res, next) {
           detail: { method: wantedMethod, path: wantedPath },
         };
         await logWithStatefulResponse(req, { projectId: null, originId: null, statefulId: null, method, path: rawPath, status, responseBody: body, started, payload: req.body });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       // 1b) Lọc theo tenant ở STATELESS bằng folder_id
@@ -360,7 +409,9 @@ async function statefulHandler(req, res, next) {
           detail: { workspaceName, projectName, method: wantedMethod, path: wantedPath },
         };
         await logWithStatefulResponse(req, { projectId: null, originId: null, statefulId: null, method, path: rawPath, status, responseBody: body, started, payload: req.body });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       // 1c) Chọn endpoint ứng với folder khớp
@@ -372,7 +423,9 @@ async function statefulHandler(req, res, next) {
           detail: { folderId: match.folder_id, method: wantedMethod, path: wantedPath },
         };
         await logWithStatefulResponse(req, { projectId: null, originId: null, statefulId: null, method, path: rawPath, status, responseBody: body, started, payload: req.body });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       // Bind đúng tenant
@@ -391,16 +444,22 @@ async function statefulHandler(req, res, next) {
       const status = 404;
       const body = { message: `Collection ${collectionName} is not initialized (missing seeded document).` };
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: body, started, payload: req.body });
-      return res.status(status).json(body);
+      res.status(status).json(body);
+      fireNextCallsIfAny(status, body);
+      return;
     }
     const docId = doc._id;
     const current = Array.isArray(doc.data_current) ? doc.data_current : doc.data_current ? [doc.data_current] : [];
 
     // 4) LOAD SCHEMA ở DB STATEFUL (không còn đọc/khởi tạo nextCalls/advanced_config)
+    // 4) LOAD SCHEMA + ADVANCED_CONFIG ở DB STATEFUL
     let endpointSchemaDb = {};
     if (statefulId != null) {
-      const { rows: schRows } = await req.db.stateful.query("SELECT schema FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
+      const { rows: schRows } = await req.db.stateful.query("SELECT schema, advanced_config FROM endpoints_ful WHERE id = $1 LIMIT 1", [statefulId]);
       endpointSchemaDb = normalizeJsonb(schRows?.[0]?.schema) || {};
+      advancedConfig = normalizeJsonb(schRows?.[0]?.advanced_config) || null;
+      const __cnt = Array.isArray(advancedConfig?.nextCalls) ? advancedConfig.nextCalls.length : 0;
+      console.log(`[nextCalls] loaded for endpoint ${statefulId} count = ${__cnt}`);
     }
 
     // 5) BASE SCHEMA ở DB STATELESS (theo folderId)
@@ -428,7 +487,9 @@ async function statefulHandler(req, res, next) {
         started,
         payload: req.body,
       });
-      return res.status(status).json(body);
+      res.status(status).json(body);
+      fireNextCallsIfAny(status, body);
+      return;
     }
 
     /* 6) LOAD RESPONSE BUCKET Ở DB STATEFUL */
@@ -476,7 +537,9 @@ async function statefulHandler(req, res, next) {
               started,
               payload: req.body,
             });
-            return res.status(status).json(body);
+            res.status(status).json(body);
+            fireNextCallsIfAny(status, body);
+            return;
           }
           // Not found
           const status = 404;
@@ -509,7 +572,9 @@ async function statefulHandler(req, res, next) {
             payload: req.body,
             statefulResponseId: responseId,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
 
         // GET all
@@ -532,7 +597,9 @@ async function statefulHandler(req, res, next) {
           started,
           payload: req.body,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       // ---------- PRIVATE ----------
@@ -560,7 +627,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload: req.body,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
 
         const status = 404;
@@ -593,7 +662,9 @@ async function statefulHandler(req, res, next) {
           payload: req.body,
           statefulResponseId: responseId,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       // GET all for private user
@@ -620,7 +691,9 @@ async function statefulHandler(req, res, next) {
         started,
         payload: req.body,
       });
-      return res.status(status).json(body);
+      res.status(status).json(body);
+      fireNextCallsIfAny(status, body);
+      return;
     }
 
     /* ===== POST ===== */
@@ -649,7 +722,9 @@ async function statefulHandler(req, res, next) {
           started,
           payload: req.body,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       const payload = req.body || {};
@@ -681,7 +756,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
         if (idxKey <= lastIndex) {
           const status = 400;
@@ -702,7 +779,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
         lastIndex = idxKey;
       }
@@ -730,7 +809,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
         if (hasValue && v !== null && v !== undefined && !isTypeOK(rule.type, v)) {
           const status = 400;
@@ -751,7 +832,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
       }
 
@@ -777,7 +860,9 @@ async function statefulHandler(req, res, next) {
           started,
           payload,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       if ((idRule?.required === false || idRule?.required === undefined) && (newId === undefined || newId === null)) {
@@ -805,7 +890,9 @@ async function statefulHandler(req, res, next) {
           started,
           payload,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       if (newId !== undefined && current.some((x) => Number(x?.id) === Number(newId))) {
@@ -839,7 +926,9 @@ async function statefulHandler(req, res, next) {
           payload,
           statefulResponseId: responseId,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       // Thêm mới item
@@ -878,7 +967,9 @@ async function statefulHandler(req, res, next) {
         payload: req.body,
         statefulResponseId: responseId,
       });
-      return res.status(status).json(body);
+      res.status(status).json(body);
+      fireNextCallsIfAny(status, body);
+      return;
     }
 
     /* ===== PUT ===== */
@@ -907,7 +998,9 @@ async function statefulHandler(req, res, next) {
           started,
           payload: req.body,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       if (!hasId) {
@@ -940,7 +1033,9 @@ async function statefulHandler(req, res, next) {
           payload: req.body,
           statefulResponseId: responseId,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       const idx = current.findIndex((x) => Number(x?.id) === Number(idFromUrl));
@@ -975,7 +1070,9 @@ async function statefulHandler(req, res, next) {
           payload: req.body,
           statefulResponseId: responseId,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       // owner check
@@ -1000,7 +1097,9 @@ async function statefulHandler(req, res, next) {
           started,
           payload: req.body,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       let payload = req.body || {};
@@ -1033,7 +1132,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
         if (idxSchema <= lastIndex) {
           const status = 400;
@@ -1054,7 +1155,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
         lastIndex = idxSchema;
       }
@@ -1081,7 +1184,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
         if (hasValue && v !== null && v !== undefined && !isTypeOK(rule.type, v)) {
           const status = 400;
@@ -1102,7 +1207,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
       }
 
@@ -1157,7 +1264,9 @@ async function statefulHandler(req, res, next) {
         payload: req.body,
         statefulResponseId: responseId,
       });
-      return res.status(status).json(body);
+      res.status(status).json(body);
+      fireNextCallsIfAny(status, body);
+      return;
     }
 
     /* ===== DELETE ===== */
@@ -1186,7 +1295,9 @@ async function statefulHandler(req, res, next) {
           started,
           payload: req.body,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       if (hasId) {
@@ -1222,7 +1333,9 @@ async function statefulHandler(req, res, next) {
             payload: req.body,
             statefulResponseId: responseId,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
 
         const ownerId = Number(current[idx]?.user_id);
@@ -1245,7 +1358,9 @@ async function statefulHandler(req, res, next) {
             started,
             payload: req.body,
           });
-          return res.status(status).json(body);
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
         }
         const updated = current.slice();
         updated.splice(idx, 1);
@@ -1281,7 +1396,9 @@ async function statefulHandler(req, res, next) {
           payload: req.body,
           statefulResponseId: responseId,
         });
-        return res.status(status).json(body);
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
       }
 
       // Xoá toàn bộ data của user hiện tại
@@ -1319,7 +1436,9 @@ async function statefulHandler(req, res, next) {
         payload: req.body,
         statefulResponseId: responseId,
       });
-      return res.status(status).json(body);
+      res.status(status).json(body);
+      fireNextCallsIfAny(status, body);
+      return;
     }
 
     /* ===== Others ===== */
@@ -1327,14 +1446,18 @@ async function statefulHandler(req, res, next) {
       const status = 405;
       const { rendered, responseId } = selectAndRenderResponseAdv(responsesBucket, status, {}, { fallback: { message: "Method Not Allowed" }, logicalPath });
       await logWithStatefulResponse(req, { projectId, originId, statefulId, method, path: rawPath, status, responseBody: rendered, started, payload: req.body, statefulResponseId: responseId });
-      return res.status(status).json(rendered);
+      res.status(status).json(rendered);
+      fireNextCallsIfAny(status, rendered);
+      return;
     }
   } catch (err) {
     console.error("[statefulHandler] error:", err);
     const status = 500;
     const rendered = { message: "Internal Server Error", error: err.message };
     await logWithStatefulResponse(req, { projectId: null, originId: null, statefulId: null, method, path: rawPath, status, responseBody: rendered, started, payload: req.body });
-    return res.status(status).json(rendered);
+    res.status(status).json(rendered);
+    fireNextCallsIfAny(status, rendered);
+    return;
   }
 }
 
