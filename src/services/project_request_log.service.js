@@ -182,6 +182,16 @@ exports.nullifyFolderTree = async (client, folderId) => {
     [endpointIds]
   );
 
+  // 🔄 Nullify notifications liên quan các endpoint trong folder
+  await client.query(
+    `UPDATE notifications
+       SET project_request_log_id = NULL,
+           endpoint_id            = NULL,
+           user_id                = NULL
+     WHERE endpoint_id = ANY($1)`,
+    [endpointIds]
+  );
+
   console.log(`🧹 Đã nullify logs cho folder ${folderId} (liên quan ${endpointIds.length} endpoint).`);
 };
 
@@ -224,6 +234,14 @@ exports.nullifyProjectTree = async (client, projectId) => {
        WHERE endpoint_id = ANY($1)`,
       [endpointIds]
     );
+    await client.query(
+      `UPDATE notifications
+         SET project_request_log_id = NULL,
+             endpoint_id            = NULL,
+             user_id                = NULL
+       WHERE endpoint_id = ANY($1)`,
+      [endpointIds]
+    );
   }
 
   console.log(`🧹 Đã nullify logs cho project ${projectId}`);
@@ -236,6 +254,14 @@ exports.nullifyEndpointTree = async (client, endpointId) => {
      WHERE endpoint_id = $1`,
     [endpointId]
   );
+  +(await client.query(
+    `UPDATE notifications
+       SET project_request_log_id = NULL,
+           endpoint_id            = NULL,
+           user_id                = NULL
+     WHERE endpoint_id = $1`,
+    [endpointId]
+  ));
   console.log(`🧹 Đã nullify logs cho endpoint ${endpointId}`);
 };
 

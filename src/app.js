@@ -116,7 +116,6 @@ app.use("/projects", projectRoutes);
 app.use("/endpoints", endpointRoutes);
 app.use("/folders", folderRoutes);
 app.use("/endpoints_ful", endpointsFulRoutes);
-app.use(mockRoutes);
 
 // Routes giữ path gốc cũ
 app.use("/", endpointResponseRoutes);
@@ -125,6 +124,9 @@ app.use("/", createNotificationsRoutes());
 
 // Logs stateless/stateful
 app.use("/project_request_logs", projectRequestLogRoutes);
+
+//Legacy stateless (không prefix) — đặt SAU các route cụ thể
+app.use(mockRoutes);
 
 // ---------------------------------------------
 // 9) Universal handler — ĐẶT CUỐI CÙNG
