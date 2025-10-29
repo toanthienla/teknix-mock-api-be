@@ -30,4 +30,14 @@ router.get("/advanced/:id", ctrlEndpointFul.getAdvancedConfig);
 router.put("/advanced/:id", ctrlEndpointFul.updateAdvancedConfig);
 // lấy toàn bộ endpoint để lấy các path của project đó.
 router.get("/advanced/path/:origin_id", ctrlEndpointFul.getEndpointsByOrigin);
+
+// bật/tắt gửi notification
+router.patch("/:id/notification", asyncHandler(ctrl.setNotificationFlag));
+router.patch("/:id/send", asyncHandler(ctrl.enableNotification));
+router.patch("/:id/not-send", asyncHandler(ctrl.disableNotification));
+// Bật/tắt gửi notification (PUT cũng được)
+router.put("/:id/notification", asyncHandler(ctrl.setNotificationFlag));
+router.put("/:id/send", asyncHandler(ctrl.enableNotification));
+router.put("/:id/not-send", asyncHandler(ctrl.disableNotification));
+
 module.exports = router;

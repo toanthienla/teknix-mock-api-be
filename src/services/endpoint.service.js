@@ -193,10 +193,7 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
 
     // Nếu update name → kiểm tra trùng name trong folder tương ứng
     if (field === "name") {
-      const { rows: dupRows } = await clientStateful.query(
-        "SELECT id FROM endpoints_ful WHERE folder_id=$1 AND LOWER(name)=LOWER($2) AND origin_id<>$3",
-        [folder_id, value, endpointId]
-      );
+      const { rows: dupRows } = await clientStateful.query("SELECT id FROM endpoints_ful WHERE folder_id=$1 AND LOWER(name)=LOWER($2) AND origin_id<>$3", [folder_id, value, endpointId]);
       if (dupRows.length > 0) {
         return { success: false, message: "An endpoint with this name already exists in the folder." };
       }
@@ -284,10 +281,32 @@ async function deleteEndpoint(dbPool, endpointId) {
   }
 }
 
+async function setSendNotification(dbPool, endpointId, enable) {
+  // kiểm tra tồn tại
+  const { rows: chk } = await dbPool.query("SELECT id FROM endpoints WHERE id = $1 LIMIT 1", [endpointId]);
+  if (chk.length === 0) {
+    return { success: false, message: "Endpoint not found." };
+  }
+
+  const { rows } = await dbPool.query(
+    `
+    UPDATE endpoints
+       SET send_notification = $2,
+           updated_at = NOW()
+     WHERE id = $1
+     RETURNING id, name, method, path, is_active, is_stateful, send_notification, updated_at
+    `,
+    [endpointId, !!enable]
+  );
+
+  return { success: true, data: rows[0] };
+}
+
 module.exports = {
   getEndpoints,
   getEndpointById,
   createEndpoint,
   updateEndpoint,
   deleteEndpoint,
+  setSendNotification,
 };
