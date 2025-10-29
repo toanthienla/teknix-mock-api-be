@@ -35,14 +35,14 @@ exports.register = async (req, res) => {
     // Gửi cookie (dev: sameSite=lax, không secure)
     res.cookie("access_token", accessToken, {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: "none",
       path: "/",
       maxAge: 15 * 60 * 1000, // 15 phút
     });
 
     res.cookie("refresh_token", refreshToken, {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: "none",
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 ngày
     });
@@ -83,14 +83,14 @@ exports.login = async (req, res) => {
     // Set cookie
     res.cookie("access_token", accessToken, {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: "none",
       path: "/",
       maxAge: 15 * 60 * 1000,
     });
 
     res.cookie("refresh_token", refreshToken, {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: "none",
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
@@ -123,14 +123,14 @@ exports.refreshToken = async (req, res) => {
 
     res.cookie("access_token", newAccessToken, {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: "none",
       path: "/",
       maxAge: 15 * 60 * 1000,
     });
 
     res.cookie("refresh_token", newRefreshToken, {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: "none",
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
@@ -149,7 +149,7 @@ exports.logout = (req, res) => {
   const cookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    sameSite: "none",
     path: "/",
   };
 
