@@ -1,23 +1,10 @@
 //const db = require('../config/db');
 const logSvc = require("./project_request_log.service");
 const endpointsFulSvc = require("./endpoints_ful.service");
+const { validateNameOrError } = require("../middlewares/validateNameOrError");
 
 // Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
-const NAME_RE = /^[A-Za-z0-9_]+$/;
-function validateNameOrError(name) {
-  if (typeof name !== "string" || !NAME_RE.test(name)) {
-    return {
-      success: false,
-      errors: [
-        {
-          field: "name",
-          message: "Tên chỉ được chứa chữ cái tiếng Anh, số và dấu gạch dưới (_). Không được có dấu cách, dấu hoặc ký tự đặc biệt.",
-        },
-      ],
-    };
-  }
-  return null;
-}
+
 // Get all projects (optionally filter by workspace_id)
 async function getProjects(db, workspace_id) {
   let query = "SELECT * FROM projects";
