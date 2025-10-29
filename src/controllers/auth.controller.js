@@ -1,6 +1,12 @@
-// src/controllers/auth.controller.js
 const bcrypt = require("bcryptjs");
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require("../utils/jwt");
+
+/**
+ * Helper cookie options based on environment
+ */
+const isProduction = process.env.NODE_ENV === "production";
+const cookieSameSite = isProduction ? "none" : "lax";
+const cookieSecure = isProduction; // when SameSite is 'none' browsers require Secure
 
 /**
  * Đăng ký user mới
@@ -32,20 +38,26 @@ exports.register = async (req, res) => {
     const accessToken = generateAccessToken({ user_id: user.id, username: user.username });
     const refreshToken = generateRefreshToken({ user_id: user.id });
 
-    // Gửi cookie (dev: sameSite=lax, không secure)
-    res.cookie("access_token", accessToken, {
+    // Shared cookie options
+    const accessCookieOptions = {
       httpOnly: true,
-      sameSite: "none",
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       path: "/",
       maxAge: 15 * 60 * 1000, // 15 phút
-    });
+    };
 
-    res.cookie("refresh_token", refreshToken, {
+    const refreshCookieOptions = {
       httpOnly: true,
-      sameSite: "none",
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 ngày
-    });
+    };
+
+    // Gửi cookie
+    res.cookie("access_token", accessToken, accessCookieOptions);
+    res.cookie("refresh_token", refreshToken, refreshCookieOptions);
 
     // Trả kết quả
     res.status(201).json({
@@ -80,20 +92,26 @@ exports.login = async (req, res) => {
     const accessToken = generateAccessToken({ user_id: user.id, username: user.username });
     const refreshToken = generateRefreshToken({ user_id: user.id });
 
-    // Set cookie
-    res.cookie("access_token", accessToken, {
+    // Shared cookie options
+    const accessCookieOptions = {
       httpOnly: true,
-      sameSite: "none",
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       path: "/",
       maxAge: 15 * 60 * 1000,
-    });
+    };
 
-    res.cookie("refresh_token", refreshToken, {
+    const refreshCookieOptions = {
       httpOnly: true,
-      sameSite: "none",
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    };
+
+    // Set cookie
+    res.cookie("access_token", accessToken, accessCookieOptions);
+    res.cookie("refresh_token", refreshToken, refreshCookieOptions);
 
     res.json({
       message: "Login successful",
@@ -121,19 +139,24 @@ exports.refreshToken = async (req, res) => {
     const newAccessToken = generateAccessToken({ user_id: decoded.user_id });
     const newRefreshToken = generateRefreshToken({ user_id: decoded.user_id });
 
-    res.cookie("access_token", newAccessToken, {
+    const accessCookieOptions = {
       httpOnly: true,
-      sameSite: "none",
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       path: "/",
       maxAge: 15 * 60 * 1000,
-    });
+    };
 
-    res.cookie("refresh_token", newRefreshToken, {
+    const refreshCookieOptions = {
       httpOnly: true,
-      sameSite: "none",
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    };
+
+    res.cookie("access_token", newAccessToken, accessCookieOptions);
+    res.cookie("refresh_token", newRefreshToken, refreshCookieOptions);
 
     res.json({ message: "Token refreshed", newAccessToken });
   } catch (err) {
@@ -148,8 +171,8 @@ exports.refreshToken = async (req, res) => {
 exports.logout = (req, res) => {
   const cookieOptions = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "none",
+    secure: cookieSecure,
+    sameSite: cookieSameSite,
     path: "/",
   };
 
