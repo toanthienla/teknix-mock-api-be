@@ -246,10 +246,46 @@ async function deleteEndpoint(req, res) {
   }
 }
 
+// PATCH /endpoints/:id/notification  { send_notification: true|false }
+async function setNotificationFlag(req, res) {
+  const id = Number(req.params.id);
+  const { send_notification } = req.body ?? {};
+
+  if (Number.isNaN(id)) return error(res, 400, "Invalid endpoint id.");
+  if (typeof send_notification !== "boolean") {
+    return error(res, 400, "Field 'send_notification' must be boolean.");
+  }
+
+  const result = await svc.setSendNotification(req.db.stateless, id, send_notification);
+  if (!result.success) return error(res, 404, result.message || "Endpoint not found.");
+  return success(res, result.data);
+}
+
+// Alias: PATCH /endpoints/:id/send        → true
+async function enableNotification(req, res) {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return error(res, 400, "Invalid endpoint id.");
+  const result = await svc.setSendNotification(req.db.stateless, id, true);
+  if (!result.success) return error(res, 404, result.message || "Endpoint not found.");
+  return success(res, result.data);
+}
+
+// Alias: PATCH /endpoints/:id/not-send    → false
+async function disableNotification(req, res) {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return error(res, 400, "Invalid endpoint id.");
+  const result = await svc.setSendNotification(req.db.stateless, id, false);
+  if (!result.success) return error(res, 404, result.message || "Endpoint not found.");
+  return success(res, result.data);
+}
+
 module.exports = {
   listEndpoints,
   getEndpointById,
   createEndpoint,
   updateEndpoint,
   deleteEndpoint,
+  setNotificationFlag,
+  enableNotification,
+  disableNotification,
 };
