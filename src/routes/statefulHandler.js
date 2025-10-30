@@ -152,10 +152,33 @@ function selectAndRenderResponseAdv(bucket, status, ctx, { fallback, requirePara
 
 /* ========== Auth/Schema ========== */
 function pickUserIdFromRequest(req) {
-  const localsUser = req.res?.locals?.user;
-  const uid = req.user?.id ?? req.user?.user_id ?? localsUser?.id ?? localsUser?.user_id ?? (req.headers["x-mock-user-id"] != null ? Number(req.headers["x-mock-user-id"]) : null);
-  return uid != null && Number.isFinite(Number(uid)) ? Number(uid) : null;
+  // Try a few places in a robust, case-insensitive way.
+  const localsUser = req?.res?.locals?.user;
+
+  // helper to read header case-insensitively and via req.get if available
+  const getHeader = (key) => {
+    if (!req) return undefined;
+    if (typeof req.get === "function") {
+      try {
+        const v = req.get(key);
+        if (v != null) return v;
+      } catch { }
+    }
+    const h = req.headers || {};
+    // try common variants
+    return h[key] ?? h[key.toLowerCase()] ?? h[key.toUpperCase()] ?? undefined;
+  };
+
+  const headerVal = getHeader("x-mock-user-id") ?? getHeader("X-Mock-User-Id");
+
+  const candidate = req?.user?.id ?? req?.user?.user_id ?? localsUser?.id ?? localsUser?.user_id ?? (headerVal != null ? headerVal : null);
+
+  // normalize to number if possible
+  if (candidate == null) return null;
+  const n = Number(candidate);
+  return Number.isFinite(n) ? n : null;
 }
+
 function requireAuth(req, res) {
   const uid = pickUserIdFromRequest(req);
   if (uid == null) {
@@ -266,7 +289,7 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
         req.res = req.res || {};
         req.res.locals = req.res.locals || {};
         req.res.locals.lastLogId = logId;
-      } catch {}
+      } catch { }
       try {
         await onProjectLogInserted(logId, req.db.stateless);
       } catch (e) {
@@ -301,6 +324,26 @@ async function loadInitializedDoc(col) {
 async function statefulHandler(req, res, next) {
   const started = Date.now();
 
+  // --- DEBUG: in thông tin request để kiểm tra nextCall nội bộ ---
+  try {
+    console.log("[statefulHandler:debug] method=", req.method, "originalUrl=", req.originalUrl || req.url);
+    console.log("[statefulHandler:debug] universal=", JSON.stringify(req.universal || {}));
+    console.log("[statefulHandler:debug] flags=", JSON.stringify(req.flags || {}));
+    // Avoid huge logs: print concise headers (x-mock-user-id, content-type) and user
+    const hdr = req.headers || {};
+    console.log("[statefulHandler:debug] headers.x-mock-user-id=", hdr["x-mock-user-id"] ?? hdr["X-Mock-User-Id"] ?? null, "content-type=", hdr["content-type"] ?? hdr["Content-Type"] ?? null);
+    console.log("[statefulHandler:debug] req.user=", JSON.stringify(req.user || null));
+    // print body (safe stringify)
+    try {
+      console.log("[statefulHandler:debug] body=", typeof req.body === "object" ? JSON.stringify(req.body) : String(req.body));
+    } catch (e) {
+      console.log("[statefulHandler:debug] body= <unstringifiable>");
+    }
+  } catch (e) {
+    console.warn("[statefulHandler:debug] error printing debug info:", e?.message || e);
+  }
+  // --- end debug ---
+
   const meta = req.universal || {};
   const method = (meta.method || req.method || "GET").toUpperCase();
   const basePath = meta.basePath || req.path;
@@ -309,6 +352,7 @@ async function statefulHandler(req, res, next) {
   const hasId = idInUrl != null;
   const idFromUrl = hasId ? Number(idInUrl) : undefined;
   const logicalPath = String(basePath || "").replace(/\/:id$/, "");
+
 
   const baseSegs = (req.baseUrl || "").split("/").filter(Boolean);
   const workspaceName = baseSegs[0] || null;
@@ -339,28 +383,50 @@ async function statefulHandler(req, res, next) {
   // (Removed) nextCalls chain: no res wrappers, no capture/forward logic.
 
   // 👉 Helper: sau khi trả response chính thì mới bắn nextCalls (fire-and-forget)
+  // 👉 Helper: sau khi trả response chính thì mới bắn nextCalls (fire-and-forget)
   function fireNextCallsIfAny(status, body, insertedLogId) {
     try {
       if (isNextCall || suppressNextCalls) return;
       if (!advancedConfig?.nextCalls?.length) return;
       const parentId = insertedLogId ?? req.res?.locals?.lastLogId ?? null;
 
+      // Build root context compatible with nextcallRouter.renderTemplate
       const rootCtx = {
+        req, // original express request (so templates can access req.headers, req.query, etc.)
+        // compact request object so templates can use {{request.body.xxx}}
+        request: {
+          body: req?.body ?? {},
+          headers: req?.headers ?? {},
+          params: req?.params ?? {},
+          query: req?.query ?? {},
+        },
+        // response available for templates as {{response.body...}}
+        res: { status, body },
         workspaceName,
         projectName,
         user: req.user ?? null,
-        res: { status, body },
         log: { id: parentId },
+        flags: { suppressNextCalls: false },
       };
+
       const plan = buildPlanFromAdvancedConfig(advancedConfig.nextCalls);
-      console.log(`[nextCalls] scheduling chain (count = ${advancedConfig.nextCalls.length}) for ${workspaceName}/${projectName}${logicalPath} status = ${status}`);
+      console.log(
+        `[nextCalls] scheduling chain (count = ${advancedConfig.nextCalls.length}) for ${workspaceName}/${projectName}${logicalPath} status = ${status}`
+      );
+
+      // fire-and-forget but pass DB + user so nextcallRouter can resolve auth/mapping
       runNextCalls(plan, rootCtx, {
         statefulDb: req.db.stateful,
         statelessDb: req.db.stateless,
         user: req.user,
-      }).catch(() => {});
-    } catch {}
+      }).catch((err) => {
+        console.error("[statefulHandler] runNextCalls async error:", err?.message || err);
+      });
+    } catch (err) {
+      console.error("[statefulHandler] fireNextCallsIfAny error:", err?.message || err);
+    }
   }
+
 
   try {
     /* 1) RÀNG BUỘC & RESOLVE endpoint theo workspace + project + method + path (đúng DB) */
@@ -729,7 +795,21 @@ async function statefulHandler(req, res, next) {
 
       const payload = req.body || {};
 
-      const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
+      // 🔧 Auto convert numeric-like strings & boolean strings before validation
+      for (const [key, val] of Object.entries(payload)) {
+        if (typeof val === "string") {
+          if (/^[0-9]+$/.test(val)) {
+            payload[key] = Number(val);
+          } else if (/^(true|false)$/i.test(val)) {
+            payload[key] = val.toLowerCase() === "true";
+          }
+        }
+      }
+
+      const endpointSchemaEffective =
+        endpointSchemaDb && Object.keys(endpointSchemaDb).length
+          ? endpointSchemaDb
+          : baseSchema || {};
 
       // Kiểm tra thứ tự và hợp lệ schema
       const schemaKeys = Object.keys(endpointSchemaEffective);
