@@ -1,8 +1,13 @@
 // src/centrifugo/centrifugo.service.js
 const axios = require("axios");
-
-const BASE = (process.env.CENTRIFUGO_HTTP || "http://127.0.0.1:8000").replace(/\/+$/, "");
-const API_KEY = process.env.CENTRIFUGO_API_KEY || "";
+require("dotenv").config();
+const need = (k) => {
+  const v = process.env[k];
+  if (!v) throw new Error(`Missing env ${k}`);
+  return v;
+};
+const BASE = need("CENTRIFUGO_HTTP").replace(/\/+$/, "");
+const API_KEY = need("CENTRIFUGO_API_KEY");
 
 function logDebug(...args) {
   // Bật tạm thời, xong việc có thể tắt

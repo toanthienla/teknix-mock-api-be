@@ -1,9 +1,12 @@
 // src/centrifugo/centrifugo-auth.routes.js
+require("dotenv").config();
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const router = express.Router();
 
-const HMAC_SECRET = process.env.CENTRIFUGO_HMAC_SECRET || "MY_SUPER_SECRET_456";
+const HMAC_SECRET = process.env.CENTRIFUGO_HMAC_SECRET;
+if (!HMAC_SECRET) throw new Error("Missing env CENTRIFUGO_HMAC_SECRET");
+const MULTI_TOKEN_TTL_SEC = Number(process.env.CENTRIFUGO_MULTI_TOKEN_TTL_SEC || 3600);
 
 // Lấy danh sách project của user từ DB; nếu chưa có DB mapping thì cho phép nhận tạm qua query (?project_ids=1,2,3)
 async function getUserProjectIds(db, userId, fallbackCsv) {
@@ -50,7 +53,7 @@ router.get("/centrifugo/token", async (req, res, next) => {
 
     const payload = {
       sub: userId,
-      exp: Math.floor(Date.now() / 1000) + 60 * 60, // 1h
+      exp: Math.floor(Date.now() / 1000) + MULTI_TOKEN_TTL_SEC,
       channels,
     };
 
