@@ -42,7 +42,7 @@ app.use(
     },
     credentials: process.env.CORS_CREDENTIALS === "true",
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-api-key"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "X-Proxy-Authorization", "x-proxy-authorization"],
     optionsSuccessStatus: 204,
   })
 );

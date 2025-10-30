@@ -102,6 +102,17 @@ async function getTemplateResponse(statefulPool, epFulId, name, fallback) {
 }
 // === END ADD
 
+async function getSafeUserId(req) {
+  try {
+    const raw = req.user && req.user.id != null ? req.user.id : null;
+    const idNum = Number(raw);
+    if (!Number.isInteger(idNum) || idNum <= 0) return null;
+    const { rows } = await req.db.stateless.query("SELECT 1 FROM users WHERE id = $1 LIMIT 1", [idNum]);
+    return rows && rows[0] ? idNum : null;
+  } catch (e) {
+    return null;
+  }
+}
 // --- Match helpers: hỗ trợ match “sâu” cho pattern không có param/wildcard
 const matcherCache = new Map();
 function getMatcher(pattern, end = true) {
@@ -161,6 +172,7 @@ function renderTemplate(value, ctx) {
 
 router.use(authMiddleware, async (req, res, next) => {
   const started = Date.now();
+  const safeUserId = await getSafeUserId(req);
   try {
     const method = req.method.toUpperCase();
 
@@ -404,7 +416,7 @@ router.use(authMiddleware, async (req, res, next) => {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           endpoint_response_id: null,
-          user_id: req.user?.id ?? null,
+          user_id: safeUserId,
           request_method: method,
           request_path: req.path,
           request_headers: req.headers || {},
@@ -464,7 +476,7 @@ router.use(authMiddleware, async (req, res, next) => {
         const _log = await logSvc.insertLog(req.db.stateless, {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
-          user_id: req.user?.id ?? null,
+          user_id: safeUserId,
           request_method: method,
           request_path: req.path,
           response_status_code: status,
@@ -564,6 +576,39 @@ router.use(authMiddleware, async (req, res, next) => {
           } catch (axiosErr) {
             // nếu axios có response kèm theo, lấy nó để decide fallback
             proxyResp = axiosErr?.response || null;
+          }
+          // Nếu upstream không trả response (network error, timeout...), trả 502 an toàn
+          if (!proxyResp) {
+            const status = 502;
+            const safeBody = {
+              error: "Bad Gateway (no upstream response)",
+              message: "Upstream server did not return a response.",
+            };
+            const _log = await logSvc.insertLog(req.db.stateless, {
+              project_id: ep.project_id || null,
+              endpoint_id: ep.id,
+              endpoint_response_id: r.id || null,
+              user_id: safeUserId,
+              request_method: method,
+              request_path: req.path,
+              request_headers: req.headers || {},
+              request_body: req.body || {},
+              response_status_code: status,
+              response_body: safeBody,
+              ip_address: getClientIp(req),
+              latency_ms: Date.now() - started,
+            });
+            let logId = _log && _log.id;
+            if (!logId) {
+              try {
+                const { rows } = await req.db.stateless.query(`SELECT id FROM project_request_logs ORDER BY id DESC LIMIT 1`);
+                logId = rows?.[0]?.id || null;
+              } catch (e) {}
+            }
+            if (logId) {
+              onProjectLogInserted(logId, req.db.stateless).catch(() => {});
+            }
+            return res.status(status).json(safeBody);
           }
 
           // Nếu bị 403 hoặc nhận HTML Cloudflare (Attention Required...), thử fallback bằng cloudscraper
@@ -694,7 +739,7 @@ router.use(authMiddleware, async (req, res, next) => {
             project_id: ep.project_id || null,
             endpoint_id: ep.id,
             endpoint_response_id: r.id || null,
-            user_id: req.user?.id ?? null,
+            user_id: safeUserId,
             request_method: method,
             request_path: req.path,
             request_headers: req.headers || {},
@@ -757,7 +802,7 @@ router.use(authMiddleware, async (req, res, next) => {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           endpoint_response_id: r.id || null,
-          user_id: req.user?.id ?? null,
+          user_id: safeUserId,
           request_method: method,
           request_path: req.path,
           request_headers: req.headers || {},
@@ -801,7 +846,7 @@ router.use(authMiddleware, async (req, res, next) => {
       const _log = await logSvc.insertLog(req.db.stateless, {
         project_id: null,
         endpoint_id: null,
-        user_id: req.user?.id ?? null,
+        user_id: safeUserId,
         request_method: req.method?.toUpperCase?.() || "",
         request_path: req.path || req.originalUrl || "",
         response_status_code: 500,
