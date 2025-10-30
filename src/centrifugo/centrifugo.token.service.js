@@ -1,4 +1,6 @@
-const HMAC_SECRET = process.env.CENTRIFUGO_HMAC_SECRET || "MY_SUPER_SECRET_456";
+require("dotenv").config();
+const HMAC_SECRET = process.env.CENTRIFUGO_HMAC_SECRET;
+if (!HMAC_SECRET) throw new Error("Missing env CENTRIFUGO_HMAC_SECRET");
 
 async function getSignJWT() {
   const { SignJWT } = await import("jose");
@@ -14,10 +16,7 @@ async function signHS256(payload, expStr = "10m") {
   const SignJWT = await getSignJWT();
   const secret = new TextEncoder().encode(HMAC_SECRET);
 
-  const jwt = await new SignJWT(payload)
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setExpirationTime(expStr)
-    .sign(secret);
+  const jwt = await new SignJWT(payload).setProtectedHeader({ alg: "HS256", typ: "JWT" }).setExpirationTime(expStr).sign(secret);
 
   return jwt;
 }

@@ -2,24 +2,27 @@ require("dotenv").config();
 const { Centrifuge } = require("centrifuge");
 const WebSocket = require("ws");
 const jwt = require("jsonwebtoken");
+const need = (k) => {
+  const v = process.env[k];
+  if (!v) throw new Error(`Missing env ${k}`);
+  return v;
+};
+const WS_URL = need("CENTRIFUGO_WS");
+const SECRET = need("CENTRIFUGO_HMAC_SECRET");
+const CHANNEL = need("CENTRIFUGO_SUB_CHANNEL");
+const WORKERID = process.env.CENTRIFUGO_WORKER_ID || "node-worker-1";
+const TOKEN_EXP_SECONDS = Number(process.env.CENTRIFUGO_TOKEN_EXP_SECONDS || 7200);
+const TOKEN_REFRESH_BEFORE = Number(process.env.CENTRIFUGO_TOKEN_REFRESH_BEFORE || 30);
 
 // Polyfill WebSocket cho môi trường Node
 global.WebSocket = WebSocket;
-
-const WS_URL = process.env.CENTRIFUGO_WS || "ws://127.0.0.1:18080/connection/websocket";
-const SECRET = process.env.CENTRIFUGO_HMAC_SECRET;
-const CHANNEL = process.env.CENTRIFUGO_SUB_CHANNEL || "notification#mock_logging";
-const WORKERID = process.env.CENTRIFUGO_WORKER_ID || "node-worker";
 
 // 1) Ký token JWT cho client kết nối Centrifugo
 // By default we issue a token that lives 2 hours (7200s) unless CENTRIFUGO_TOKEN_EXP_SECONDS is set.
 // The worker will automatically refresh (reconnect with a new token) shortly before expiry.
 function signToken() {
-  if (!SECRET) {
-    throw new Error("Missing CENTRIFUGO_HMAC_SECRET in env");
-  }
+  const configuredExp = Number(TOKEN_EXP_SECONDS || 0);
   const now = Math.floor(Date.now() / 1000);
-  const configuredExp = Number(process.env.CENTRIFUGO_TOKEN_EXP_SECONDS || "0");
   // default: 2 hours
   const defaultExp = now + 2 * 60 * 60;
   const exp = configuredExp > 0 ? now + configuredExp : defaultExp;
@@ -40,7 +43,7 @@ let shuttingDown = false;
 
 function scheduleRefresh(token) {
   // buffer seconds before expiry to refresh
-  const bufferSeconds = Number(process.env.CENTRIFUGO_TOKEN_REFRESH_BEFORE || "30");
+  const bufferSeconds = Number(TOKEN_REFRESH_BEFORE || 30);
   try {
     const decoded = jwt.decode(token);
     const exp = decoded && decoded.exp ? Number(decoded.exp) : null;
