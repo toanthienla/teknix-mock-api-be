@@ -81,30 +81,38 @@ async function listEndpoints(req, res) {
   }
 }
 
-// Get endpoint by id
 async function getEndpointById(req, res) {
   try {
     const { id } = req.params;
 
-    // Bước 1: Luôn lấy dữ liệu từ stateless trước
+    // --- Bước 1: lấy từ stateless ---
     const statelessEndpoint = await svc.getEndpointById(req.db.stateless, id);
-
     if (!statelessEndpoint) {
       return error(res, 404, "Endpoint not found");
     }
 
-    // Bước 2: Kiểm tra cờ is_stateful
+    // --- Bước 2: Nếu endpoint có stateful ---
     if (statelessEndpoint.is_stateful === true) {
-      // Nếu true, tìm bản ghi stateful tương ứng bằng origin_id
       const statefulEndpoint = await statefulSvc.findByOriginId(statelessEndpoint.id);
       if (!statefulEndpoint) {
-        return error(res, 404, `Stateful data for endpoint ${id} not found, but it is marked as stateful.`);
+        return error(
+          res,
+          404,
+          `Stateful data for endpoint ${id} not found, but it is marked as stateful.`
+        );
       }
+
+      // ✅ Kế thừa send_notification từ stateless
+      const merged = {
+        ...statefulEndpoint,
+        send_notification: statelessEndpoint.send_notification ?? false,
+      };
+
       // Trả về với id = origin_id để thống nhất với list
-      return success(res, presentStateful(statefulEndpoint));
+      return success(res, presentStateful(merged));
     }
 
-    // Bước 3: Nếu không, trả về dữ liệu stateless như bình thường
+    // --- Bước 3: Trả về stateless ---
     return success(res, statelessEndpoint);
   } catch (err) {
     return error(res, 500, err.message);
