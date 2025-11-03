@@ -282,7 +282,8 @@ async function convertToStateful(endpointId) {
       const statefulId = existing[0].id;
 
       await clientStateful.query("UPDATE endpoints_ful SET is_active = TRUE, updated_at = NOW() WHERE id = $1", [statefulId]);
-      await clientStateless.query("UPDATE endpoints SET is_stateful = TRUE, updated_at = NOW() WHERE id = $1", [endpointId]);
+      // Bật stateful, TẮT active ở bản gốc khi re-activate
+      await clientStateless.query("UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1", [endpointId]);
 
       await clientStateful.query("COMMIT");
       await clientStateless.query("COMMIT");
@@ -307,8 +308,8 @@ async function convertToStateful(endpointId) {
     const workspaceName = wpRows[0]?.workspace_name || "Workspace";
     const projectName = wpRows[0]?.project_name || "Project";
 
-    // 3) convert lần đầu
-    await clientStateless.query("UPDATE endpoints SET is_stateful = TRUE, updated_at = NOW() WHERE id = $1", [endpointId]);
+    // 3) convert lần đầu: bật stateful, tắt active của bản gốc
+    await clientStateless.query("UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1", [endpointId]);
 
     const {
       rows: [statefulEndpoint],
@@ -390,7 +391,8 @@ async function revertToStateless(endpointId) {
       await clientStateful.query("UPDATE endpoints_ful SET is_active = FALSE, updated_at = NOW() WHERE id = $1", [existing[0].id]);
     }
 
-    await clientStateless.query("UPDATE endpoints SET is_stateful = FALSE, updated_at = NOW() WHERE id = $1", [endpointId]);
+    // Tắt stateful, bật lại active cho bản gốc
+    await clientStateless.query("UPDATE endpoints SET is_stateful = FALSE, is_active = TRUE, updated_at = NOW() WHERE id = $1", [endpointId]);
 
     await clientStateless.query("COMMIT");
     await clientStateful.query("COMMIT");

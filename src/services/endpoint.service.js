@@ -252,59 +252,64 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
 
 // Delete endpoint
 async function deleteEndpoint(dbPool, endpointId) {
-  const endpoint = await getEndpointById(dbPool, endpointId);
-  if (!endpoint) return null;
-
-  // dùng 1 transaction để đảm bảo tính nhất quán
-  await dbPool.query("BEGIN");
+  const client = await dbPool.connect();
   try {
-    // 1) Nếu là stateful, xóa dữ liệu liên quan ở bảng _ful theo endpoint_id
-    if (endpoint.is_stateful === true) {
-      // 🛡️ Null hoá stateful_* trong logs TRƯỚC khi xoá endpoints_ful
-      await dbPool.query(
-        `UPDATE project_request_logs
-            SET stateful_endpoint_id = NULL,
-                stateful_endpoint_response_id = NULL
-          WHERE stateful_endpoint_id IN (
-                SELECT id FROM endpoints_ful WHERE endpoint_id = $1
-          )`,
-        [endpointId]
-      );
-      // Sau đó xoá responses_ful
-      await dbPool.query(
-        `DELETE FROM endpoint_responses_ful
-          WHERE endpoint_id IN (SELECT id FROM endpoints_ful WHERE endpoint_id = $1)`,
-        [endpointId]
-      );
-      // Và xoá meta endpoints_ful
-      await dbPool.query(`DELETE FROM endpoints_ful WHERE endpoint_id = $1`, [endpointId]);
-    }
+    await client.query("BEGIN");
 
-    // 2) Nullify notifications ràng buộc tới endpoint này
-    //    (theo yêu cầu: set NULL cho cả 3 cột)
-    await dbPool.query(
+    // (A) Nullify logs trước để tránh FK (nếu có)
+    //   - cả stateless lẫn stateful (khi đã convert)
+    await client.query(
       `
+      UPDATE project_request_logs
+         SET endpoint_id = NULL,
+             stateful_endpoint_id = NULL,
+             stateful_endpoint_response_id = NULL
+       WHERE endpoint_id = $1
+          OR stateful_endpoint_id IN (SELECT id FROM endpoints_ful WHERE endpoint_id = $1)
+    `,
+      [endpointId]
+    );
+
+    // (B) Xoá responses STATEFUL trước (nếu có)
+    await client.query(
+      `
+     DELETE FROM endpoint_responses_ful
+       WHERE endpoint_id IN (SELECT id FROM endpoints_ful WHERE endpoint_id = $1)
+    `,
+      [endpointId]
+    );
+
+    // (C) Xoá bản ghi STATEFUL meta
+    await client.query(`DELETE FROM endpoints_ful WHERE endpoint_id = $1`, [endpointId]);
+
+    // (D) Xoá responses STATELESS
+    await client.query(`DELETE FROM endpoint_responses WHERE endpoint_id = $1`, [endpointId]);
+
+    // (E) (Tuỳ chọn) CHỈ chạy nếu còn bảng notifications
+    const { rows } = await client.query(`SELECT to_regclass('public.notifications') IS NOT NULL AS exists`);
+    if (rows?.[0]?.exists) {
+      await client.query(
+        `
         UPDATE notifications
            SET project_request_log_id = NULL,
                endpoint_id = NULL,
                user_id = NULL
-        WHERE endpoint_id = $1
+         WHERE endpoint_id = $1
       `,
-      [endpointId]
-    );
+        [endpointId]
+      );
+    }
 
-    // 3) Nullify logs + xóa endpoint_responses
+    // (F) Cuối cùng xoá endpoint gốc
+    await client.query(`DELETE FROM endpoints WHERE id = $1`, [endpointId]);
 
-    await logSvc.nullifyEndpointAndResponses(dbPool, endpointId);
-
-    // 4) Xóa endpoint gốc
-    await dbPool.query("DELETE FROM endpoints WHERE id=$1", [endpointId]);
-
-    await dbPool.query("COMMIT");
-    return { success: true, data: endpoint };
+    await client.query("COMMIT");
+    return { success: true };
   } catch (err) {
-    await dbPool.query("ROLLBACK");
+    await client.query("ROLLBACK");
     throw err;
+  } finally {
+    client.release();
   }
 }
 
