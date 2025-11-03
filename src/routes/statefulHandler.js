@@ -430,14 +430,17 @@ async function statefulHandler(req, res, next) {
       const wantedMethod = method;
       const wantedPath = logicalPath;
 
-      // 1a) Tìm ứng viên theo method+path ở STATEFUL
+      // 1a) DB mới: endpoints_ful KHÔNG có method/path → JOIN endpoints
       const qEf = await req.db.stateful.query(
-        `SELECT id, origin_id, folder_id
-           FROM endpoints_ful
-          WHERE is_active = TRUE
-            AND method    = $1
-            AND path      = $2
-          ORDER BY id ASC`,
+        `SELECT ef.id,
+            ef.endpoint_id,
+            e.folder_id
+       FROM endpoints_ful ef
+       JOIN endpoints e ON e.id = ef.endpoint_id
+      WHERE ef.is_active = TRUE
+        AND UPPER(e.method) = $1
+        AND e.path = $2
+      ORDER BY ef.id ASC`,
         [wantedMethod, wantedPath]
       );
       if (!qEf.rows.length) {
@@ -492,7 +495,7 @@ async function statefulHandler(req, res, next) {
 
       // Bind đúng tenant
       statefulId = Number(chosen.id);
-      originId = Number(chosen.origin_id);
+      originId = Number(chosen.endpoint_id);
       folderId = Number(chosen.folder_id);
       projectId = Number(match.project_id);
       isPublic = !!match.is_public;
@@ -558,6 +561,14 @@ async function statefulHandler(req, res, next) {
     const responsesBucket = await loadResponsesBucket(req.db.stateful, statefulId);
     /* ===== GET ===== */
     if (method === "GET") {
+      // ===== DEBUG GET START =====
+      try {
+        console.log("[GET:stateful] ENTER", { workspaceName, projectName, logicalPath, rawPath, statefulId, originId, folderId, projectId, isPublic });
+      } catch {}
+      res.setHeader("x-mock-mode", "stateful");
+      res.setHeader("x-mock-path", logicalPath);
+      // ===== DEBUG GET START =====
+
       const userIdMaybe = pickUserIdFromRequest(req);
 
       const pickForGET = (obj) => {

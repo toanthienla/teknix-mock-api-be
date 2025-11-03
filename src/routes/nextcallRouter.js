@@ -33,8 +33,8 @@ function renderTemplate(tpl, ctx = {}) {
   const scope = {
     root: ctx.root,
     prev: ctx.prev,
-    request: ctx.prev?.request ?? (ctx.root?.req ?? ctx.root?.request ?? {}),
-    response: ctx.prev?.response ?? (ctx.root?.res ?? ctx.root?.response ?? {}),
+    request: ctx.prev?.request ?? ctx.root?.req ?? ctx.root?.request ?? {},
+    response: ctx.prev?.response ?? ctx.root?.res ?? ctx.root?.response ?? {},
   };
 
   const walk = (v) => {
@@ -76,8 +76,8 @@ function renderStringTemplate(tpl, ctx = {}) {
   const scope = {
     root: ctx.root,
     prev: ctx.prev,
-    request: ctx.prev?.request ?? (ctx.root?.req ?? ctx.root?.request ?? {}),
-    response: ctx.prev?.response ?? (ctx.root?.res ?? ctx.root?.response ?? {}),
+    request: ctx.prev?.request ?? ctx.root?.req ?? ctx.root?.request ?? {},
+    response: ctx.prev?.response ?? ctx.root?.res ?? ctx.root?.response ?? {},
   };
   return tpl.replace(/\{\{([^}]+)\}\}/g, (_, expr) => {
     const path = expr.trim();
@@ -214,11 +214,17 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
     return null;
   }
 
-  // 2) Candidates trong stateful theo method+path (KHÔNG JOIN folders)
+  // 2) DB mới: JOIN endpoints để lọc theo method/path
   const ef = await statefulDb.query(
-    `SELECT e.id, e.origin_id, e.path, e.method
-       FROM endpoints_ful e
-      WHERE e.is_active=TRUE AND e.method=$1 AND e.path=$2`,
+    `SELECT ef.id,
+            ef.endpoint_id       AS origin_id,  -- map về endpoints.id để check tenant
+            e.path,
+            e.method
+       FROM endpoints_ful ef
+       JOIN endpoints e ON e.id = ef.endpoint_id
+      WHERE ef.is_active = TRUE
+        AND UPPER(e.method) = $1
+        AND e.path = $2`,
     [method, logicalPath]
   );
   const candidates = ef.rows || [];
@@ -248,8 +254,8 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
         workspaceName,
         projectName,
         projectId: project.id,
-        endpointId: ep.id,
-        originId: ep.origin_id,
+        endpointId: ep.id, // endpoints_ful.id
+        originId: ep.origin_id, // endpoints.id (stateless)
         isStateful: true,
         logicalPath,
         basePath: ep.path,
@@ -439,7 +445,6 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         user: currentUser,
         res: { locals: {} },
       };
-
 
       const started = Date.now();
       const resCapture = createMemoryResponder();
