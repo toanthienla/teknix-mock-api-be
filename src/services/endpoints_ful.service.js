@@ -998,49 +998,48 @@ WHERE endpoint_id = $2
   return rows[0];
 }
 
-async function getEndpointsByOriginId(originId) {
-  // 1️⃣ Lấy folder_id từ DB stateful
-  const queryFul = `
-    SELECT e.folder_id
-    FROM endpoints_ful ef
-    JOIN endpoints e ON e.id = ef.endpoint_id
-    WHERE ef.endpoint_id = $1
-    LIMIT 1;
-  `;
-  const { rows: fulRows } = await statefulPool.query(queryFul, [originId]);
-  if (fulRows.length === 0) {
-    return { notFound: true, message: "Không tìm thấy dữ liệu trong endpoints_ful." };
-  }
-  const folderId = fulRows[0].folder_id;
+// services/endpointLocations.service.js
 
-  // 2️⃣ Từ folder_id → lấy project_id trong DB stateless
-  const queryProject = `
-    SELECT project_id
-    FROM folders
-    WHERE id = $1
-    LIMIT 1;
-  `;
-  const { rows: projectRows } = await statelessPool.query(queryProject, [folderId]);
-  if (projectRows.length === 0) {
-    return { notFound: true, message: "Không tìm thấy project tương ứng với folder_id." };
-  }
-  const projectId = projectRows[0].project_id;
-
-  // 3️⃣ Lấy toàn bộ endpoint theo project_id từ DB stateless
-  const queryEndpoints = `
-    SELECT e.*, f.name AS folder_name, f.project_id
+async function getAllEndpointLocations(dbPool) {
+  const sql = `
+    SELECT DISTINCT
+      w.name AS workspace_name,
+      p.name AS project_name,
+      e.path AS path
     FROM endpoints e
-    JOIN folders f ON e.folder_id = f.id
-    WHERE f.project_id = $1
-    ORDER BY e.id;
+    JOIN folders    f ON f.id = e.folder_id
+    JOIN projects   p ON p.id = f.project_id
+    JOIN workspaces w ON w.id = p.workspace_id
+    ORDER BY w.name, p.name, e.path
   `;
-  const { rows } = await statelessPool.query(queryEndpoints, [projectId]);
+  const { rows } = await dbPool.query(sql);
+  // Chuẩn hoá key theo yêu cầu FE
+  return rows.map((r) => ({
+    workspaceName: r.workspace_name,
+    projectName: r.project_name,
+    path: r.path,
+  }));
+}
 
-  if (rows.length === 0) {
-    return { notFound: true, message: "Không tìm thấy endpoint nào trong project tương ứng." };
-  }
-
-  return rows;
+async function getEndpointLocationsByPath(dbPool, path) {
+  const sql = `
+    SELECT DISTINCT
+      w.name AS workspace_name,
+      p.name AS project_name,
+      e.path AS path
+    FROM endpoints e
+    JOIN folders    f ON f.id = e.folder_id
+    JOIN projects   p ON p.id = f.project_id
+    JOIN workspaces w ON w.id = p.workspace_id
+    WHERE e.path = $1
+    ORDER BY w.name, p.name, e.path
+  `;
+  const { rows } = await dbPool.query(sql, [path]);
+  return rows.map((r) => ({
+    workspaceName: r.workspace_name,
+    projectName: r.project_name,
+    path: r.path,
+  }));
 }
 
 // ------------------------
@@ -1070,5 +1069,6 @@ module.exports = {
   getBaseSchemaByEndpointId,
   findByOriginIdRaw,
   updateAdvancedConfigByOriginId,
-  getEndpointsByOriginId,
+  getEndpointLocationsByPath,
+  getAllEndpointLocations,
 };
