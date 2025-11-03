@@ -238,7 +238,7 @@ async function deleteById(id) {
 }
 
 // Tương thích cũ: cho phép tìm theo endpoint gốc (origin_id cũ)
-async function findByOriginId(originId) {
+async function findOneByEndpointId(originId) {
   const { rows } = await statefulPool.query(
     `SELECT ef.id
        FROM endpoints_ful ef
@@ -1053,7 +1053,7 @@ module.exports = {
   getFullDetailById,
   deleteById,
   deleteByOriginIds,
-  findByOriginId,
+  findOneByEndpointId,
   convertToStateful,
   revertToStateless,
   ensureDefaultsForReactivate,
