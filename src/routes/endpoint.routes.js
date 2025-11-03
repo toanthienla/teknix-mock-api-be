@@ -25,11 +25,11 @@ router.put("/:id", validateEndpoint, asyncHandler(ctrl.updateEndpoint));
 // DELETE /endpoints/:id
 router.delete("/:id", asyncHandler(ctrl.deleteEndpoint));
 
+// lấy toàn bộ endpoint để lấy các path của project đó.
+router.get("/advanced/path", ctrlEndpointFul.getEndpointLocations);
 // 2 Routes mới về chức năng AdvancedConfig gồm GET và PUT
 router.get("/advanced/:id", ctrlEndpointFul.getAdvancedConfig);
 router.put("/advanced/:id", ctrlEndpointFul.updateAdvancedConfig);
-// lấy toàn bộ endpoint để lấy các path của project đó.
-router.get("/advanced/path/:origin_id", ctrlEndpointFul.getEndpointsByOrigin);
 
 // bật/tắt gửi notification
 router.patch("/:id/notification", asyncHandler(ctrl.setNotificationFlag));
