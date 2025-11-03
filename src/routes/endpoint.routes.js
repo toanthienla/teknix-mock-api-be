@@ -26,7 +26,7 @@ router.put("/:id", validateEndpoint, asyncHandler(ctrl.updateEndpoint));
 router.delete("/:id", asyncHandler(ctrl.deleteEndpoint));
 
 // lấy toàn bộ endpoint để lấy các path của project đó.
-router.get("/advanced/path", ctrlEndpointFul.getEndpointLocations);
+router.get("/advanced/path", ctrlEndpointFul.getActiveStatefulPathsCtrl);
 // 2 Routes mới về chức năng AdvancedConfig gồm GET và PUT
 router.get("/advanced/:id", ctrlEndpointFul.getAdvancedConfig);
 router.put("/advanced/:id", ctrlEndpointFul.updateAdvancedConfig);
