@@ -68,20 +68,21 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 // ---------------------------------------------
 // 4) Centrifugo helpers
 // ---------------------------------------------
-app.use(centrifugoTokenRoutes);
+//app.use(centrifugoTokenRoutes);
 
 // ---------------------------------------------
 // 5) Centrifugo auth/publish endpoints
 // ---------------------------------------------
-app.use("/api", require("./centrifugo/centrifugo-auth.routes"));
-app.use("/api", require("./centrifugo/notify.routes"));
+//app.use("/api", require("./centrifugo/centrifugo-auth.routes"));
+//app.use("/api", require("./centrifugo/notify.routes"));
 
 // ---------------------------------------------
 // 6) Inject DB pools vào req
 // ---------------------------------------------
-const { statelessPool, statefulPool } = require("./config/db");
+const { pool, statelessPool, statefulPool } = require("./config/db");
 app.use((req, res, next) => {
   req.db = {
+    pool,
     stateless: statelessPool,
     stateful: statefulPool,
   };
@@ -120,7 +121,7 @@ app.use("/endpoints_ful", endpointsFulRoutes);
 // Routes giữ path gốc cũ
 app.use("/", endpointResponseRoutes);
 app.use("/", statefulRoutes);
-app.use("/", createNotificationsRoutes());
+//app.use("/", createNotificationsRoutes());
 
 // Logs stateless/stateful
 app.use("/project_request_logs", projectRequestLogRoutes);
