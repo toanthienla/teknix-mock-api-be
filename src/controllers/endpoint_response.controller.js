@@ -31,10 +31,10 @@ async function listByEndpointQuery(req, res) {
     const ep = await endpointSvc.getEndpointById(req.db.stateless, eid);
     if (!ep) return error(res, 404, "Endpoint not found");
 
-    // 2) Nếu endpoint đã chuyển stateful -> lấy responses ở DB stateful theo origin_id
+    // 2) Nếu endpoint đã chuyển stateful -> lấy responses ở DB stateful theo endpoint_id
     if (ep.is_stateful === true) {
-      // Lấy endpoint stateful theo origin_id (KHÔNG truyền pool)
-      const statefulFull = await endpointsFulSvc.findByOriginId(eid);
+      // Tìm endpoints_ful theo endpoint_id (KHÔNG truyền pool)
+      const statefulFull = (await endpointsFulSvc.findByEndpointId) ? await endpointsFulSvc.findByEndpointId(eid) : await endpointsFulSvc.findOneByEndpointId(eid); // dự phòng nếu tên hàm khác
       if (!statefulFull) return success(res, []); // chưa có bản ghi stateful tương ứng
 
       // Lấy responses stateful theo endpoint_ful.id (KHÔNG truyền pool)

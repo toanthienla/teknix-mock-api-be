@@ -79,9 +79,10 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 // ---------------------------------------------
 // 6) Inject DB pools vào req
 // ---------------------------------------------
-const { statelessPool, statefulPool } = require("./config/db");
+const { pool, statelessPool, statefulPool } = require("./config/db");
 app.use((req, res, next) => {
   req.db = {
+    pool,
     stateless: statelessPool,
     stateful: statefulPool,
   };

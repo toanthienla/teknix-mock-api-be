@@ -1,5 +1,4 @@
 const ResponseStatefulService = require("../services/endpoint_responses_ful.service");
-const ResponseSvc = require("../services/endpoint_response.service");
 
 exports.listResponsesForEndpoint = async (req, res) => {
   const { endpoint_id } = req.query;
@@ -48,16 +47,11 @@ exports.updateById = async (req, res) => {
       normalized.name = normalized.name.trim();
     }
 
-    const updated = await ResponseSvc.update(
-      req.db.stateless, // pool stateless
-      req.db.stateful, // pool stateful
-      id,
-      {
-        name: normalized.name,
-        response_body: normalized.response_body,
-        delay_ms: normalized.delay_ms,
-      }
-    );
+    const updated = await ResponseStatefulService.updateById(id, {
+      name: normalized.name,
+      response_body: normalized.response_body,
+      delay_ms: normalized.delay_ms,
+    });
 
     if (!updated) return res.status(404).json({ error: "Response not found" });
     return res.status(200).json(updated);

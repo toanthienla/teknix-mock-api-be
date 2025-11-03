@@ -112,14 +112,15 @@ async function update(dbPool, dbPoolfull, id, { name, status_code, response_body
   // 1️⃣ Kiểm tra xem response này có nằm trong DB stateful không
   // ==============================================
   const { rows: statefulCheck } = await dbPoolfull.query(
-    `SELECT rf.id AS response_ful_id,
-            rf.endpoint_id,
-            ef.id AS endpoint_ful_id,
-            ef.origin_id AS endpoint_origin_id,
-            ef.is_active,
-            ef.method
+    `SELECT 
+       rf.id               AS response_ful_id,
+       rf.endpoint_id      AS endpoint_ful_id,
+       ef.endpoint_id      AS endpoint_origin_id,   -- map về endpoints.id
+       ef.is_active,
+       e.method
      FROM endpoint_responses_ful rf
      JOIN endpoints_ful ef ON rf.endpoint_id = ef.id
+     JOIN endpoints e      ON e.id = ef.endpoint_id
      WHERE rf.id = $1
      LIMIT 1`,
     [id]
@@ -164,7 +165,7 @@ async function update(dbPool, dbPoolfull, id, { name, status_code, response_body
 
     return {
       id: u.id,
-      endpoint_id: row.endpoint_origin_id, // map về endpoint gốc (stateless)
+      endpoint_id: row.endpoint_origin_id, // map về endpoint gốc (endpoints.id)
       name: u.name,
       status_code: u.status_code,
       response_body: u.response_body,
@@ -190,7 +191,7 @@ async function update(dbPool, dbPoolfull, id, { name, status_code, response_body
 
     return {
       id: u.id,
-      endpoint_id: row.endpoint_origin_id, // map về endpoint gốc (stateless)
+      endpoint_id: row.endpoint_origin_id, // map về endpoint gốc (endpoints.id)
       name: u.name,
       status_code: u.status_code,
       response_body: u.response_body,
@@ -212,7 +213,7 @@ async function checkIsStatefull(dbPool, dbPoolfull, responseId) {
     `SELECT ef.is_active
        FROM endpoint_responses_ful rf
        JOIN endpoints_ful ef ON ef.id = rf.endpoint_id
-      WHERE rf.origin_id = $1 OR rf.id = $1
+      WHERE rf.id = $1
       LIMIT 1`,
     [responseId]
   );
