@@ -1000,41 +1000,43 @@ WHERE endpoint_id = $2
 
 // services/endpointLocations.service.js
 
-async function getAllEndpointLocations(dbPool) {
-  const sql = `
-    SELECT DISTINCT
-      w.name AS workspace_name,
-      p.name AS project_name,
-      e.path AS path
-    FROM endpoints e
-    JOIN folders    f ON f.id = e.folder_id
-    JOIN projects   p ON p.id = f.project_id
-    JOIN workspaces w ON w.id = p.workspace_id
-    ORDER BY w.name, p.name, e.path
-  `;
-  const { rows } = await dbPool.query(sql);
-  // Chuẩn hoá key theo yêu cầu FE
-  return rows.map((r) => ({
-    workspaceName: r.workspace_name,
-    projectName: r.project_name,
-    path: r.path,
-  }));
-}
+async function getActiveStatefulPaths(dbPool, { method, workspace, project } = {}) {
+  const params = [];
+  let i = 1;
 
-async function getEndpointLocationsByPath(dbPool, path) {
-  const sql = `
+  let sql = `
     SELECT DISTINCT
       w.name AS workspace_name,
       p.name AS project_name,
       e.path AS path
     FROM endpoints e
-    JOIN folders    f ON f.id = e.folder_id
-    JOIN projects   p ON p.id = f.project_id
-    JOIN workspaces w ON w.id = p.workspace_id
-    WHERE e.path = $1
-    ORDER BY w.name, p.name, e.path
+    JOIN folders      f   ON f.id = e.folder_id
+    JOIN projects     p   ON p.id = f.project_id
+    JOIN workspaces   w   ON w.id = p.workspace_id
+    JOIN endpoints_ful ef ON ef.endpoint_id = e.id
+    WHERE e.is_stateful = TRUE
+      AND ef.is_active   = TRUE
+      AND e.is_active    = FALSE
+      AND e.path NOT LIKE '%:%'
+      AND e.path NOT LIKE '%*%'
   `;
-  const { rows } = await dbPool.query(sql, [path]);
+
+  if (method) {
+    sql += ` AND UPPER(e.method) = $${i++}`;
+    params.push(String(method).toUpperCase());
+  }
+  if (workspace) {
+    sql += ` AND LOWER(w.name) = LOWER($${i++})`;
+    params.push(String(workspace));
+  }
+  if (project) {
+    sql += ` AND LOWER(p.name) = LOWER($${i++})`;
+    params.push(String(project));
+  }
+
+  sql += ` ORDER BY w.name, p.name, e.path`;
+
+  const { rows } = await dbPool.query(sql, params);
   return rows.map((r) => ({
     workspaceName: r.workspace_name,
     projectName: r.project_name,
@@ -1069,6 +1071,5 @@ module.exports = {
   getBaseSchemaByEndpointId,
   findByOriginIdRaw,
   updateAdvancedConfigByOriginId,
-  getEndpointLocationsByPath,
-  getAllEndpointLocations,
+  getActiveStatefulPaths,
 };
