@@ -211,107 +211,36 @@ async function getBaseSchemaByEndpoint(req, res) {
  */
 async function getAdvancedConfig(req, res) {
   try {
-    const db = (req.db && (req.db.pool || req.db.stateless)) || req.app.get("dbPool");
-    const path = req.query?.path;
-    const method = (req.query?.method || "GET").toString().toUpperCase();
-    const workspace = req.query?.workspace ? String(req.query.workspace) : null;
-    const project = req.query?.project ? String(req.query.project) : null;
-
-    if (!path || typeof path !== "string") {
-      return res.status(400).json({ code: 400, message: "Thiếu hoặc sai 'path'.", data: null, success: false });
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: "endpoint_id là bắt buộc." });
     }
 
-    // 1) Tìm endpoint theo path+method (+workspace/project nếu có)
-    const params = [method, path];
-    let sql = `
-      SELECT e.id, e.is_stateful, e.is_active, e.path, e.method,
-             p.name AS project_name, w.name AS workspace_name
-      FROM endpoints e
-      JOIN folders    f ON f.id = e.folder_id
-      JOIN projects   p ON p.id = f.project_id
-      JOIN workspaces w ON w.id = p.workspace_id
-      WHERE UPPER(e.method) = $1
-        AND e.path = $2
-    `;
-    if (workspace) {
-      sql += ` AND LOWER(w.name) = LOWER($${params.length + 1})`;
-      params.push(workspace);
-    }
-    if (project) {
-      sql += ` AND LOWER(p.name) = LOWER($${params.length + 1})`;
-      params.push(project);
-    }
-    const { rows: candidates } = await db.query(sql, params);
+    // DB mới: ưu tiên tìm theo endpoint_id
+    let endpoint = typeof EndpointStatefulService.findByEndpointIdRaw === "function" ? await EndpointStatefulService.findByEndpointIdRaw(id) : null;
 
-    if (candidates.length === 0) {
-      return res.status(404).json({
-        code: 404,
-        message: "Không tìm thấy endpoint theo path/method (hoặc workspace/project).",
-        data: null,
-        success: false,
-      });
-    }
-    if (candidates.length > 1 && (!workspace || !project)) {
-      const choices = candidates.map((r) => ({
-        workspaceName: r.workspace_name,
-        projectName: r.project_name,
-        path: r.path,
-        method: r.method,
-        endpoint_id: r.id,
-      }));
-      return res.status(409).json({
-        code: 409,
-        message: "Nhiều endpoint trùng path/method. Hãy truyền thêm workspace & project.",
-        data: choices,
-        success: false,
-      });
+    // Fallback nếu service của bạn chưa đổi tên
+    if (!endpoint && typeof EndpointStatefulService.findByOriginIdRaw === "function") {
+      endpoint = await EndpointStatefulService.findByOriginIdRaw(id);
     }
 
-    const ep = candidates[0];
-
-    // 2) Lấy advanced_config trong endpoints_ful theo endpoint_id
-    const { rows: ful } = await db.query(
-      `SELECT id, endpoint_id, is_active, advanced_config
-         FROM endpoints_ful
-        WHERE endpoint_id = $1
-        LIMIT 1`,
-      [ep.id]
-    );
-
-    if (ful.length === 0) {
-      return res.status(404).json({
-        code: 404,
-        message: "Endpoint chưa có bản ghi stateful (endpoints_ful).",
-        data: { endpoint_id: ep.id, workspaceName: ep.workspace_name, projectName: ep.project_name, path: ep.path },
-        success: false,
-      });
+    if (!endpoint) {
+      return res.status(404).json({ error: "Không tìm thấy endpoint stateful với endpoint_id này." });
     }
 
-    const ef = ful[0];
     return res.status(200).json({
       code: 200,
       message: "Success",
       data: {
-        id: ef.id,
-        endpoint_id: ep.id,
-        workspaceName: ep.workspace_name,
-        projectName: ep.project_name,
-        path: ep.path,
-        method: ep.method,
-        is_stateful: true,
-        is_active: !!ef.is_active,
-        advanced_config: ef.advanced_config || null,
+        id: endpoint.id, // endpoints_ful.id
+        endpoint_id: Number(id),
+        advanced_config: endpoint.advanced_config || null,
       },
       success: true,
     });
   } catch (err) {
-    console.error("⚠️ Lỗi khi lấy advanced_config (by path):", err);
-    return res.status(500).json({
-      code: 500,
-      message: "Lỗi máy chủ khi lấy advanced_config.",
-      data: null,
-      success: false,
-    });
+    console.error("⚠️ Lỗi khi lấy advanced_config:", err);
+    return res.status(500).json({ error: "Lỗi máy chủ khi lấy advanced_config." });
   }
 }
 
@@ -426,6 +355,51 @@ async function getActiveStatefulPathsCtrl(req, res) {
   }
 }
 
+async function getEndpointsByOriginId(originId) {
+  // 1️⃣ Lấy folder_id từ DB stateful
+  const queryFul = `
+    SELECT e.folder_id
+    FROM endpoints_ful ef
+    JOIN endpoints e ON e.id = ef.endpoint_id
+    WHERE ef.endpoint_id = $1
+    LIMIT 1;
+  `;
+  const { rows: fulRows } = await statefulPool.query(queryFul, [originId]);
+  if (fulRows.length === 0) {
+    return { notFound: true, message: "Không tìm thấy dữ liệu trong endpoints_ful." };
+  }
+  const folderId = fulRows[0].folder_id;
+
+  // 2️⃣ Từ folder_id → lấy project_id trong DB stateless
+  const queryProject = `
+    SELECT project_id
+    FROM folders
+    WHERE id = $1
+    LIMIT 1;
+  `;
+  const { rows: projectRows } = await statelessPool.query(queryProject, [folderId]);
+  if (projectRows.length === 0) {
+    return { notFound: true, message: "Không tìm thấy project tương ứng với folder_id." };
+  }
+  const projectId = projectRows[0].project_id;
+
+  // 3️⃣ Lấy toàn bộ endpoint theo project_id từ DB stateless
+  const queryEndpoints = `
+    SELECT e.*, f.name AS folder_name, f.project_id
+    FROM endpoints e
+    JOIN folders f ON e.folder_id = f.id
+    WHERE f.project_id = $1
+    ORDER BY e.id;
+  `;
+  const { rows } = await statelessPool.query(queryEndpoints, [projectId]);
+
+  if (rows.length === 0) {
+    return { notFound: true, message: "Không tìm thấy endpoint nào trong project tương ứng." };
+  }
+
+  return rows;
+}
+
 /**
  * (Legacy) by-origin → dùng list locations mới (nếu còn route cũ)
  */
@@ -457,4 +431,6 @@ module.exports = {
 
   // Deprecated
   getEndpointsByOrigin,
+
+  getEndpointsByOriginId,
 };
