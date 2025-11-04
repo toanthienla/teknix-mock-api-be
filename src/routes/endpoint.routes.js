@@ -19,7 +19,8 @@ router.post("/", validateEndpoint, asyncHandler(ctrl.createEndpoint));
 
 // Update endpoint
 // PUT /endpoints/:id
-router.put("/:id", validateEndpoint, asyncHandler(ctrl.updateEndpoint));
+//router.put("/:id", validateEndpoint, asyncHandler(ctrl.updateEndpoint));
+router.put("/:id", asyncHandler(ctrl.updateEndpoint));
 
 // Delete endpoint
 // DELETE /endpoints/:id

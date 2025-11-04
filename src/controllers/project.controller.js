@@ -40,12 +40,39 @@ async function createProject(req, res) {
 // Update project
 async function updateProject(req, res) {
   try {
+    const { websocket_enabled, ...rest } = req.body || {};
+    const onlyWsToggle = typeof websocket_enabled !== "undefined" && (Object.keys(rest).length === 0 || (rest.name == null && rest.description == null));
+    // Chỉ bật/tắt WS (không đổi name/description)
+    if (onlyWsToggle) {
+      const result = await svc.updateProjectWebsocketEnabled(req.db.stateless, parseInt(req.params.id, 10), Boolean(websocket_enabled));
+      if (result.notFound) {
+        return error(res, 404, "Project not found");
+      }
+      return success(res, result.data);
+    }
+
+    // Flow cũ: cập nhật name/description (service đã tự validate name nếu có)
     const result = await svc.updateProject(req.db.stateless, req.params.id, req.body);
     if (result.notFound) {
       return error(res, 404, "Project not found");
     }
     if (result.success === false) {
       return res.status(400).json(result);
+    }
+    return success(res, result.data);
+  } catch (err) {
+    return error(res, 500, err.message);
+  }
+}
+
+// Update only websocket_enabled
+async function updateProjectWebsocketEnabledCtrl(req, res) {
+  try {
+    const { id } = req.params;
+    const { websocket_enabled } = req.body || {};
+    const result = await svc.updateProjectWebsocketEnabled(req.db.stateless, parseInt(id, 10), Boolean(websocket_enabled));
+    if (result.notFound) {
+      return error(res, 404, "Project not found");
     }
     return success(res, result.data);
   } catch (err) {

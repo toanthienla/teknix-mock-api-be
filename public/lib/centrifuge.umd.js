@@ -1,1 +1,0 @@
-Couldn't find the requested file /dist/centrifuge.umd.js in centrifuge.

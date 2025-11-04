@@ -16,9 +16,9 @@ router.get("/:id", asyncHandler(ctrl.getProjectById));
 // POST /projects
 router.post("/", validateProject, asyncHandler(ctrl.createProject));
 
-// Update project (validate name trước)
-// PUT /projects/:id
-router.put("/:id", validateProject, asyncHandler(ctrl.updateProject));
+// Update project
+// PUT /projects/:id   (hỗ trợ: name/description hoặc chỉ websocket_enabled)
+router.put("/:id", asyncHandler(ctrl.updateProject));
 
 // Delete project
 // DELETE /projects/:id
