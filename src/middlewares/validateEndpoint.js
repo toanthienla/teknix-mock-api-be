@@ -122,8 +122,12 @@ module.exports = function validateEndpoint(req, res, next) {
       if (typeof cfg.enabled !== "boolean") {
         return res.status(400).json({ success: false, errors: [{ field: "websocket_config.enabled", message: "enabled must be boolean" }] });
       }
-      if (!(cfg.message === null || typeof cfg.message === "string")) {
-        return res.status(400).json({ success: false, errors: [{ field: "websocket_config.message", message: "message must be string or null" }] });
+      // Cho phép message là string | object | null (theo tài liệu)
+      if (!(cfg.message === null || typeof cfg.message === "string" || (typeof cfg.message === "object" && !Array.isArray(cfg.message)))) {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "websocket_config.message", message: "message must be string, object, or null" }],
+        });
       }
       if (!Number.isInteger(cfg.delay_ms) || cfg.delay_ms < 0) {
         return res.status(400).json({ success: false, errors: [{ field: "websocket_config.delay_ms", message: "delay_ms must be a non-negative integer" }] });

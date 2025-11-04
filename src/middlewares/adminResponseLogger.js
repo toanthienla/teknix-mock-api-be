@@ -316,14 +316,8 @@ function adminResponseLogger(scope = "endpoint_responses") {
           // console.log("[WS] endpointId resolved =", endpointId, "status =", status);
           // console.log("[WS] cfg =", cfg);
           // console.log("[WS] channel =", `${workspace}/${project}`, "message =", message);
-          const data = {
-            type: "endpoint_ws_message",
-            channel: `${workspace}/${project}`,
-            endpoint_id: endpointId,
-            status_code: status,
-            message,
-            at: Date.now(),
-          };
+          // Gửi WS chỉ phần message (string hoặc object) theo yêu cầu
+          const data = message;
 
           // Gửi sau delay_ms (nếu có)
           const delay = Number.isInteger(cfg.delay_ms) && cfg.delay_ms > 0 ? cfg.delay_ms : 0;
