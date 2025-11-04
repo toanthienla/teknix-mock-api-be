@@ -80,6 +80,19 @@ function getClientIp(req) {
   return first.substring(0, 45);
 }
 
+// render đệ quy (đối với message là object/array)
+function renderDeep(value, ctx, renderFn) {
+  if (value == null) return value;
+  if (typeof value === "string") return renderFn(value, ctx);
+  if (Array.isArray(value)) return value.map((v) => renderDeep(v, ctx, renderFn));
+  if (typeof value === "object") {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = renderDeep(value[k], ctx, renderFn);
+    return out;
+  }
+  return value;
+}
+
 // Middleware bọc res.json/res.send để BẮT response trả về và GHI LOG vào project_request_logs
 // scope: 'endpoint_responses' — middleware này biết cách SUY LUẬN id cho các route /endpoint_responses
 // Lưu ý: Nếu bảng project_request_logs CHƯA TẠO, việc ghi log sẽ lỗi và bị nuốt (không ảnh hưởng response)
@@ -261,20 +274,43 @@ function adminResponseLogger(scope = "endpoint_responses") {
           const { workspace, project } = rows[0];
 
           // Chuẩn bị context & message
+          // Suy params từ pattern nếu có (để dùng trong template)
+          let paramsFromPath = {};
+          try {
+            const full = req.baseUrl ? req.baseUrl + (req.path || "") : req.originalUrl || req.path || "";
+            const onlyPath = String(full).split("?")[0];
+            const prefix = `/${workspace}/${project}`;
+            const restPath = onlyPath.startsWith(prefix) ? onlyPath.slice(prefix.length) || "/" : onlyPath;
+            if (ep.path) {
+              const m = match(String(ep.path), { decode: decodeURIComponent, end: true, strict: false });
+              const r = m(restPath);
+              if (r && r.params) paramsFromPath = r.params;
+            }
+          } catch (_) {}
+
           const ctx = {
             request: {
               method: (req.method || "").toUpperCase(),
               path: req.originalUrl || req.path || "",
               headers: headersReq,
               body: bodyReq,
-              query: req.query || {}, // <-- thêm query để dùng {{request.query.*}} trong template
+              query: req.query || {},
+              params: { ...(req.params || {}), ...paramsFromPath }, // hỗ trợ {{request.params.*}}
             },
             response: {
               status_code: status,
               body: response_body,
             },
           };
-          const message = cfg.message == null ? `${ctx.request.method} ${ctx.request.path} → ${status}` : render(String(cfg.message), ctx);
+          // message có thể là string hoặc object (theo spec mới)
+          let message;
+          if (cfg.message == null) {
+            message = `${ctx.request.method} ${ctx.request.path} → ${status}`;
+          } else if (typeof cfg.message === "string") {
+            message = render(String(cfg.message), ctx);
+          } else {
+            message = renderDeep(cfg.message, ctx, render);
+          }
 
           // >>> THÊM LOG NGAY TRƯỚC KHI TẠO `data` <<<
           // console.log("[WS] endpointId resolved =", endpointId, "status =", status);
