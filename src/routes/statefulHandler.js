@@ -1,7 +1,6 @@
 // src/routes/statefulHandler.js
 const { getCollection } = require("../config/db");
 const logSvc = require("../services/project_request_log.service");
-const { onProjectLogInserted } = require("../services/notification.service");
 const { runNextCalls, buildPlanFromAdvancedConfig } = require("./nextcallRouter");
 
 /* ========== Utils ========== */
@@ -283,20 +282,13 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
         console.error("[stateful] fallback query failed:", e?.message || e);
       }
     }
+    // expose logId cho caller (để nextCall dùng làm parent_log_id)
     if (logId) {
-      // expose logId cho caller (để nextCall dùng làm parent_log_id)
       try {
         req.res = req.res || {};
         req.res.locals = req.res.locals || {};
         req.res.locals.lastLogId = logId;
       } catch {}
-      try {
-        await onProjectLogInserted(logId, req.db.stateless);
-      } catch (e) {
-        console.error("[notify hook error]", e?.message || e);
-      }
-    } else {
-      console.warn("[stateful] missing logId - skip notify");
     }
   } catch (e) {
     console.error("[statefulHandler] log error:", e?.message || e);

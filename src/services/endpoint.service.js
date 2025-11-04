@@ -1,5 +1,6 @@
 const logSvc = require("./project_request_log.service");
 const endpointResponseService = require("./endpoint_response.service");
+const { pool: statelessPool } = require("../config/db");
 
 // Get all endpoints (optionally filter by project_id OR folder_id)
 async function getEndpoints(dbPool, { project_id, folder_id } = {}) {
@@ -29,6 +30,30 @@ async function getEndpoints(dbPool, { project_id, folder_id } = {}) {
 
   const { rows } = await dbPool.query(query, params);
   return { success: true, data: rows };
+}
+
+/**
+ * Lấy websocket_config của endpoint theo id
+ */
+async function getWebsocketConfigById(id) {
+  const sql = `SELECT id, websocket_config FROM endpoints WHERE id = $1 LIMIT 1`;
+  const { rows } = await statelessPool.query(sql, [id]);
+  if (rows.length === 0) return null;
+  return rows[0];
+}
+
+/**
+ * Cập nhật websocket_config (ghi đè toàn bộ object)
+ */
+async function updateWebsocketConfigById(id, config) {
+  const sql = `
+    UPDATE endpoints
+    SET websocket_config = $2::jsonb, updated_at = NOW()
+    WHERE id = $1
+    RETURNING id, websocket_config
+  `;
+  const { rows } = await statelessPool.query(sql, [id, JSON.stringify(config)]);
+  return rows[0] || null;
 }
 
 // Get endpoint by id
@@ -150,9 +175,9 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
     return { success: false, message: "No data provided to update." };
   }
 
-  // ✅ Chỉ cho phép 1 field: name hoặc schema
-  if (keys.length > 1 || !["name", "schema"].includes(keys[0])) {
-    return { success: false, message: "Only one field ('name' or 'schema') can be updated at a time." };
+  // ✅ Bước 2: cho phép 1 field trong: name | schema | websocket_config
+  if (keys.length !== 1 || !["name", "schema", "websocket_config"].includes(keys[0])) {
+    return { success: false, message: "Only one field ('name' or 'schema' or 'websocket_config') can be updated at a time." };
   }
 
   const field = keys[0];
@@ -173,6 +198,11 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
     return { success: false, message: "Invalid endpoint state. Cannot determine stateless or stateful." };
   }
 
+  // Trường hợp cập nhật websocket_config → áp dụng cho cả stateless/stateful (ghi ở bảng endpoints)
+  if (field === "websocket_config") {
+    const updated = await updateWebsocketConfigById(endpointId, value);
+    return { success: true, data: { ...endpoint, websocket_config: updated?.websocket_config ?? value } };
+  }
   // ============================
   // 🔹 CASE 1: Stateless
   // ============================
@@ -327,4 +357,6 @@ module.exports = {
   updateEndpoint,
   deleteEndpoint,
   setSendNotification,
+  getWebsocketConfigById,
+  updateWebsocketConfigById,
 };
