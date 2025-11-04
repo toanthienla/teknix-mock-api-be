@@ -110,7 +110,6 @@ const endpointsFulRoutes = require("./routes/endpoints_ful.routes");
 
 const mockRoutes = require("./routes/mock.routes"); // stateless
 const statefulRoutes = require("./routes/stateful.routes"); // API quản trị stateful
-const createNotificationsRoutes = require("./routes/notifications.routes");
 
 app.use("/workspaces", workspaceRoutes);
 app.use("/projects", projectRoutes);
@@ -121,7 +120,6 @@ app.use("/endpoints_ful", endpointsFulRoutes);
 // Routes giữ path gốc cũ
 app.use("/", endpointResponseRoutes);
 app.use("/", statefulRoutes);
-//app.use("/", createNotificationsRoutes());
 
 // Logs stateless/stateful
 app.use("/project_request_logs", projectRequestLogRoutes);
@@ -132,7 +130,14 @@ app.use(mockRoutes);
 // ---------------------------------------------
 // 9) Universal handler — ĐẶT CUỐI CÙNG
 // ---------------------------------------------
-app.use("/:workspace/:project", auth, require("./routes/universalHandler"));
+// Gắn logger để bắt response và broadcast WS theo endpoints.websocket_config
+const adminResponseLogger = require("./middlewares/adminResponseLogger");
+app.use(
+  "/:workspace/:project",
+  auth,
+  adminResponseLogger("universal"), // phải đứng TRƯỚC universalHandler
+  require("./routes/universalHandler")
+);
 
 // ---------------------------------------------
 // 10) Health-check

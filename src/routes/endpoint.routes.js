@@ -25,6 +25,10 @@ router.put("/:id", validateEndpoint, asyncHandler(ctrl.updateEndpoint));
 // DELETE /endpoints/:id
 router.delete("/:id", asyncHandler(ctrl.deleteEndpoint));
 
+// WebSocket config cho endpoint
+router.get("/:id/websocket", asyncHandler(ctrl.getEndpointWebsocketConfigCtrl));
+router.put("/:id/websocket", asyncHandler(ctrl.updateEndpointWebsocketConfigCtrl));
+
 // lấy toàn bộ endpoint để lấy các path của project đó.
 router.get("/advanced/path", ctrlEndpointFul.getActiveStatefulPathsCtrl);
 // 2 Routes mới về chức năng AdvancedConfig gồm GET và PUT

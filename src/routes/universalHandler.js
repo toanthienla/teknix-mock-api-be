@@ -1,6 +1,7 @@
 // src/routes/universalHandler.js
 const express = require("express");
-const router = express.Router();
+// ⚠️ Quan trọng: nhận được :workspace/:project từ router cha
+const router = express.Router({ mergeParams: true });
 
 const statefulHandler = require("./statefulHandler");
 const statelessHandler = require("./mock.routes");
@@ -71,24 +72,36 @@ function runHandler(handler, req, res, next) {
 router.use(async (req, res, next) => {
   try {
     const method = (req.method || "GET").toUpperCase();
-    // ——— Raw path resolution ———
-    // Use req.originalUrl first (full raw URL client requested, includes mount prefix).
-    // Fallback to baseUrl+path if originalUrl not available (safer when router is mounted).
-    const rawPath = (typeof req.originalUrl === "string" && req.originalUrl.split("?")[0]) || (req.baseUrl ? req.baseUrl + (req.path || "") : req.path) || "/";
+    // ——— Resolve theo mount `/:workspace/:project` ———
+    // Ưu tiên lấy từ params; nếu (hiếm) thiếu, bóc từ baseUrl.
+    let workspaceName = req.params?.workspace;
+    let projectName = req.params?.project;
+    if (!workspaceName || !projectName) {
+      const segs = String(req.baseUrl || "")
+        .split("/")
+        .filter(Boolean);
+      // baseUrl dạng: "/WP_2/pj3"
+      workspaceName = workspaceName || segs[0];
+      projectName = projectName || segs[1];
+    }
+    const rawPath = (req.baseUrl ? req.baseUrl + (req.path || "") : req.originalUrl || req.path || "/").split("?")[0];
     const normPath = normalizePath(rawPath);
-    // If request contains workspace/project prefix (e.g. /<workspace>/<project>/...),
-    // strip the first two segments for lookup in `endpoints` (which store paths without prefix).
-    const segsAll = normPath.split("/").filter(Boolean);
-    let prefixed = false;
-    let workspaceName = null;
-    let projectName = null;
-    let pathForLookup = normPath; // default
+    const pathForLookup = normalizePath(req.path || "/"); // phần sau prefix để dò `endpoints.path`
 
-    if (segsAll.length >= 3) {
-      prefixed = true;
-      workspaceName = segsAll[0];
-      projectName = segsAll[1];
-      pathForLookup = "/" + segsAll.slice(2).join("/");
+    // Tìm projectId theo cặp tên (1 lần, dùng cho cả stateful/stateless ở dưới)
+    let projectId = null;
+    try {
+      const { rows: prj } = await req.db.stateless.query(
+        `SELECT p.id
+           FROM projects p
+           JOIN workspaces w ON w.id = p.workspace_id
+          WHERE w.name = $1 AND p.name = $2
+          LIMIT 1`,
+        [workspaceName, projectName]
+      );
+      projectId = prj?.[0]?.id ?? null;
+    } catch (e) {
+      console.warn("[universal] resolve projectId failed:", e?.message || e);
     }
     const { base: baseCandidate, id: idCandidate } = splitBaseAndNumericId(pathForLookup);
 
@@ -139,7 +152,7 @@ router.use(async (req, res, next) => {
     }
 
     // 🔹 Tìm endpoint trong DB stateless
-    console.log(`[universal] lookup method=${method} normPath=${normPath} pathForLookup=${pathForLookup} candidates=${JSON.stringify(candidates)}`);
+    //console.log(`[universal] lookup method=${method} normPath=${normPath} pathForLookup=${pathForLookup} candidates=${JSON.stringify(candidates)}`);
 
     // Fetch all endpoints for the method, then match in JS using path-to-regexp
     const { rows: allRows } = await req.db.stateless.query(
@@ -148,7 +161,7 @@ router.use(async (req, res, next) => {
         WHERE UPPER(method) = $1`,
       [method]
     );
-    console.log(`[universal] allRows.count=${allRows.length}`);
+    //console.log(`[universal] allRows.count=${allRows.length}`);
 
     // Filter rows whose stored path pattern matches the pathForLookup or baseCandidate
     const candidateRows = allRows.filter((r) => {
@@ -165,7 +178,7 @@ router.use(async (req, res, next) => {
         const matched = Boolean(fn(pathForLookup)) || Boolean(fn(baseCandidate));
 
         if (matched) {
-          console.log(`✅ matched pattern=${pattern} for path=${pathForLookup}`);
+          //console.log(`✅ matched pattern=${pattern} for path=${pathForLookup}`);
         }
 
         return matched;
@@ -175,7 +188,7 @@ router.use(async (req, res, next) => {
       }
     });
 
-    console.log(`[universal] candidateRows.length=${candidateRows.length} paths=${JSON.stringify(candidateRows.map((r) => r.path))}`);
+    //console.log(`[universal] candidateRows.length=${candidateRows.length} paths=${JSON.stringify(candidateRows.map((r) => r.path))}`);
 
     if (!candidateRows.length) {
       return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
@@ -195,8 +208,7 @@ router.use(async (req, res, next) => {
     // 🔹 Nếu endpoint là STATEFUL
     // ===============================
     if (matchedStateless.is_stateful === true) {
-      // a) Tìm endpoint ở DB stateful
-      // ✅ DB mới: map qua endpoint_id (JOIN endpoints khi cần fallback)
+      // a) Tìm endpoint ở DB stateful — map qua endpoint_id (JOIN endpoints khi cần fallback)
       let st = await req.db.stateful.query(
         `SELECT ef.id, ef.is_active
            FROM endpoints_ful ef
@@ -230,31 +242,8 @@ router.use(async (req, res, next) => {
         });
       }
 
-      // ==========================
-      // ✅ Lấy workspace/project/subPath
-      // ==========================
-      const segments = req.path.split("/").filter(Boolean);
-      const workspaceName = segments[0];
-      const projectName = segments[1];
-      const subPath = "/" + segments.slice(2).join("/");
-
-      // ✅ Truy DB để lấy projectId
-      let projectId = null;
-      try {
-        const { rows } = await req.db.stateless.query(
-          `SELECT p.id
-             FROM projects p
-             JOIN workspaces w ON p.workspace_id = w.id
-            WHERE w.name = $1 AND p.name = $2
-            LIMIT 1`,
-          [workspaceName, projectName]
-        );
-        projectId = rows[0]?.id || null;
-      } catch (err) {
-        console.error("Error resolving projectId:", err);
-      }
-
-      // ✅ Tạo meta
+      // ✅ Tạo meta (dùng đúng params + subPath đã chuẩn hoá)
+      const subPath = pathForLookup;
       const meta = {
         method,
         basePath: matchedPath,
@@ -273,7 +262,7 @@ router.use(async (req, res, next) => {
       req.universal = meta;
       res.setHeader("x-universal-mode", mode);
       try {
-        console.log("[universal] decided", { mode, meta });
+        // console.log("[universal] decided", { mode, meta });
       } catch {}
 
       if (mode === "stateless") {
@@ -292,29 +281,9 @@ router.use(async (req, res, next) => {
       });
     }
 
-    // Detect optional workspace/project prefix for stateless endpoints.
-    // If request path is like /:workspace/:project/..., resolve projectId and attach subPath so
-    // downstream `mock.routes` can match using req.universal.subPath and req.universal.projectId.
-    const segs = (req.path || "").split("/").filter(Boolean);
-    if (segs.length >= 3) {
-      const workspaceName = segs[0];
-      const projectName = segs[1];
-      const subPath = "/" + segs.slice(2).join("/");
-      let projectId = null;
-      try {
-        const { rows } = await req.db.stateless.query(
-          `SELECT p.id
-             FROM projects p
-             JOIN workspaces w ON p.workspace_id = w.id
-            WHERE w.name = $1 AND p.name = $2
-            LIMIT 1`,
-          [workspaceName, projectName]
-        );
-        projectId = rows[0]?.id || null;
-      } catch (err) {
-        console.error("Error resolving projectId for stateless prefix:", err?.message || err);
-      }
-
+    // ✅ Stateless (đã có prefix vì router mount sẵn): tạo meta chuẩn và chạy handler
+    {
+      const subPath = pathForLookup;
       const meta = {
         mode: "stateless",
         method,
@@ -322,7 +291,6 @@ router.use(async (req, res, next) => {
         basePath: matchedPath,
         idInUrl,
         statelessId: matchedStateless.id,
-        // workspace/project context for downstream handlers
         projectId,
         workspaceName,
         projectName,
@@ -336,63 +304,6 @@ router.use(async (req, res, next) => {
       } catch {}
       return runHandler(statelessHandler, req, res, next);
     }
-
-    // No workspace/project prefix — keep legacy behavior
-    // If request had workspace/project prefix, include those fields and the subPath
-    if (prefixed) {
-      const subPath = pathForLookup;
-      const meta = {
-        mode: "stateless",
-        method,
-        rawPath: normPath,
-        basePath: matchedPath,
-        idInUrl,
-        statelessId: matchedStateless.id,
-        workspaceName,
-        projectName,
-        projectId: null, // resolved below (if possible)
-        subPath,
-      };
-
-      // attempt to resolve projectId (best-effort)
-      try {
-        const { rows } = await req.db.stateless.query(
-          `SELECT p.id
-             FROM projects p
-             JOIN workspaces w ON p.workspace_id = w.id
-            WHERE w.name = $1 AND p.name = $2
-            LIMIT 1`,
-          [workspaceName, projectName]
-        );
-        meta.projectId = rows[0]?.id || null;
-      } catch (err) {
-        console.error("Error resolving projectId for stateless prefix:", err?.message || err);
-      }
-
-      req.universal = meta;
-      cacheSet(ck, { mode: "stateless", meta });
-      res.setHeader("x-universal-mode", "stateless");
-      try {
-        console.log("[universal] decided", { mode: "stateless", meta });
-      } catch {}
-      return runHandler(statelessHandler, req, res, next);
-    }
-
-    const meta = {
-      mode: "stateless",
-      method,
-      rawPath: normPath,
-      basePath: matchedPath,
-      idInUrl,
-      statelessId: matchedStateless.id,
-    };
-    req.universal = meta;
-    cacheSet(ck, { mode: "stateless", meta });
-    res.setHeader("x-universal-mode", "stateless");
-    try {
-      console.log("[universal] decided", { mode: "stateless", meta });
-    } catch {}
-    return runHandler(statelessHandler, req, res, next);
   } catch (err) {
     console.error("❌ universalHandler error:", err);
     res.status(500).json({ error: "Internal Server Error", message: err.message });

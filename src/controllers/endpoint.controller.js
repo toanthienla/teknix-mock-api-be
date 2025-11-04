@@ -149,6 +149,26 @@ async function createEndpoint(req, res) {
   }
 }
 
+// GET /endpoints/:id/websocket
+async function getEndpointWebsocketConfigCtrl(req, res) {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return error(res, 400, "Invalid endpoint id.");
+  const row = await svc.getWebsocketConfigById(id);
+  if (!row) return error(res, 404, "Endpoint not found");
+  return success(res, row.websocket_config || {});
+}
+
+// PUT /endpoints/:id/websocket
+async function updateEndpointWebsocketConfigCtrl(req, res) {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return error(res, 400, "Invalid endpoint id.");
+  const cfg = req.body || {};
+  // (đã validate ở middleware riêng hoặc ở route này có thể chấp nhận trực tiếp)
+  const row = await svc.updateWebsocketConfigById(id, cfg);
+  if (!row) return error(res, 404, "Endpoint not found");
+  return success(res, row.websocket_config || {});
+}
+
 // Update endpoint controller
 async function updateEndpoint(req, res) {
   try {
@@ -295,4 +315,6 @@ module.exports = {
   setNotificationFlag,
   enableNotification,
   disableNotification,
+  getEndpointWebsocketConfigCtrl,
+  updateEndpointWebsocketConfigCtrl,
 };

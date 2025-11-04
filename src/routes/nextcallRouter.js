@@ -2,7 +2,6 @@
 const express = require("express");
 const router = express.Router();
 const logSvc = require("../services/project_request_log.service");
-const { onProjectLogInserted } = require("../services/notification.service");
 
 console.log("[nextCalls] router loaded");
 
@@ -294,15 +293,6 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
 
     const logId = inserted?.rows?.[0]?.id || null;
     console.log(`[nextCalls] log id=${logId ?? "null"}`);
-    if (logId) {
-      try {
-        // Theo service của bạn; nếu khác chữ ký hãy dùng đúng phiên bản đang chạy
-        await onProjectLogInserted(logId, statelessDb);
-        console.log("[nextCalls] notify OK");
-      } catch (e) {
-        console.warn("[nextCalls] notify error:", e?.message || e);
-      }
-    }
   } catch (e) {
     console.error("[nextCalls] log persist error:", e?.message || e);
   }
