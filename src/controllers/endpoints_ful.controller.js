@@ -294,16 +294,18 @@ async function getActiveStatefulPathsCtrl(req, res) {
     const db = (req.db && (req.db.pool || req.db.stateless)) || req.app.get("dbPool");
 
     const method = req.query?.method ? String(req.query.method).toUpperCase() : null;
-    const workspace = req.query?.workspace ? String(req.query.workspace) : null;
-    const project = req.query?.project ? String(req.query.project) : null;
+    const workspace = req.query?.workspace ? String(req.query.workspace).toLowerCase() : null;
+    const project = req.query?.project ? String(req.query.project).toLowerCase() : null;
     const plainOnly = String(req.query?.plainOnly || "").toLowerCase() === "true";
 
     const params = [];
     let i = 1;
+
     let sql = `
       SELECT DISTINCT
         w.name AS workspace_name,
         p.name AS project_name,
+        f.name AS folder_name,
         e.path AS path
       FROM endpoints e
       JOIN folders      f   ON f.id = e.folder_id
@@ -314,27 +316,31 @@ async function getActiveStatefulPathsCtrl(req, res) {
         AND ef.is_active   = TRUE
         AND e.is_active    = FALSE
     `;
+
     if (method) {
       sql += ` AND UPPER(e.method) = $${i++}`;
       params.push(method);
     }
     if (workspace) {
-      sql += ` AND LOWER(w.name) = LOWER($${i++})`;
+      sql += ` AND LOWER(w.name) = $${i++}`;
       params.push(workspace);
     }
     if (project) {
-      sql += ` AND LOWER(p.name) = LOWER($${i++})`;
+      sql += ` AND LOWER(p.name) = $${i++}`;
       params.push(project);
     }
     if (plainOnly) {
       sql += ` AND e.path NOT LIKE '%:%' AND e.path NOT LIKE '%*%'`;
     }
-    sql += ` ORDER BY w.name, p.name, e.path`;
+
+    sql += ` ORDER BY w.name, p.name, f.name, e.path`;
 
     const { rows } = await db.query(sql, params);
+
     const data = rows.map((r) => ({
       workspaceName: r.workspace_name,
       projectName: r.project_name,
+      folderName: r.folder_name,
       path: r.path,
     }));
 
@@ -354,6 +360,7 @@ async function getActiveStatefulPathsCtrl(req, res) {
     });
   }
 }
+
 
 /**
  * (Legacy) by-origin → dùng list locations mới (nếu còn route cũ)
