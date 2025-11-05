@@ -45,6 +45,7 @@ exports.listLogs = async (req, res) => {
 
 // GET /project_request_logs/project/:id → trả danh sách logs theo project_id
 exports.getLogsByProjectId = async (req, res) => {
+  console.log(">>> [Controller] getLogsByProjectId called");
   try {
     const projectId = parseInt(req.query.project_id);
     const page = parseInt(req.query.page) || 1;
