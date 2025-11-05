@@ -134,7 +134,7 @@ exports.listLogs = async (pool, opts = {}) => {
   };
 };
 
-exports.getLogsByProjectId = async (pool, projectId) => {
+exports.getLogsByProjectId = async (pool, projectId, limit, offset) => {
   const { rows } = await pool.query(
     `
       SELECT
@@ -156,11 +156,19 @@ exports.getLogsByProjectId = async (pool, projectId) => {
       FROM project_request_logs l
       WHERE l.project_id = $1
       ORDER BY l.created_at DESC
+      LIMIT $2 OFFSET $3
     `,
+    [projectId, limit, offset]
+  );
+
+  const totalResult = await pool.query(
+    `SELECT COUNT(*) AS total FROM project_request_logs WHERE project_id = $1`,
     [projectId]
   );
 
-  return rows; // Trả về danh sách log
+  const total = parseInt(totalResult.rows[0].total, 10);
+
+  return { items: rows, total };
 };
 
 exports.nullifyFolderTree = async (client, folderId) => {
