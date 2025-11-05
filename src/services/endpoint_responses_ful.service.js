@@ -8,7 +8,7 @@ const { statelessPool } = require("../config/db");
 async function findById(id) {
   const sql = `
     SELECT id, endpoint_id, name, status_code, response_body, delay_ms,
-           websocket_enabled, websocket_message, websocket_delay_ms,
+           
            created_at, updated_at
       FROM endpoint_responses_ful
      WHERE id = $1
@@ -25,7 +25,7 @@ async function findByEndpointId(endpointId) {
   // KHÔNG phải endpoints.id của stateless gốc.
   const sql = `
     SELECT id, endpoint_id, name, status_code, response_body, delay_ms,
-           websocket_enabled, websocket_message, websocket_delay_ms,
+            
            created_at, updated_at
       FROM endpoint_responses_ful
      WHERE endpoint_id = $1
@@ -59,7 +59,7 @@ async function updateById(id, patch) {
         SET ${fields.join(", ")}, updated_at = NOW()
       WHERE id = $${i}
       RETURNING id, endpoint_id, name, status_code, response_body, delay_ms,
-                websocket_enabled, websocket_message, websocket_delay_ms,
+                 
                 created_at, updated_at`,
     vals
   );
