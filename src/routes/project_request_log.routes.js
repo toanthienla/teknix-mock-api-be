@@ -6,7 +6,7 @@ const router = express.Router();
 
 router.get("/", controller.listLogs);
 // Lấy theo project_id (ĐẶT TRƯỚC để không bị nuốt bởi "/:id")
-router.get("/project/:id", controller.getLogsByProjectId);
+router.get("/project_request_logs/", controller.getLogsByProjectId);
 // ✅ Lấy 1 log theo log_id
 router.get("/:id", controller.getLogById);
 module.exports = router;

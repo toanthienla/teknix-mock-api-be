@@ -46,20 +46,37 @@ exports.listLogs = async (req, res) => {
 // GET /project_request_logs/project/:id → trả danh sách logs theo project_id
 exports.getLogsByProjectId = async (req, res) => {
   try {
-    const projectId = toInt(req.params.id);
+    const projectId = parseInt(req.query.project_id);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+
     if (!projectId) {
-      return res.status(400).json({ message: "Invalid project id" });
+      return res.status(400).json({ message: "Invalid project_id" });
     }
 
-    const logs = await service.getLogsByProjectId(req.db.stateless, projectId);
+    const offset = (page - 1) * limit;
+
+    const { items, total } = await service.getLogsByProjectId(
+      req.db.stateless,
+      projectId,
+      limit,
+      offset
+    );
 
     return res.status(200).json({
-      count: logs.length,
-      items: logs,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      count: items.length,
+      items,
     });
   } catch (err) {
     console.error("[project_request_logs] getLogsByProjectId error:", err);
-    return res.status(500).json({ message: "Internal Server Error", error: err.message });
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error: err.message,
+    });
   }
 };
 
