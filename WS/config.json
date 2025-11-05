@@ -2,13 +2,9 @@
   "admin": { "enabled": true, "password": "admin", "secret": "admin_secret" },
   "client": {
     "token": { "hmac_secret_key": "MY_SUPER_SECRET_456" },
-    "allowed_origins": [
-      "http://localhost:3000",
-      "http://127.0.0.1:5500",
-      "http://localhost:5173"
-    ]
+    "allowed_origins": ["http://localhost:3000", "http://127.0.0.1:5500", "http://localhost:5173"]
   },
   "http_api": { "key": "key_ngau_nhien_rat_dai" },
   "log": { "level": "info" },
-"health": { "enabled": true }
+  "health": { "enabled": true }
 }

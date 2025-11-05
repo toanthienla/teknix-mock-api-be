@@ -1,7 +1,6 @@
-//const db = require("../config/db");
-const endpointResponseService = require("./endpoint_response.service"); // import service response
-const statefulEndpointSvc = require("./endpoints_ful.service");
 const logSvc = require("./project_request_log.service");
+const endpointResponseService = require("./endpoint_response.service");
+const { pool: statelessPool } = require("../config/db");
 
 // Get all endpoints (optionally filter by project_id OR folder_id)
 async function getEndpoints(dbPool, { project_id, folder_id } = {}) {
@@ -17,8 +16,10 @@ async function getEndpoints(dbPool, { project_id, folder_id } = {}) {
   if (project_id) {
     query += ` JOIN folders f ON e.folder_id = f.id WHERE f.project_id = $${paramIndex++}`;
     params.push(project_id);
-
-    // Nếu không có project_id nhưng có folder_id, lọc trực tiếp
+    if (folder_id) {
+      query += ` AND e.folder_id = $${paramIndex++}`;
+      params.push(folder_id);
+    }
   } else if (folder_id) {
     query += ` WHERE e.folder_id = $${paramIndex++}`;
     params.push(folder_id);
@@ -29,6 +30,30 @@ async function getEndpoints(dbPool, { project_id, folder_id } = {}) {
 
   const { rows } = await dbPool.query(query, params);
   return { success: true, data: rows };
+}
+
+/**
+ * Lấy websocket_config của endpoint theo id
+ */
+async function getWebsocketConfigById(id) {
+  const sql = `SELECT id, websocket_config FROM endpoints WHERE id = $1 LIMIT 1`;
+  const { rows } = await statelessPool.query(sql, [id]);
+  if (rows.length === 0) return null;
+  return rows[0];
+}
+
+/**
+ * Cập nhật websocket_config (ghi đè toàn bộ object)
+ */
+async function updateWebsocketConfigById(id, config) {
+  const sql = `
+    UPDATE endpoints
+    SET websocket_config = $2::jsonb, updated_at = NOW()
+    WHERE id = $1
+    RETURNING id, websocket_config
+  `;
+  const { rows } = await statelessPool.query(sql, [id, JSON.stringify(config)]);
+  return rows[0] || null;
 }
 
 // Get endpoint by id
@@ -117,7 +142,17 @@ async function createEndpoint(dbPool, { folder_id, name, method, path, is_active
   );
   const endpoint = rows[0];
 
-  // 5) Auto-create default endpoint_response
+  // 5) Nếu endpoint tạo ở chế độ STATEFUL, gắn bản ghi meta ở endpoints_ful theo endpoint_id
+  if (endpoint.is_stateful === true) {
+    await dbPool.query(
+      `INSERT INTO endpoints_ful (endpoint_id, is_active)
+       VALUES ($1, TRUE)
+       ON CONFLICT (endpoint_id) DO NOTHING`,
+      [endpoint.id]
+    );
+  }
+
+  // 6) Auto-create default endpoint_response (STATeless)
   await endpointResponseService.create(dbPool, {
     endpoint_id: endpoint.id,
     name: "Success",
@@ -140,29 +175,34 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
     return { success: false, message: "No data provided to update." };
   }
 
-  // ✅ Chỉ cho phép 1 field: name hoặc schema
-  if (keys.length > 1 || !["name", "schema"].includes(keys[0])) {
-    return { success: false, message: "Only one field ('name' or 'schema') can be updated at a time." };
+  // ✅ Bước 2: cho phép 1 field trong: name | schema | websocket_config
+  if (keys.length !== 1 || !["name", "schema", "websocket_config"].includes(keys[0])) {
+    return { success: false, message: "Only one field ('name' or 'schema' or 'websocket_config') can be updated at a time." };
   }
 
   const field = keys[0];
   const value = payload[field];
 
-  // 1️⃣ Lấy endpoint từ DB stateless để xác định loại
+  // 1️⃣ Lấy endpoint để xác định loại (một DB hợp nhất → dùng clientStateless)
   const { rows: epRows } = await clientStateless.query("SELECT * FROM endpoints WHERE id = $1", [endpointId]);
   const endpoint = epRows[0];
   if (!endpoint) return { success: false, message: "Endpoint not found." };
 
-  const { is_active, is_stateful, folder_id, name: oldName } = endpoint;
+  const { is_active, is_stateful, folder_id } = endpoint;
 
-  // 2️⃣ Xác định loại endpoint
-  const isStateless = is_active === true && is_stateful === false;
-  const isStateful = is_active === false && is_stateful === true;
+  // 2️⃣ Xác định loại endpoint (đúng theo schema mới)
+  const isStateless = is_stateful === false;
+  const isStateful = is_stateful === true;
 
   if (!isStateless && !isStateful) {
     return { success: false, message: "Invalid endpoint state. Cannot determine stateless or stateful." };
   }
 
+  // Trường hợp cập nhật websocket_config → áp dụng cho cả stateless/stateful (ghi ở bảng endpoints)
+  if (field === "websocket_config") {
+    const updated = await updateWebsocketConfigById(endpointId, value);
+    return { success: true, data: { ...endpoint, websocket_config: updated?.websocket_config ?? value } };
+  }
   // ============================
   // 🔹 CASE 1: Stateless
   // ============================
@@ -171,10 +211,18 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
       return { success: false, message: "Stateless endpoints only allow updating the name." };
     }
 
-    // Kiểm tra trùng name trong cùng folder
-    const { rows: dupRows } = await clientStateless.query("SELECT id FROM endpoints WHERE folder_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3", [folder_id, value, endpointId]);
+    // 🔄 Kiểm tra trùng name trong CÙNG PROJECT (nhất quán với create)
+    const { rows: dupRows } = await clientStateless.query(
+      `SELECT e.id
+         FROM endpoints e
+         JOIN folders f ON f.id = e.folder_id
+        WHERE f.project_id = (SELECT project_id FROM folders WHERE id = $1)
+          AND LOWER(e.name) = LOWER($2)
+          AND e.id <> $3`,
+      [folder_id, value, endpointId]
+    );
     if (dupRows.length > 0) {
-      return { success: false, message: "An endpoint with this name already exists in the folder." };
+      return { success: false, message: "An endpoint with this name already exists in this project." };
     }
 
     // Update name
@@ -186,53 +234,47 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
   // 🔹 CASE 2: Stateful
   // ============================
   if (isStateful) {
-    // Lấy endpoint stateful theo origin_id
-    const { rows: sfRows } = await clientStateful.query("SELECT * FROM endpoints_ful WHERE origin_id=$1", [endpointId]);
+    // Lấy meta stateful theo endpoint_id
+    const { rows: sfRows } = await clientStateless.query("SELECT * FROM endpoints_ful WHERE endpoint_id = $1", [endpointId]);
     const statefulEp = sfRows[0];
     if (!statefulEp) return { success: false, message: "Stateful endpoint not found." };
 
-    // Nếu update name → kiểm tra trùng name trong folder tương ứng
+    // Nếu update name → kiểm tra trùng name trong folder tương ứng (trên bảng endpoints)
     if (field === "name") {
-      const { rows: dupRows } = await clientStateful.query("SELECT id FROM endpoints_ful WHERE folder_id=$1 AND LOWER(name)=LOWER($2) AND origin_id<>$3", [folder_id, value, endpointId]);
+      // 🔄 Kiểm tra trùng name trong CÙNG PROJECT (nhất quán với create)
+      const { rows: dupRows } = await clientStateless.query(
+        `SELECT e.id
+           FROM endpoints e
+           JOIN folders f ON f.id = e.folder_id
+          WHERE f.project_id = (SELECT project_id FROM folders WHERE id = $1)
+            AND LOWER(e.name) = LOWER($2)
+            AND e.id <> $3`,
+        [folder_id, value, endpointId]
+      );
       if (dupRows.length > 0) {
-        return { success: false, message: "An endpoint with this name already exists in the folder." };
+        return { success: false, message: "An endpoint with this name already exists in this project." };
       }
-    }
-
-    const updates = [];
-    const values = [];
-    let idx = 1;
-
-    if (field === "name") {
-      updates.push(`name = $${idx++}`);
-      values.push(value);
+      // Name thuộc bảng endpoints → cập nhật ở endpoints
+      const { rows: updatedRows } = await clientStateless.query("UPDATE endpoints SET name=$1, updated_at=NOW() WHERE id=$2 RETURNING *", [value, endpointId]);
+      return { success: true, data: updatedRows[0] };
     }
 
     if (field === "schema") {
       if (typeof value !== "object" || Array.isArray(value) || Object.keys(value).length === 0) {
         return { success: false, message: "Invalid schema format." };
       }
-      updates.push(`schema = $${idx++}::jsonb`);
-      values.push(JSON.stringify(value));
+      const { rows: updatedRows } = await clientStateless.query(
+        `UPDATE endpoints_ful
+            SET schema = $1::jsonb,
+                updated_at = NOW()
+          WHERE endpoint_id = $2
+        RETURNING *`,
+        [JSON.stringify(value), endpointId]
+      );
+      return { success: true, data: updatedRows[0] };
     }
 
-    if (updates.length === 0) {
-      return { success: false, message: "No valid field to update." };
-    }
-
-    values.push(endpointId);
-
-    const { rows: updatedRows } = await clientStateful.query(
-      `
-      UPDATE endpoints_ful
-      SET ${updates.join(", ")}, updated_at = NOW()
-      WHERE origin_id = $${idx}
-      RETURNING *;
-      `,
-      values
-    );
-
-    return { success: true, data: updatedRows[0] };
+    return { success: false, message: "No valid field to update." };
   }
 
   return { success: false, message: "Unexpected endpoint state." };
@@ -240,66 +282,72 @@ async function updateEndpoint(clientStateless, clientStateful, endpointId, paylo
 
 // Delete endpoint
 async function deleteEndpoint(dbPool, endpointId) {
-  const endpoint = await getEndpointById(dbPool, endpointId);
-  if (!endpoint) return null;
-
-  // dùng 1 transaction để đảm bảo tính nhất quán
-  await dbPool.query("BEGIN");
+  const client = await dbPool.connect();
   try {
-    // 1) Nếu là stateful, xóa bản ghi ở stateful trước (nếu có)
-    if (endpoint.is_stateful === true) {
-      const statefulEndpoint = await statefulEndpointSvc.findByOriginId(endpoint.id);
-      if (statefulEndpoint) {
-        await statefulEndpointSvc.deleteById(statefulEndpoint.id);
-      }
-    }
+    await client.query("BEGIN");
 
-    // 2) Nullify notifications ràng buộc tới endpoint này
-    //    (theo yêu cầu: set NULL cho cả 3 cột)
-    await dbPool.query(
+    // (A) Nullify logs trước để tránh FK (nếu có)
+    //   - cả stateless lẫn stateful (khi đã convert)
+    await client.query(
       `
+      UPDATE project_request_logs
+         SET endpoint_id = NULL,
+             stateful_endpoint_id = NULL,
+             stateful_endpoint_response_id = NULL
+       WHERE endpoint_id = $1
+          OR stateful_endpoint_id IN (SELECT id FROM endpoints_ful WHERE endpoint_id = $1)
+    `,
+      [endpointId]
+    );
+
+    // (B) Xoá responses STATEFUL trước (nếu có)
+    await client.query(
+      `
+     DELETE FROM endpoint_responses_ful
+       WHERE endpoint_id IN (SELECT id FROM endpoints_ful WHERE endpoint_id = $1)
+    `,
+      [endpointId]
+    );
+
+    // (C) Xoá bản ghi STATEFUL meta
+    await client.query(`DELETE FROM endpoints_ful WHERE endpoint_id = $1`, [endpointId]);
+
+    // (D) Xoá responses STATELESS
+    await client.query(`DELETE FROM endpoint_responses WHERE endpoint_id = $1`, [endpointId]);
+
+    // (E) (Tuỳ chọn) CHỈ chạy nếu còn bảng notifications
+    const { rows } = await client.query(`SELECT to_regclass('public.notifications') IS NOT NULL AS exists`);
+    if (rows?.[0]?.exists) {
+      await client.query(
+        `
         UPDATE notifications
            SET project_request_log_id = NULL,
                endpoint_id = NULL,
                user_id = NULL
-        WHERE endpoint_id = $1
+         WHERE endpoint_id = $1
       `,
-      [endpointId]
-    );
+        [endpointId]
+      );
+    }
 
-    // 3) Nullify logs + xóa endpoint_responses (logic đã có sẵn)
-    await logSvc.nullifyEndpointAndResponses(dbPool, endpointId);
+    // (F) Cuối cùng xoá endpoint gốc
+    await client.query(`DELETE FROM endpoints WHERE id = $1`, [endpointId]);
 
-    // 4) Xóa endpoint gốc
-    await dbPool.query("DELETE FROM endpoints WHERE id=$1", [endpointId]);
-
-    await dbPool.query("COMMIT");
-    return { success: true, data: endpoint };
+    await client.query("COMMIT");
+    return { success: true };
   } catch (err) {
-    await dbPool.query("ROLLBACK");
+    await client.query("ROLLBACK");
     throw err;
+  } finally {
+    client.release();
   }
 }
 
 async function setSendNotification(dbPool, endpointId, enable) {
-  // kiểm tra tồn tại
-  const { rows: chk } = await dbPool.query("SELECT id FROM endpoints WHERE id = $1 LIMIT 1", [endpointId]);
-  if (chk.length === 0) {
-    return { success: false, message: "Endpoint not found." };
-  }
-
-  const { rows } = await dbPool.query(
-    `
-    UPDATE endpoints
-       SET send_notification = $2,
-           updated_at = NOW()
-     WHERE id = $1
-     RETURNING id, name, method, path, is_active, is_stateful, send_notification, updated_at
-    `,
-    [endpointId, !!enable]
-  );
-
-  return { success: true, data: rows[0] };
+  return {
+    success: false,
+    message: "send_notification is not available on current schema. Add column endpoints.send_notification or move flag to responses.",
+  };
 }
 
 module.exports = {
@@ -309,4 +357,6 @@ module.exports = {
   updateEndpoint,
   deleteEndpoint,
   setSendNotification,
+  getWebsocketConfigById,
+  updateWebsocketConfigById,
 };

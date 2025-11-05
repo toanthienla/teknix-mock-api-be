@@ -1,6 +1,5 @@
 const svc = require("../services/endpoint.service");
 const { success, error } = require("../utils/response");
-const statefulSvc = require("../services/endpoints_ful.service");
 
 // Helper: dựng lại schema theo __order và strip __order khỏi response
 function orderAndStripSchema(schema) {
@@ -22,12 +21,17 @@ function orderAndStripSchema(schema) {
   return out;
 }
 
-// Chuẩn hoá dữ liệu stateful: id = origin_id, ẩn origin_id và ẩn __order trong schema
-function presentStateful(row) {
-  if (!row) return row;
-  const { origin_id, schema, ...rest } = row;
-  const schemaOut = orderAndStripSchema(schema);
-  return { ...rest, schema: schemaOut, id: origin_id, is_stateful: true };
+// Hợp nhất meta stateful (từ endpoints_ful) vào endpoint stateless
+function mergeStatefulIntoEndpoint(ep, fulRow) {
+  if (!fulRow) return ep;
+  const schemaOut = orderAndStripSchema(fulRow.schema);
+  return {
+    ...ep,
+    schema: schemaOut,
+    advanced_config: fulRow.advanced_config ?? null,
+    stateful_id: fulRow.id, // id của bản ghi ở endpoints_ful (tham khảo/diagnostic)
+    is_stateful: true,
+  };
 }
 
 // Lấy danh sách endpoints (có thể lọc theo project_id hoặc folder_id)
@@ -61,18 +65,16 @@ async function listEndpoints(req, res) {
 
     // Bước 3: Nếu có, lấy tất cả dữ liệu stateful trong MỘT lần gọi
     if (statefulIds.length > 0) {
-      const { rows: statefulEndpoints } = await req.db.stateful.query(`SELECT * FROM endpoints_ful WHERE origin_id = ANY($1::int[])`, [statefulIds]);
-
-      // Tạo một map để tra cứu nhanh
-      const statefulMap = new Map(statefulEndpoints.map((sep) => [sep.origin_id, sep]));
-
-      // Bước 4: Hợp nhất dữ liệu
-      endpoints = endpoints.map((ep) => {
-        if (ep.is_stateful === true && statefulMap.has(ep.id)) {
-          return presentStateful(statefulMap.get(ep.id));
-        }
-        return ep;
-      });
+      // Schema mới: endpoints_ful liên kết qua endpoint_id
+      const { rows: statefulEndpoints } = await req.db.stateless.query(
+        `SELECT id, endpoint_id, schema, advanced_config
+           FROM endpoints_ful
+          WHERE endpoint_id = ANY($1::int[])`,
+        [statefulIds]
+      );
+      const statefulMap = new Map(statefulEndpoints.map((r) => [r.endpoint_id, r]));
+      // Bước 4: Hợp nhất (giữ thông tin endpoint gốc, tiêm schema/advanced_config/stateful_id)
+      endpoints = endpoints.map((ep) => (ep.is_stateful === true && statefulMap.has(ep.id) ? mergeStatefulIntoEndpoint(ep, statefulMap.get(ep.id)) : ep));
     }
 
     return success(res, endpoints);
@@ -93,23 +95,20 @@ async function getEndpointById(req, res) {
 
     // --- Bước 2: Nếu endpoint có stateful ---
     if (statelessEndpoint.is_stateful === true) {
-      const statefulEndpoint = await statefulSvc.findByOriginId(statelessEndpoint.id);
-      if (!statefulEndpoint) {
-        return error(
-          res,
-          404,
-          `Stateful data for endpoint ${id} not found, but it is marked as stateful.`
-        );
+      // Schema mới: tra meta stateful theo endpoint_id
+      const {
+        rows: [ful],
+      } = await req.db.stateless.query(
+        `SELECT id, endpoint_id, schema, advanced_config
+           FROM endpoints_ful
+          WHERE endpoint_id = $1
+          LIMIT 1`,
+        [statelessEndpoint.id]
+      );
+      if (!ful) {
+        return error(res, 404, `Stateful data for endpoint ${id} not found, but it is marked as stateful.`);
       }
-
-      // ✅ Kế thừa send_notification từ stateless
-      const merged = {
-        ...statefulEndpoint,
-        send_notification: statelessEndpoint.send_notification ?? false,
-      };
-
-      // Trả về với id = origin_id để thống nhất với list
-      return success(res, presentStateful(merged));
+      return success(res, mergeStatefulIntoEndpoint(statelessEndpoint, ful));
     }
 
     // --- Bước 3: Trả về stateless ---
@@ -148,6 +147,26 @@ async function createEndpoint(req, res) {
       errors: [{ field: "general", message: err.message }],
     });
   }
+}
+
+// GET /endpoints/:id/websocket
+async function getEndpointWebsocketConfigCtrl(req, res) {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return error(res, 400, "Invalid endpoint id.");
+  const row = await svc.getWebsocketConfigById(id);
+  if (!row) return error(res, 404, "Endpoint not found");
+  return success(res, row.websocket_config || {});
+}
+
+// PUT /endpoints/:id/websocket
+async function updateEndpointWebsocketConfigCtrl(req, res) {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return error(res, 400, "Invalid endpoint id.");
+  const cfg = req.body || {};
+  // (đã validate ở middleware riêng hoặc ở route này có thể chấp nhận trực tiếp)
+  const row = await svc.updateWebsocketConfigById(id, cfg);
+  if (!row) return error(res, 404, "Endpoint not found");
+  return success(res, row.websocket_config || {});
 }
 
 // Update endpoint controller
@@ -241,7 +260,7 @@ async function deleteEndpoint(req, res) {
       await logSvc.nullifyEndpointAndResponses(req.db.stateless, eid);
     } catch (_) {}
 
-    // Xoá endpoint (KHÔNG ghi log xoá theo yêu cầu)
+    // Xoá endpoint (service đã tự null-hoá stateful_* & dọn _ful)
     const result = await svc.deleteEndpoint(req.db.stateless, eid);
     return success(res, {
       message: `Endpoint with ID: ${eid} has been deleted successfully.`,
@@ -296,4 +315,6 @@ module.exports = {
   setNotificationFlag,
   enableNotification,
   disableNotification,
+  getEndpointWebsocketConfigCtrl,
+  updateEndpointWebsocketConfigCtrl,
 };

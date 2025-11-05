@@ -4,7 +4,6 @@ const router = express.Router();
 const authMiddleware = require("../middlewares/authMiddleware");
 const axios = require("axios");
 const https = require("https");
-const { onProjectLogInserted } = require("../services/notification.service");
 const logSvc = require("../services/project_request_log.service");
 const { getCollection } = require("../config/db");
 const FormData = require("form-data");
@@ -174,16 +173,18 @@ router.use(authMiddleware, async (req, res, next) => {
   const started = Date.now();
   const safeUserId = await getSafeUserId(req);
   try {
+    // 🚦 CHỈ bỏ qua khi KHÔNG đi qua universal
+    const rawPath = req.path || req.originalUrl || "";
+    if (!req.universal && /^\/[^/]+\/[^/]+(?:\/|$)/.test(rawPath)) {
+      // Trường hợp gọi trực tiếp ở app (không qua universal) → nhường cho universal
+      return next();
+    }
     const method = req.method.toUpperCase();
 
-    // Chuẩn hoá pathForMatch: ưu tiên subPath do universal gắn,
-    // nếu không có thì tự cắt "/:workspace/:project" nếu URL có dạng đó.
-    const pathForMatch = (() => {
-      if (req.universal && req.universal.subPath) return req.universal.subPath;
-      const p = req.path || "";
-      const m = p.match(/^\/[^/]+\/[^/]+(\/.*)$/); // "/<ws>/<pj>/<...>" -> "/<...>"
-      return m ? m[1] : p;
-    })();
+    // Chuẩn hoá pathForMatch:
+    // - Nếu đi qua universal → dùng subPath mà universal đã cắt sẵn
+    // - Ngược lại → dùng req.path như legacy
+    const pathForMatch = req.universal?.subPath || req.path || "";
 
     const { rows: endpoints } = await req.db.stateless.query(
       `SELECT e.id, e.method, e.path, e.folder_id, e.is_stateful, e.is_active, f.project_id
@@ -437,13 +438,6 @@ router.use(authMiddleware, async (req, res, next) => {
             console.error("[after insertLog] fallback query failed:", e?.message || e);
           }
         }
-        if (logId) {
-          onProjectLogInserted(logId, req.db.stateless).catch((err) => {
-            console.error("[notify hook error]", err?.message || err);
-          });
-        } else {
-          console.warn("[after insertLog] missing logId - skip notify");
-        }
       } catch (_) {}
       return res.status(status).json(body);
     }
@@ -495,13 +489,7 @@ router.use(authMiddleware, async (req, res, next) => {
             console.error("[after insertLog] fallback query failed:", e?.message || e);
           }
         }
-        if (logId) {
-          onProjectLogInserted(logId, req.db.stateless).catch((err) => {
-            console.error("[notify hook error]", err?.message || err);
-          });
-        } else {
-          console.warn("[after insertLog] missing logId - skip notify");
-        }
+
         return res.status(status).json(body);
       }
     }
@@ -605,9 +593,7 @@ router.use(authMiddleware, async (req, res, next) => {
                 logId = rows?.[0]?.id || null;
               } catch (e) {}
             }
-            if (logId) {
-              onProjectLogInserted(logId, req.db.stateless).catch(() => {});
-            }
+
             return res.status(status).json(safeBody);
           }
 
@@ -760,13 +746,7 @@ router.use(authMiddleware, async (req, res, next) => {
               console.error("[after insertLog] fallback query failed:", e?.message || e);
             }
           }
-          if (logId) {
-            onProjectLogInserted(logId, req.db.stateless).catch((err) => {
-              console.error("[notify hook error]", err?.message || err);
-            });
-          } else {
-            console.warn("[after insertLog] missing logId - skip notify");
-          }
+
           return res.status(proxyResp.status).set(outHeaders).send(proxyResp.data);
         } catch (err) {
           console.error("[Proxy Error]", err.message, err.code, err?.response?.status, err?.response?.statusText);
@@ -823,13 +803,7 @@ router.use(authMiddleware, async (req, res, next) => {
             console.error("[after insertLog] fallback query failed:", e?.message || e);
           }
         }
-        if (logId) {
-          onProjectLogInserted(logId, req.db.stateless).catch((err) => {
-            console.error("[notify hook error]", err?.message || err);
-          });
-        } else {
-          console.warn("[after insertLog] missing logId - skip notify");
-        }
+
         if (body && typeof body === "object") {
           return res.status(status).json(body);
         }
@@ -864,13 +838,6 @@ router.use(authMiddleware, async (req, res, next) => {
         } catch (e) {
           console.error("[after insertLog] fallback query failed:", e?.message || e);
         }
-      }
-      if (logId) {
-        onProjectLogInserted(logId, req.db.stateless).catch((err) => {
-          console.error("[notify hook error]", err?.message || err);
-        });
-      } else {
-        console.warn("[after insertLog] missing logId - skip notify");
       }
     } catch (logErr) {
       console.error("CRITICAL: Failed to log an unexpected error.", logErr);

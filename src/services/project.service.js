@@ -22,10 +22,7 @@ async function renameRelatedCollections(oldProjectName, newProjectName, workspac
 
   for (const col of collections) {
     if (regex.test(col.name)) {
-      const newName = col.name.replace(
-        new RegExp(`\\.${workspaceName}\\.${oldProjectName}$`, "i"),
-        `.${workspaceName}.${newProjectName}`
-      );
+      const newName = col.name.replace(new RegExp(`\\.${workspaceName}\\.${oldProjectName}$`, "i"), `.${workspaceName}.${newProjectName}`);
 
       console.log(`🔁 Đổi tên collection: ${col.name} → ${newName}`);
       renameTasks.push(mongo.renameCollection(col.name, newName));
@@ -68,10 +65,7 @@ async function createProject(db, { workspace_id, name, description }) {
   const invalid = validateNameOrError(name);
   if (invalid) return invalid;
 
-  const { rows: existRows } = await db.query(
-    "SELECT id FROM projects WHERE workspace_id=$1 AND LOWER(name)=LOWER($2)",
-    [workspace_id, name]
-  );
+  const { rows: existRows } = await db.query("SELECT id FROM projects WHERE workspace_id=$1 AND LOWER(name)=LOWER($2)", [workspace_id, name]);
 
   if (existRows.length > 0) {
     return {
@@ -80,10 +74,7 @@ async function createProject(db, { workspace_id, name, description }) {
     };
   }
 
-  const { rows } = await db.query(
-    "INSERT INTO projects (workspace_id, name, description) VALUES ($1,$2,$3) RETURNING *",
-    [workspace_id, name, description ?? null]
-  );
+  const { rows } = await db.query("INSERT INTO projects (workspace_id, name, description) VALUES ($1,$2,$3) RETURNING *", [workspace_id, name, description ?? null]);
 
   return { success: true, data: rows[0] };
 }
@@ -110,10 +101,7 @@ async function updateProject(db, projectId, { name, description }) {
 
   // 3️⃣ Kiểm tra trùng tên trong workspace
   if (name) {
-    const { rows: existRows } = await db.query(
-      "SELECT id FROM projects WHERE workspace_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3",
-      [current.workspace_id, name, projectId]
-    );
+    const { rows: existRows } = await db.query("SELECT id FROM projects WHERE workspace_id=$1 AND LOWER(name)=LOWER($2) AND id<>$3", [current.workspace_id, name, projectId]);
     if (existRows.length > 0) {
       return {
         success: false,
@@ -146,6 +134,20 @@ async function updateProject(db, projectId, { name, description }) {
   }
 
   return { success: true, data: updated };
+}
+
+// 🟢 Update only websocket_enabled flag
+async function updateProjectWebsocketEnabled(db, projectId, enabled) {
+  const { rows } = await db.query(
+    `UPDATE projects
+        SET websocket_enabled = $2,
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, name, websocket_enabled, updated_at`,
+    [projectId, Boolean(enabled)]
+  );
+  if (rows.length === 0) return { success: false, notFound: true };
+  return { success: true, data: rows[0] };
 }
 
 // 🔴 Delete project (và log liên quan)
@@ -196,4 +198,5 @@ module.exports = {
   createProject,
   updateProject,
   deleteProjectAndHandleLogs,
+  updateProjectWebsocketEnabled,
 };

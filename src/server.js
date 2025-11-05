@@ -1,23 +1,19 @@
-require('dotenv').config();
-const app = require('./app');
-const { checkConnections } = require('./config/db');
-
+const http = require("http");
+const app = require("./app");
+const { checkConnections, pool } = require("./config/db");
+// WS manager nằm ở thư mục gốc "WS", không phải "src/ws"
+const { initWs } = require("./utils/ws-manager");
 const PORT = process.env.PORT || 3000;
 
-const startServer = async () => {
-    try {
-        // 1. Kiểm tra kết nối DB
-        await checkConnections();
-        
-        // 2. Nếu thành công, khởi động server
-        app.listen(PORT, () => {
-            console.log();
-            console.log(`http://localhost:${PORT}`);
-        });
-    } catch (error) {
-        console.error('Không thể khởi động server, vui lòng kiểm tra kết nối DB.');
-        process.exit(1);
-    }
-};
+(async () => {
+  await checkConnections();
+  const server = http.createServer(app);
 
-startServer();
+  // Khởi tạo WS (noServer) để tự kiểm soát path / gate DB
+  initWs({ server, pool });
+
+  server.listen(PORT, () => {
+    console.log();
+    console.log(`http://localhost:${PORT}`);
+  });
+})();

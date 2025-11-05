@@ -68,20 +68,21 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 // ---------------------------------------------
 // 4) Centrifugo helpers
 // ---------------------------------------------
-app.use(centrifugoTokenRoutes);
+//app.use(centrifugoTokenRoutes);
 
 // ---------------------------------------------
 // 5) Centrifugo auth/publish endpoints
 // ---------------------------------------------
-app.use("/api", require("./centrifugo/centrifugo-auth.routes"));
-app.use("/api", require("./centrifugo/notify.routes"));
+//app.use("/api", require("./centrifugo/centrifugo-auth.routes"));
+//app.use("/api", require("./centrifugo/notify.routes"));
 
 // ---------------------------------------------
 // 6) Inject DB pools vào req
 // ---------------------------------------------
-const { statelessPool, statefulPool } = require("./config/db");
+const { pool, statelessPool, statefulPool } = require("./config/db");
 app.use((req, res, next) => {
   req.db = {
+    pool,
     stateless: statelessPool,
     stateful: statefulPool,
   };
@@ -109,7 +110,6 @@ const endpointsFulRoutes = require("./routes/endpoints_ful.routes");
 
 const mockRoutes = require("./routes/mock.routes"); // stateless
 const statefulRoutes = require("./routes/stateful.routes"); // API quản trị stateful
-const createNotificationsRoutes = require("./routes/notifications.routes");
 
 app.use("/workspaces", workspaceRoutes);
 app.use("/projects", projectRoutes);
@@ -120,7 +120,6 @@ app.use("/endpoints_ful", endpointsFulRoutes);
 // Routes giữ path gốc cũ
 app.use("/", endpointResponseRoutes);
 app.use("/", statefulRoutes);
-app.use("/", createNotificationsRoutes());
 
 // Logs stateless/stateful
 app.use("/project_request_logs", projectRequestLogRoutes);
@@ -131,7 +130,14 @@ app.use(mockRoutes);
 // ---------------------------------------------
 // 9) Universal handler — ĐẶT CUỐI CÙNG
 // ---------------------------------------------
-app.use("/:workspace/:project", auth, require("./routes/universalHandler"));
+// Gắn logger để bắt response và broadcast WS theo endpoints.websocket_config
+const adminResponseLogger = require("./middlewares/adminResponseLogger");
+app.use(
+  "/:workspace/:project",
+  auth,
+  adminResponseLogger("universal"), // phải đứng TRƯỚC universalHandler
+  require("./routes/universalHandler")
+);
 
 // ---------------------------------------------
 // 10) Health-check

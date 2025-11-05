@@ -1,11 +1,96 @@
 const endpointResponseSvc = require("../services/endpoint_response.service");
 const endpointSvc = require("../services/endpoint.service");
 const logSvc = require("../services/project_request_log.service");
+const { render } = require("../utils/wsTemplate");
+const { pool } = require("../config/db");
+// ws-manager nằm ở thư mục gốc WS; broadcast sẽ được gán khi initWs() chạy lúc khởi động server
+const wsMgr = require("../utils/ws-manager");
+const { match } = require("path-to-regexp");
+
+// Fallback: resolve endpoint_id từ URL nếu chưa có (dùng meta universal + baseUrl)
+async function resolveEndpointIdByUrl(req) {
+  try {
+    const method = (req.method || "").toUpperCase();
+
+    // 1) Ưu tiên meta có sẵn từ universal
+    const u = req.universal || {};
+    let ws = u.workspaceName || req.params?.workspace;
+    let pj = u.projectName || req.params?.project;
+    let restPath = u.subPath; // đã là "/<...>" sau prefix
+    let projectId = u.projectId || null;
+
+    // 2) Nếu thiếu, suy ra từ baseUrl + path
+    if (!ws || !pj) {
+      const segs = String(req.baseUrl || "")
+        .split("/")
+        .filter(Boolean); // "/WP_2/pj3"
+      ws = ws || segs[0];
+      pj = pj || segs[1];
+    }
+    if (!restPath) {
+      const full = req.baseUrl ? req.baseUrl + (req.path || "") : req.originalUrl || req.path || "";
+      const onlyPath = full.split("?")[0];
+      // cắt prefix "/:ws/:pj"
+      const prefix = `/${ws}/${pj}`;
+      restPath = onlyPath.startsWith(prefix) ? onlyPath.slice(prefix.length) || "/" : onlyPath;
+    }
+
+    // 3) projectId — nếu chưa có thì JOIN theo tên
+    if (!projectId && ws && pj) {
+      const { rows: prj } = await pool.query(
+        `SELECT p.id
+           FROM projects p
+           JOIN workspaces w ON w.id = p.workspace_id
+         WHERE w.name = $1 AND p.name = $2
+          LIMIT 1`,
+        [ws, pj]
+      );
+      projectId = prj?.[0]?.id || null;
+    }
+    if (!projectId) return null;
+
+    // 4) lấy các endpoint của project + method
+    const { rows: eps } = await pool.query(
+      `SELECT e.id, e.path
+         FROM endpoints e
+         JOIN folders f ON f.id = e.folder_id
+        WHERE UPPER(e.method) = $1
+       AND f.project_id = $2`,
+      [method, projectId]
+    );
+
+    // 5) match pattern (params/wildcard) bằng path-to-regexp
+    for (const e of eps) {
+      const pat = String(e.path || "/");
+      const hasParams = pat.includes(":") || pat.includes("*");
+      const fn = match(pat, { decode: decodeURIComponent, end: true, strict: false });
+      if (hasParams ? Boolean(fn(restPath)) : pat === restPath) {
+        return e.id;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 function getClientIp(req) {
   const raw = (req.headers["x-forwarded-for"] || req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || "").toString();
   const first = raw.split(",")[0].trim();
   return first.substring(0, 45);
+}
+
+// render đệ quy (đối với message là object/array)
+function renderDeep(value, ctx, renderFn) {
+  if (value == null) return value;
+  if (typeof value === "string") return renderFn(value, ctx);
+  if (Array.isArray(value)) return value.map((v) => renderDeep(v, ctx, renderFn));
+  if (typeof value === "object") {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = renderDeep(value[k], ctx, renderFn);
+    return out;
+  }
+  return value;
 }
 
 // Middleware bọc res.json/res.send để BẮT response trả về và GHI LOG vào project_request_logs
@@ -67,14 +152,14 @@ function adminResponseLogger(scope = "endpoint_responses") {
           const er = await endpointResponseSvc.getById(idParam);
           if (er?.endpoint_id) {
             endpoint_id = er.endpoint_id;
-            const ep = await endpointSvc.getEndpointById(endpoint_id);
+            const ep = await endpointSvc.getEndpointById(pool, endpoint_id);
             project_id = ep?.project_id ?? null;
           }
         } else if (req.query?.endpoint_id) {
           const eid = parseInt(req.query.endpoint_id, 10);
           if (!Number.isNaN(eid)) {
             endpoint_id = eid;
-            const ep = await endpointSvc.getEndpointById(endpoint_id);
+            const ep = await endpointSvc.getEndpointById(pool, endpoint_id);
             project_id = ep?.project_id ?? null;
           }
         }
@@ -107,7 +192,7 @@ function adminResponseLogger(scope = "endpoint_responses") {
 
         // Hàm chèn 1 bản ghi log đơn lẻ
         const insertOne = async ({ project_id, endpoint_id, endpoint_response_id, response_body: rb }) => {
-          await logSvc.insertLog({
+          await logSvc.insertLog(req.db?.stateless || pool, {
             project_id: project_id || null,
             endpoint_id: endpoint_id || null,
             endpoint_response_id: endpoint_response_id || null,
@@ -138,7 +223,7 @@ function adminResponseLogger(scope = "endpoint_responses") {
                 perProjectId = projectCache.get(perEndpointId);
               } else {
                 try {
-                  const ep = await endpointSvc.getEndpointById(perEndpointId);
+                  const ep = await endpointSvc.getEndpointById(pool, perEndpointId);
                   perProjectId = ep?.project_id ?? null;
                   projectCache.set(perEndpointId, perProjectId);
                 } catch {
@@ -154,6 +239,100 @@ function adminResponseLogger(scope = "endpoint_responses") {
         } else {
           // Mặc định: ghi 1 dòng cho object/thường
           await insertOne({ project_id: baseProjectId, endpoint_id: baseEndpointId, endpoint_response_id: baseEndpointResponseId, response_body });
+        }
+        // ============================
+        // 🔔 BƯỚC 3: quyết định broadcast WS
+        // ============================
+        try {
+          // Chỉ broadcast khi xác định được endpoint_id
+          let endpointId = baseEndpointId;
+          if (!endpointId) {
+            endpointId = await resolveEndpointIdByUrl(req); // Fallback cho universal handler
+          }
+          if (!endpointId) return;
+
+          // Lấy endpoint (bao gồm websocket_config) và project_id
+          // Service mới cần truyền dbPool
+          const ep = await endpointSvc.getEndpointById(pool, endpointId);
+          if (!ep) return;
+          const cfg = ep.websocket_config || {};
+          // Điều kiện: bật + status khớp
+          if (!cfg.enabled || !(Number.isInteger(cfg.condition) && cfg.condition === status)) return;
+
+          // Truy ra workspace/project name theo endpoint_id (JOIN folders→projects→workspaces)
+          const q = `
+            SELECT w.name AS workspace, p.name AS project
+            FROM endpoints e
+            JOIN folders f   ON f.id = e.folder_id
+            JOIN projects p  ON p.id = f.project_id
+            JOIN workspaces w ON w.id = p.workspace_id
+            WHERE e.id = $1
+            LIMIT 1
+          `;
+          const { rows } = await pool.query(q, [endpointId]);
+          if (!rows.length) return;
+          const { workspace, project } = rows[0];
+
+          // Chuẩn bị context & message
+          // Suy params từ pattern nếu có (để dùng trong template)
+          let paramsFromPath = {};
+          try {
+            const full = req.baseUrl ? req.baseUrl + (req.path || "") : req.originalUrl || req.path || "";
+            const onlyPath = String(full).split("?")[0];
+            const prefix = `/${workspace}/${project}`;
+            const restPath = onlyPath.startsWith(prefix) ? onlyPath.slice(prefix.length) || "/" : onlyPath;
+            if (ep.path) {
+              const m = match(String(ep.path), { decode: decodeURIComponent, end: true, strict: false });
+              const r = m(restPath);
+              if (r && r.params) paramsFromPath = r.params;
+            }
+          } catch (_) {}
+
+          const ctx = {
+            request: {
+              method: (req.method || "").toUpperCase(),
+              path: req.originalUrl || req.path || "",
+              headers: headersReq,
+              body: bodyReq,
+              query: req.query || {},
+              params: { ...(req.params || {}), ...paramsFromPath }, // hỗ trợ {{request.params.*}}
+            },
+            response: {
+              status_code: status,
+              body: response_body,
+            },
+          };
+          // message có thể là string hoặc object (theo spec mới)
+          let message;
+          if (cfg.message == null) {
+            message = `${ctx.request.method} ${ctx.request.path} → ${status}`;
+          } else if (typeof cfg.message === "string") {
+            message = render(String(cfg.message), ctx);
+          } else {
+            message = renderDeep(cfg.message, ctx, render);
+          }
+
+          // >>> THÊM LOG NGAY TRƯỚC KHI TẠO `data` <<<
+          // console.log("[WS] endpointId resolved =", endpointId, "status =", status);
+          // console.log("[WS] cfg =", cfg);
+          // console.log("[WS] channel =", `${workspace}/${project}`, "message =", message);
+          // Gửi WS chỉ phần message (string hoặc object) theo yêu cầu
+          const data = message;
+
+          // Gửi sau delay_ms (nếu có)
+          const delay = Number.isInteger(cfg.delay_ms) && cfg.delay_ms > 0 ? cfg.delay_ms : 0;
+          const doSend = () => {
+            if (typeof wsMgr.broadcast === "function") {
+              try {
+                wsMgr.broadcast({ workspace, project, data });
+              } catch (_) {}
+            }
+          };
+          delay ? setTimeout(doSend, delay) : doSend();
+        } catch (err) {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn("[adminResponseLogger] WS broadcast failed:", err?.message || err);
+          }
         }
       } catch (e) {
         // Không chặn response khi ghi log lỗi; in cảnh báo ở môi trường dev để dễ debug

@@ -1,7 +1,6 @@
 // src/routes/statefulHandler.js
 const { getCollection } = require("../config/db");
 const logSvc = require("../services/project_request_log.service");
-const { onProjectLogInserted } = require("../services/notification.service");
 const { runNextCalls, buildPlanFromAdvancedConfig } = require("./nextcallRouter");
 
 /* ========== Utils ========== */
@@ -162,7 +161,7 @@ function pickUserIdFromRequest(req) {
       try {
         const v = req.get(key);
         if (v != null) return v;
-      } catch { }
+      } catch {}
     }
     const h = req.headers || {};
     // try common variants
@@ -283,20 +282,13 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
         console.error("[stateful] fallback query failed:", e?.message || e);
       }
     }
+    // expose logId cho caller (để nextCall dùng làm parent_log_id)
     if (logId) {
-      // expose logId cho caller (để nextCall dùng làm parent_log_id)
       try {
         req.res = req.res || {};
         req.res.locals = req.res.locals || {};
         req.res.locals.lastLogId = logId;
-      } catch { }
-      try {
-        await onProjectLogInserted(logId, req.db.stateless);
-      } catch (e) {
-        console.error("[notify hook error]", e?.message || e);
-      }
-    } else {
-      console.warn("[stateful] missing logId - skip notify");
+      } catch {}
     }
   } catch (e) {
     console.error("[statefulHandler] log error:", e?.message || e);
@@ -352,7 +344,6 @@ async function statefulHandler(req, res, next) {
   const hasId = idInUrl != null;
   const idFromUrl = hasId ? Number(idInUrl) : undefined;
   const logicalPath = String(basePath || "").replace(/\/:id$/, "");
-
 
   const baseSegs = (req.baseUrl || "").split("/").filter(Boolean);
   const workspaceName = baseSegs[0] || null;
@@ -410,9 +401,7 @@ async function statefulHandler(req, res, next) {
       };
 
       const plan = buildPlanFromAdvancedConfig(advancedConfig.nextCalls);
-      console.log(
-        `[nextCalls] scheduling chain (count = ${advancedConfig.nextCalls.length}) for ${workspaceName}/${projectName}${logicalPath} status = ${status}`
-      );
+      console.log(`[nextCalls] scheduling chain (count = ${advancedConfig.nextCalls.length}) for ${workspaceName}/${projectName}${logicalPath} status = ${status}`);
 
       // fire-and-forget but pass DB + user so nextcallRouter can resolve auth/mapping
       runNextCalls(plan, rootCtx, {
@@ -427,21 +416,23 @@ async function statefulHandler(req, res, next) {
     }
   }
 
-
   try {
     /* 1) RÀNG BUỘC & RESOLVE endpoint theo workspace + project + method + path (đúng DB) */
     {
       const wantedMethod = method;
       const wantedPath = logicalPath;
 
-      // 1a) Tìm ứng viên theo method+path ở STATEFUL
+      // 1a) DB mới: endpoints_ful KHÔNG có method/path → JOIN endpoints
       const qEf = await req.db.stateful.query(
-        `SELECT id, origin_id, folder_id
-           FROM endpoints_ful
-          WHERE is_active = TRUE
-            AND method    = $1
-            AND path      = $2
-          ORDER BY id ASC`,
+        `SELECT ef.id,
+            ef.endpoint_id,
+            e.folder_id
+       FROM endpoints_ful ef
+       JOIN endpoints e ON e.id = ef.endpoint_id
+      WHERE ef.is_active = TRUE
+        AND UPPER(e.method) = $1
+        AND e.path = $2
+      ORDER BY ef.id ASC`,
         [wantedMethod, wantedPath]
       );
       if (!qEf.rows.length) {
@@ -496,7 +487,7 @@ async function statefulHandler(req, res, next) {
 
       // Bind đúng tenant
       statefulId = Number(chosen.id);
-      originId = Number(chosen.origin_id);
+      originId = Number(chosen.endpoint_id);
       folderId = Number(chosen.folder_id);
       projectId = Number(match.project_id);
       isPublic = !!match.is_public;
@@ -562,6 +553,14 @@ async function statefulHandler(req, res, next) {
     const responsesBucket = await loadResponsesBucket(req.db.stateful, statefulId);
     /* ===== GET ===== */
     if (method === "GET") {
+      // ===== DEBUG GET START =====
+      try {
+        console.log("[GET:stateful] ENTER", { workspaceName, projectName, logicalPath, rawPath, statefulId, originId, folderId, projectId, isPublic });
+      } catch {}
+      res.setHeader("x-mock-mode", "stateful");
+      res.setHeader("x-mock-path", logicalPath);
+      // ===== DEBUG GET START =====
+
       const userIdMaybe = pickUserIdFromRequest(req);
 
       const pickForGET = (obj) => {
@@ -806,10 +805,7 @@ async function statefulHandler(req, res, next) {
         }
       }
 
-      const endpointSchemaEffective =
-        endpointSchemaDb && Object.keys(endpointSchemaDb).length
-          ? endpointSchemaDb
-          : baseSchema || {};
+      const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
 
       // Kiểm tra thứ tự và hợp lệ schema
       const schemaKeys = Object.keys(endpointSchemaEffective);

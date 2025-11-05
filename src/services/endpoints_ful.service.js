@@ -4,7 +4,7 @@
 // - Schema → cột JSONB 'schema' trong endpoints_ful (Postgres)
 // - Giữ nguyên cơ chế generate default responses & rules chỉnh sửa response
 
-const { statefulPool, statelessPool, getCollection } = require("../config/db");
+const { statelessPool: statefulPool, statelessPool, getCollection } = require("../config/db");
 const ResponseStatefulService = require("./endpoint_responses_ful.service");
 const { dropCollectionByPath } = require("./endpoint_data_ful.service");
 
@@ -53,12 +53,39 @@ async function mongoUpsertEmptyIfMissing(path, workspaceName, projectName) {
 // Core queries (Postgres)
 // ------------------------
 async function findById(id) {
-  const { rows } = await statefulPool.query("SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE id = $1", [id]);
+  const { rows } = await statefulPool.query(
+    `SELECT
+       ef.id,
+       ef.endpoint_id,
+       ef.is_active,
+       ef.schema,
+       ef.advanced_config,
+       ef.created_at,
+       ef.updated_at,
+       e.folder_id,
+       e.name,
+       e.method,
+       e.path
+     FROM endpoints_ful ef
+     JOIN endpoints e ON e.id = ef.endpoint_id
+    WHERE ef.id = $1`,
+    [id]
+  );
   return rows[0] || null;
 }
 
 async function findByFolderId(folderId) {
-  const { rows } = await statefulPool.query("SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE folder_id = $1 ORDER BY created_at DESC", [folderId]);
+  const { rows } = await statefulPool.query(
+    `SELECT
+       ef.id, ef.endpoint_id, ef.is_active, ef.schema, ef.advanced_config,
+       ef.created_at, ef.updated_at,
+       e.folder_id, e.name, e.method, e.path
+     FROM endpoints_ful ef
+     JOIN endpoints e ON e.id = ef.endpoint_id
+    WHERE e.folder_id = $1
+    ORDER BY ef.created_at DESC`,
+    [folderId]
+  );
   return rows;
 }
 
@@ -72,15 +99,15 @@ async function findByFolderIdPaged(folderId, opts = {}) {
   const limit = Number.isFinite(Number(opts.limit)) ? Math.max(1, Math.min(500, Number(opts.limit))) : 20;
   const offset = (page - 1) * limit;
 
-  const allowedFilterFields = new Set(["id", "origin_id", "name", "method", "path", "is_active"]);
+  const allowedFilterFields = new Set(["id", "endpoint_id", "name", "method", "path", "is_active"]);
   const allowedSortFields = new Set(["id", "name", "method", "path", "created_at", "updated_at", "is_active"]);
 
-  const where = ["folder_id = $1"];
+  const where = ["e.folder_id = $1"];
   const params = [folderId];
   let idx = 2;
 
   if (opts.query && String(opts.query).trim()) {
-    where.push(`(name ILIKE $${idx} OR path ILIKE $${idx})`);
+    where.push(`(e.name ILIKE $${idx} OR e.path ILIKE $${idx})`);
     params.push(`%${String(opts.query).trim()}%`);
     idx++;
   }
@@ -88,7 +115,9 @@ async function findByFolderIdPaged(folderId, opts = {}) {
   if (opts.filter && typeof opts.filter === "object") {
     for (const [k, v] of Object.entries(opts.filter)) {
       if (!allowedFilterFields.has(k)) continue;
-      where.push(`${k} = $${idx}`);
+      if (k === "id" || k === "is_active") where.push(`ef.${k} = $${idx}`);
+      else if (k === "endpoint_id") where.push(`ef.endpoint_id = $${idx}`);
+      else where.push(`e.${k} = $${idx}`);
       params.push(v);
       idx++;
     }
@@ -106,12 +135,22 @@ async function findByFolderIdPaged(folderId, opts = {}) {
   }
 
   // total
-  const qTotal = `SELECT COUNT(*)::int AS cnt FROM endpoints_ful ${whereClause}`;
+  const qTotal = `SELECT COUNT(*)::int AS cnt
+                    FROM endpoints_ful ef
+                    JOIN endpoints e ON e.id = ef.endpoint_id
+                   ${whereClause}`;
   const { rows: totalRows } = await statefulPool.query(qTotal, params);
   const total = Number(totalRows[0]?.cnt || 0);
 
   // data
-  const q = `SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful ${whereClause} ${orderClause} LIMIT $${idx} OFFSET $${idx + 1}`;
+  const q = `SELECT
+               ef.id, ef.endpoint_id, ef.is_active, ef.schema, ef.advanced_config,
+               ef.created_at, ef.updated_at,
+               e.folder_id, e.name, e.method, e.path
+             FROM endpoints_ful ef
+             JOIN endpoints e ON e.id = ef.endpoint_id
+             ${whereClause} ${orderClause}
+             LIMIT $${idx} OFFSET $${idx + 1}`;
   params.push(limit, offset);
   const { rows } = await statefulPool.query(q, params);
 
@@ -119,8 +158,10 @@ async function findByFolderIdPaged(folderId, opts = {}) {
 }
 
 async function getFullDetailById(id) {
-  const [endpoint, responses] = await Promise.all([findById(id), ResponseStatefulService.findByEndpointId(id)]);
+  // Lấy endpoint 1 lần, rồi mới truy responses theo endpoint_id
+  const endpoint = await findById(id);
   if (!endpoint) return null;
+  const responses = await ResponseStatefulService.findByEndpointId(endpoint.endpoint_id);
 
   // 🔁 Sắp xếp schema theo schema_order (nếu có) để API trả về đúng thứ tự FE đã PUT
   // Trả thẳng schema từ DB; không dùng schema_order nữa
@@ -133,15 +174,36 @@ async function deleteById(id) {
   try {
     await client.query("BEGIN");
 
-    const { rows: epRows } = await client.query("SELECT path, origin_id FROM endpoints_ful WHERE id = $1", [id]);
+    const { rows: epRows } = await client.query(
+      `SELECT ef.endpoint_id, e.path
+         FROM endpoints_ful ef
+         JOIN endpoints e ON e.id = ef.endpoint_id
+        WHERE ef.id = $1`,
+      [id]
+    );
     const ep = epRows[0];
     if (!ep) {
       await client.query("ROLLBACK");
       return { success: false, notFound: true };
     }
-    const originIdBeforeDelete = ep.origin_id || null;
-    await client.query("DELETE FROM endpoint_responses_ful WHERE endpoint_id = $1", [id]);
-    await client.query("DELETE FROM endpoints_ful WHERE id = $1", [id]);
+    // Null hoá logs trước (tham chiếu stateful_response/stateful_endpoint)
+    await client.query(
+      `UPDATE project_request_logs
+          SET stateful_endpoint_response_id = NULL
+        WHERE stateful_endpoint_response_id IN (
+              SELECT id FROM endpoint_responses_ful WHERE endpoint_id = $1
+        )`,
+      [id]
+    );
+    await client.query(
+      `UPDATE project_request_logs
+          SET stateful_endpoint_id = NULL
+        WHERE stateful_endpoint_id = $1`,
+      [id]
+    );
+    // Xoá responses_ful → xoá endpoints_ful
+    await client.query(`DELETE FROM endpoint_responses_ful WHERE endpoint_id = $1`, [id]);
+    await client.query(`DELETE FROM endpoints_ful WHERE id = $1`, [id]);
 
     await client.query("COMMIT");
 
@@ -150,7 +212,7 @@ async function deleteById(id) {
       // tìm workspace/project theo origin_id (đã lưu trước khi xoá)
       let workspaceName = "Workspace",
         projectName = "Project";
-      if (originIdBeforeDelete) {
+      if (ep.endpoint_id) {
         const { rows } = await statelessPool.query(
           `SELECT w.name AS workspace_name, p.name AS project_name
              FROM endpoints e
@@ -158,7 +220,7 @@ async function deleteById(id) {
              JOIN projects p ON p.id = f.project_id
              JOIN workspaces w ON w.id = p.workspace_id
             WHERE e.id = $1 LIMIT 1`,
-          [originIdBeforeDelete]
+          [ep.endpoint_id]
         );
         workspaceName = rows[0]?.workspace_name || workspaceName;
         projectName = rows[0]?.project_name || projectName;
@@ -175,8 +237,15 @@ async function deleteById(id) {
   }
 }
 
-async function findByOriginId(originId) {
-  const { rows } = await statefulPool.query("SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1", [originId]);
+// Tương thích cũ: cho phép tìm theo endpoint gốc (origin_id cũ)
+async function findOneByEndpointId(originId) {
+  const { rows } = await statefulPool.query(
+    `SELECT ef.id
+       FROM endpoints_ful ef
+      WHERE ef.endpoint_id = $1
+      LIMIT 1`,
+    [originId]
+  );
   const hit = rows[0];
   if (!hit) return null;
   return await getFullDetailById(hit.id);
@@ -207,19 +276,20 @@ async function convertToStateful(endpointId) {
     }
 
     // 2) đã có stateful trước đó chưa?
-    const { rows: existing } = await clientStateful.query("SELECT id, is_active, path, method FROM endpoints_ful WHERE origin_id = $1 LIMIT 1", [endpoint.id]);
+    const { rows: existing } = await clientStateful.query("SELECT id, is_active FROM endpoints_ful WHERE endpoint_id = $1 LIMIT 1", [endpoint.id]);
 
     if (existing.length > 0) {
       const statefulId = existing[0].id;
 
       await clientStateful.query("UPDATE endpoints_ful SET is_active = TRUE, updated_at = NOW() WHERE id = $1", [statefulId]);
+      // Bật stateful, TẮT active ở bản gốc khi re-activate
       await clientStateless.query("UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1", [endpointId]);
 
       await clientStateful.query("COMMIT");
       await clientStateless.query("COMMIT");
 
       // Đảm bảo Mongo + default responses
-      await ensureDefaultsForReactivate(statefulId, existing[0].path ?? endpoint.path, existing[0].method ?? endpoint.method);
+      await ensureDefaultsForReactivate(statefulId, endpoint.path, endpoint.method);
 
       return { stateful_id: statefulId };
     }
@@ -238,25 +308,17 @@ async function convertToStateful(endpointId) {
     const workspaceName = wpRows[0]?.workspace_name || "Workspace";
     const projectName = wpRows[0]?.project_name || "Project";
 
-    // 3) convert lần đầu
+    // 3) convert lần đầu: bật stateful, tắt active của bản gốc
     await clientStateless.query("UPDATE endpoints SET is_stateful = TRUE, is_active = FALSE, updated_at = NOW() WHERE id = $1", [endpointId]);
 
     const {
       rows: [statefulEndpoint],
     } = await clientStateful.query(
-      `INSERT INTO endpoints_ful (folder_id, name, method, path, is_active, origin_id, schema)
-       VALUES ($1, $2, $3, $4, TRUE, $5, $6::jsonb)
-       RETURNING *`,
-      [
-        endpoint.folder_id,
-        endpoint.name,
-        endpoint.method,
-        endpoint.path,
-        endpoint.id,
-        JSON.stringify({
-          id: { type: "number", required: false },
-        }),
-      ]
+      `INSERT INTO endpoints_ful (endpoint_id, is_active, schema)
+       VALUES ($1, TRUE, $2::jsonb)
+       ON CONFLICT (endpoint_id) DO UPDATE SET is_active=TRUE, updated_at=NOW()
+       RETURNING id, endpoint_id`,
+      [endpoint.id, JSON.stringify({ id: { type: "number", required: false } })]
     );
 
     // 🔹 [NEW] Sau khi tạo endpoints_ful, đảm bảo folder có base_schema mặc định nếu đang null
@@ -289,22 +351,27 @@ async function convertToStateful(endpointId) {
     await clientStateless.query("COMMIT");
 
     // Tạo default responses + khởi tạo collection Mongo trống (gắn WS/Project)
-    const responsesResult = await generateDefaultResponses(statefulEndpoint);
-    await mongoUpsertEmptyIfMissing(statefulEndpoint.path, workspaceName, projectName);
+    const responsesResult = await generateDefaultResponses({
+      id: statefulEndpoint.id,
+      method: endpoint.method,
+      path: endpoint.path,
+    });
+    await mongoUpsertEmptyIfMissing(endpoint.path, workspaceName, projectName);
 
     return {
       stateless: endpoint,
       stateful: statefulEndpoint,
       responses: responsesResult,
-      mongo_collection: toCollectionName(statefulEndpoint.path, workspaceName, projectName),
+      // dùng path của endpoint gốc (statefulEndpoint không có field 'path')
+      mongo_collection: toCollectionName(endpoint.path, workspaceName, projectName),
     };
   } catch (e) {
     try {
       await clientStateless.query("ROLLBACK");
-    } catch { }
+    } catch {}
     try {
       await clientStateful.query("ROLLBACK");
-    } catch { }
+    } catch {}
     throw e;
   } finally {
     clientStateless.release();
@@ -319,11 +386,12 @@ async function revertToStateless(endpointId) {
     await clientStateless.query("BEGIN");
     await clientStateful.query("BEGIN");
 
-    const { rows: existing } = await clientStateful.query("SELECT id FROM endpoints_ful WHERE origin_id = $1 LIMIT 1", [endpointId]);
+    const { rows: existing } = await clientStateful.query("SELECT id FROM endpoints_ful WHERE endpoint_id = $1 LIMIT 1", [endpointId]);
     if (existing.length > 0) {
       await clientStateful.query("UPDATE endpoints_ful SET is_active = FALSE, updated_at = NOW() WHERE id = $1", [existing[0].id]);
     }
 
+    // Tắt stateful, bật lại active cho bản gốc
     await clientStateless.query("UPDATE endpoints SET is_stateful = FALSE, is_active = TRUE, updated_at = NOW() WHERE id = $1", [endpointId]);
 
     await clientStateless.query("COMMIT");
@@ -347,9 +415,9 @@ async function revertToStateless(endpointId) {
 
 // Đảm bảo có dữ liệu Mongo (trống nếu thiếu) + default responses
 async function ensureDefaultsForReactivate(statefulId, path, method) {
-  // Truy ngược để biết workspace/project theo origin_id
-  const { rows: epRows } = await statefulPool.query(`SELECT origin_id FROM endpoints_ful WHERE id=$1 LIMIT 1`, [statefulId]);
-  const originId = epRows[0]?.origin_id;
+  // Truy ngược để biết workspace/project qua endpoint_id (schema mới)
+  const { rows: epRows } = await statefulPool.query(`SELECT endpoint_id FROM endpoints_ful WHERE id=$1 LIMIT 1`, [statefulId]);
+  const originId = epRows[0]?.endpoint_id;
   let workspaceName = "Workspace",
     projectName = "Project";
   if (originId) {
@@ -561,7 +629,14 @@ async function getEndpointData(path, opts = {}) {
   const { workspaceName = null, projectName = null } = opts || {};
   if (!path) throw new Error("Thiếu path");
   const pgPath = path.startsWith("/") ? path : "/" + path;
-  const { rows } = await statefulPool.query("SELECT id FROM endpoints_ful WHERE path = $1 LIMIT 1", [pgPath]);
+  const { rows } = await statefulPool.query(
+    `SELECT ef.id
+       FROM endpoints_ful ef
+       JOIN endpoints e ON e.id = ef.endpoint_id
+      WHERE e.path = $1
+      LIMIT 1`,
+    [pgPath]
+  );
   if (rows.length === 0) {
     throw new Error(`Không tìm thấy endpoints_ful với path: ${pgPath}`);
   }
@@ -574,7 +649,14 @@ async function updateEndpointData(path, body, opts = {}) {
 
   // Lấy row endpoints_ful theo path (kèm schema_order để giữ đúng thứ tự)
   const pgPath = path.startsWith("/") ? path : "/" + path;
-  const { rows } = await statefulPool.query("SELECT id, schema FROM endpoints_ful WHERE path = $1 LIMIT 1", [pgPath]);
+  const { rows } = await statefulPool.query(
+    `SELECT ef.id, ef.schema
+       FROM endpoints_ful ef
+       JOIN endpoints e ON e.id = ef.endpoint_id
+      WHERE e.path = $1
+      LIMIT 1`,
+    [pgPath]
+  );
   if (rows.length === 0) throw new Error("Không tìm thấy endpoints_ful với path: " + pgPath);
   const currentSchema = rows[0].schema || {};
 
@@ -669,7 +751,13 @@ async function updateEndpointData(path, body, opts = {}) {
 
     if (!v.ok) throw new Error(`Dữ liệu không khớp schema: ${v.reason}`);
 
-    await statefulPool.query("UPDATE endpoints_ful SET schema = $1, updated_at = NOW() WHERE path = $2", [JSON.stringify(schema), pgPath]);
+    await statefulPool.query(
+      `UPDATE endpoints_ful ef
+          SET schema = $1, updated_at = NOW()
+        FROM endpoints e
+       WHERE e.id = ef.endpoint_id AND e.path = $2`,
+      [JSON.stringify(schema), pgPath]
+    );
 
     const col = getCollection(toCollectionName(path, workspaceName, projectName));
     await col.updateOne({}, { $set: { data_default: withIds, data_current: withIds } }, { upsert: true });
@@ -679,7 +767,13 @@ async function updateEndpointData(path, body, opts = {}) {
   // 2) Chỉ schema → chuẩn hoá + cập nhật PG; KHÔNG động vào Mongo
   if (schema && !data_default) {
     if (typeof schema !== "object" || Array.isArray(schema)) throw new Error("schema phải là object (map field -> rule)");
-    await statefulPool.query("UPDATE endpoints_ful SET schema = $1, updated_at = NOW() WHERE path = $2", [JSON.stringify(schema), pgPath]);
+    await statefulPool.query(
+      `UPDATE endpoints_ful ef
+          SET schema = $1, updated_at = NOW()
+        FROM endpoints e
+       WHERE e.id = ef.endpoint_id AND e.path = $2`,
+      [JSON.stringify(schema), pgPath]
+    );
     return await findByPathPG(path);
   }
 
@@ -701,44 +795,47 @@ async function updateEndpointData(path, body, opts = {}) {
 
 // tiện ích nhỏ để trả hàng PG theo path (khi chỉ sửa schema)
 async function findByPathPG(path) {
-  const { rows } = await statefulPool.query("SELECT id, origin_id, folder_id, name, method, path, is_active, schema, created_at, updated_at FROM endpoints_ful WHERE path = $1 LIMIT 1", [path]);
+  const { rows } = await statefulPool.query(
+    `SELECT
+       ef.id, ef.endpoint_id, ef.is_active, ef.schema, ef.advanced_config,
+       ef.created_at, ef.updated_at,
+       e.folder_id, e.name, e.method, e.path
+     FROM endpoints_ful ef
+     JOIN endpoints e ON e.id = ef.endpoint_id
+    WHERE e.path = $1
+    LIMIT 1`,
+    [path]
+  );
   if (rows.length === 0) return null;
   return rows[0];
 }
 
-// Lấy schema của endpoint stateful thông qua origin_id (id bên stateless)
+// Lấy schema của endpoint stateful thông qua endpoint gốc (originId)
 async function getEndpointSchema(statefulPool, originId) {
   try {
-    // Truy vấn endpoint theo origin_id
+    // JOIN sang endpoints để lấy method, vì endpoints_ful không có cột method/path
     const { rows } = await statefulPool.query(
-      `SELECT schema, method 
-       FROM endpoints_ful 
-       WHERE origin_id = $1 
-       LIMIT 1`,
+      `SELECT ef.schema, e.method
+         FROM endpoints_ful ef
+         JOIN endpoints e ON e.id = ef.endpoint_id
+        WHERE ef.endpoint_id = $1
+        LIMIT 1`,
       [originId]
     );
-
-    // Không tìm thấy endpoint
-    if (rows.length === 0) {
-      return { success: false, message: "Endpoint not found" };
-    }
-
+    if (rows.length === 0) return { success: false, message: "Endpoint not found" };
     const { schema, method } = rows[0];
-
-    // Nếu là DELETE hoặc schema rỗng thì trả về object rỗng
-    if (method === "DELETE" || !schema) {
+    if (String(method).toUpperCase() === "DELETE" || !schema) {
       return { success: true, data: {} };
     }
-
-    // Trả về schema (đảm bảo là object JSON)
-    let parsedSchema;
-    try {
-      parsedSchema = typeof schema === "string" ? JSON.parse(schema) : schema;
-    } catch {
-      parsedSchema = schema; // fallback nếu schema đã là object
+    let parsed = schema;
+    if (typeof parsed === "string") {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        /* keep original */
+      }
     }
-
-    return { success: true, data: parsedSchema };
+    return { success: true, data: parsed };
   } catch (error) {
     console.error("Error in getEndpointSchema:", error);
     return { success: false, message: error.message };
@@ -811,8 +908,14 @@ async function deleteByOriginIds(originIds = []) {
   );
   const nameMap = new Map(nameRows.map((r) => [r.origin_id, { ws: r.workspace_name, pj: r.project_name }]));
 
-  // 2) Load endpoints_ful and paths in STATEFUL PG
-  const { rows: sfRows } = await statefulPool.query(`SELECT id, origin_id, path FROM endpoints_ful WHERE origin_id = ANY($1::int[])`, [ids]);
+  // 2) Load endpoints_ful (map origin_id → ef.id, và lấy path qua JOIN endpoints)
+  const { rows: sfRows } = await statefulPool.query(
+    `SELECT ef.id, ef.endpoint_id AS origin_id, e.path
+       FROM endpoints_ful ef
+       JOIN endpoints e ON e.id = ef.endpoint_id
+      WHERE ef.endpoint_id = ANY($1::int[])`,
+    [ids]
+  );
   const statefulIds = sfRows.map((r) => r.id);
 
   // 3) Delete STATEFUL PG in a tx: responses first, then endpoints_ful
@@ -845,19 +948,14 @@ async function deleteByOriginIds(originIds = []) {
 
 // 🔹 Lấy bản ghi stateful bằng origin_id (raw)
 async function findByOriginIdRaw(originId) {
-  const { rows } = await statefulPool.query("SELECT id, origin_id, advanced_config FROM endpoints_ful WHERE origin_id = $1 LIMIT 1", [originId]);
+  const { rows } = await statefulPool.query("SELECT id, endpoint_id AS origin_id, advanced_config FROM endpoints_ful WHERE endpoint_id = $1 LIMIT 1", [originId]);
   return rows[0] || null;
 }
 
 // 🔹 Cập nhật advanced_config theo origin_id
 async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
   // --- Validate đầu vào ---
-  if (
-    !advancedConfigObj ||
-    typeof advancedConfigObj !== "object" ||
-    !advancedConfigObj.advanced_config ||
-    typeof advancedConfigObj.advanced_config !== "object"
-  ) {
+  if (!advancedConfigObj || typeof advancedConfigObj !== "object" || !advancedConfigObj.advanced_config || typeof advancedConfigObj.advanced_config !== "object") {
     throw new Error("Invalid payload: must include 'advanced_config' object");
   }
 
@@ -869,9 +967,7 @@ async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
     let nextId = 1;
 
     // Tìm id lớn nhất hiện có (nếu có)
-    const existingIds = newConfig.nextCalls
-      .filter((c) => typeof c.id === "number")
-      .map((c) => c.id);
+    const existingIds = newConfig.nextCalls.filter((c) => typeof c.id === "number").map((c) => c.id);
     if (existingIds.length > 0) {
       nextId = Math.max(...existingIds) + 1;
     }
@@ -884,17 +980,15 @@ async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
     });
     console.log("originId:", originId);
     console.log("newConfig:", newConfig);
-
   }
 
   // --- Cập nhật DB ---
   const { rows } = await statefulPool.query(
     `UPDATE endpoints_ful
      SET advanced_config = $1, updated_at = NOW()
-     WHERE origin_id = $2
-     RETURNING id, origin_id, advanced_config`,
+WHERE endpoint_id = $2
+    RETURNING id, endpoint_id AS origin_id, advanced_config`,
     [newConfig, originId]
-
   );
 
   if (rows.length === 0) {
@@ -904,12 +998,59 @@ async function updateAdvancedConfigByOriginId(originId, advancedConfigObj) {
   return rows[0];
 }
 
+// services/endpointLocations.service.js
+
+async function getActiveStatefulPaths(dbPool, { method, workspace, project } = {}) {
+  const params = [];
+  let i = 1;
+
+  let sql = `
+    SELECT DISTINCT
+      w.name AS workspace_name,
+      p.name AS project_name,
+      e.path AS path
+    FROM endpoints e
+    JOIN folders      f   ON f.id = e.folder_id
+    JOIN projects     p   ON p.id = f.project_id
+    JOIN workspaces   w   ON w.id = p.workspace_id
+    JOIN endpoints_ful ef ON ef.endpoint_id = e.id
+    WHERE e.is_stateful = TRUE
+      AND ef.is_active   = TRUE
+      AND e.is_active    = FALSE
+      AND e.path NOT LIKE '%:%'
+      AND e.path NOT LIKE '%*%'
+  `;
+
+  if (method) {
+    sql += ` AND UPPER(e.method) = $${i++}`;
+    params.push(String(method).toUpperCase());
+  }
+  if (workspace) {
+    sql += ` AND LOWER(w.name) = LOWER($${i++})`;
+    params.push(String(workspace));
+  }
+  if (project) {
+    sql += ` AND LOWER(p.name) = LOWER($${i++})`;
+    params.push(String(project));
+  }
+
+  sql += ` ORDER BY w.name, p.name, e.path`;
+
+  const { rows } = await dbPool.query(sql, params);
+  return rows.map((r) => ({
+    workspaceName: r.workspace_name,
+    projectName: r.project_name,
+    path: r.path,
+  }));
+}
+
 async function getEndpointsByOriginId(originId) {
   // 1️⃣ Lấy folder_id từ DB stateful
   const queryFul = `
-    SELECT folder_id
-    FROM endpoints_ful
-    WHERE origin_id = $1
+    SELECT e.folder_id
+    FROM endpoints_ful ef
+    JOIN endpoints e ON e.id = ef.endpoint_id
+    WHERE ef.endpoint_id = $1
     LIMIT 1;
   `;
   const { rows: fulRows } = await statefulPool.query(queryFul, [originId]);
@@ -958,7 +1099,7 @@ module.exports = {
   getFullDetailById,
   deleteById,
   deleteByOriginIds,
-  findByOriginId,
+  findOneByEndpointId,
   convertToStateful,
   revertToStateless,
   ensureDefaultsForReactivate,
@@ -975,5 +1116,6 @@ module.exports = {
   getBaseSchemaByEndpointId,
   findByOriginIdRaw,
   updateAdvancedConfigByOriginId,
+  getActiveStatefulPaths,
   getEndpointsByOriginId,
 };

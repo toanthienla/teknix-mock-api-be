@@ -2,7 +2,6 @@
 const express = require("express");
 const router = express.Router();
 const logSvc = require("../services/project_request_log.service");
-const { onProjectLogInserted } = require("../services/notification.service");
 
 console.log("[nextCalls] router loaded");
 
@@ -24,47 +23,57 @@ function get(obj, path) {
  *  - {{response.body.foo}} -> tries prev.response (prev.body) first, then root.response (root.res)
  *  - {{root.res.status}} or {{prev.status}}
  */
-function renderTemplate(tpl, ctx = {}) {
-  if (!tpl || typeof tpl !== "object") return tpl;
-
-  // Build convenient scope: allow templates to use "request" and "response" directly.
-  // request: prefer prev.request, fallback to root.req / root.request
-  // response: prefer prev.response (prev.body), fallback to root.res / root.response
-  const scope = {
-    root: ctx.root,
-    prev: ctx.prev,
-    request: ctx.prev?.request ?? (ctx.root?.req ?? ctx.root?.request ?? {}),
-    response: ctx.prev?.response ?? (ctx.root?.res ?? ctx.root?.response ?? {}),
-  };
-
-  const walk = (v) => {
-    if (typeof v === "string") {
-      return v.replace(/\{\{([^}]+)\}\}/g, (_, expr) => {
-        const path = expr.trim();
-        const val = get(scope, path);
-
-        if (val === undefined || val === null) return "";
-
-        // Giữ nguyên kiểu nếu là number hoặc boolean
-        if (typeof val === "number" || typeof val === "boolean") return val;
-
-        // Nếu là chuỗi số, convert thành số thật
-        if (typeof val === "string" && /^[0-9]+$/.test(val)) return Number(val);
-
-        // Mặc định trả về string
-        return String(val);
-      });
-    } else if (Array.isArray(v)) {
-      return v.map(walk);
-    } else if (v && typeof v === "object") {
-      const out = {};
-      for (const k of Object.keys(v)) out[k] = walk(v[k]);
-      return out;
+function renderTemplate(obj, ctx = {}) {
+  // Hỗ trợ đệ quy cho cả object, array và string template
+  if (Array.isArray(obj)) return obj.map((v) => renderTemplate(v, ctx));
+  if (obj && typeof obj === "object") {
+    const result = {};
+    for (const [k, v] of Object.entries(obj)) {
+      result[k] = renderTemplate(v, ctx);
     }
-    return v;
-  };
-  return walk(tpl);
+    return result;
+  }
+
+  if (typeof obj === "string") {
+    // Chuẩn bị scope: đảm bảo response luôn có body
+    const rawPrevResponse = ctx.prev?.response;
+    const normalizedPrevResponse =
+      rawPrevResponse &&
+        typeof rawPrevResponse === "object" &&
+        !("body" in rawPrevResponse)
+        ? { body: rawPrevResponse }
+        : rawPrevResponse;
+
+    const scope = {
+      root: ctx.root,
+      prev: ctx.prev,
+      request:
+        ctx.prev?.request ?? ctx.root?.req ?? ctx.root?.request ?? {},
+      response:
+        normalizedPrevResponse ??
+        ctx.root?.res ??
+        ctx.root?.response ??
+        {},
+    };
+
+    return obj.replace(/\{\{([^}]+)\}\}/g, (_, expr) => {
+      try {
+        const parts = expr.trim().split(".");
+        let val = scope;
+        for (const p of parts) {
+          if (val == null) break;
+          val = val[p];
+        }
+        return val ?? "";
+      } catch {
+        return "";
+      }
+    });
+  }
+
+  return obj;
 }
+
 
 /**
  * renderStringTemplate:
@@ -76,8 +85,8 @@ function renderStringTemplate(tpl, ctx = {}) {
   const scope = {
     root: ctx.root,
     prev: ctx.prev,
-    request: ctx.prev?.request ?? (ctx.root?.req ?? ctx.root?.request ?? {}),
-    response: ctx.prev?.response ?? (ctx.root?.res ?? ctx.root?.response ?? {}),
+    request: ctx.prev?.request ?? ctx.root?.req ?? ctx.root?.request ?? {},
+    response: ctx.prev?.response ?? ctx.root?.res ?? ctx.root?.response ?? {},
   };
   return tpl.replace(/\{\{([^}]+)\}\}/g, (_, expr) => {
     const path = expr.trim();
@@ -214,11 +223,17 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
     return null;
   }
 
-  // 2) Candidates trong stateful theo method+path (KHÔNG JOIN folders)
+  // 2) DB mới: JOIN endpoints để lọc theo method/path
   const ef = await statefulDb.query(
-    `SELECT e.id, e.origin_id, e.path, e.method
-       FROM endpoints_ful e
-      WHERE e.is_active=TRUE AND e.method=$1 AND e.path=$2`,
+    `SELECT ef.id,
+            ef.endpoint_id       AS origin_id,  -- map về endpoints.id để check tenant
+            e.path,
+            e.method
+       FROM endpoints_ful ef
+       JOIN endpoints e ON e.id = ef.endpoint_id
+      WHERE ef.is_active = TRUE
+        AND UPPER(e.method) = $1
+        AND e.path = $2`,
     [method, logicalPath]
   );
   const candidates = ef.rows || [];
@@ -248,8 +263,8 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
         workspaceName,
         projectName,
         projectId: project.id,
-        endpointId: ep.id,
-        originId: ep.origin_id,
+        endpointId: ep.id, // endpoints_ful.id
+        originId: ep.origin_id, // endpoints.id (stateless)
         isStateful: true,
         logicalPath,
         basePath: ep.path,
@@ -288,15 +303,6 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
 
     const logId = inserted?.rows?.[0]?.id || null;
     console.log(`[nextCalls] log id=${logId ?? "null"}`);
-    if (logId) {
-      try {
-        // Theo service của bạn; nếu khác chữ ký hãy dùng đúng phiên bản đang chạy
-        await onProjectLogInserted(logId, statelessDb);
-        console.log("[nextCalls] notify OK");
-      } catch (e) {
-        console.warn("[nextCalls] notify error:", e?.message || e);
-      }
-    }
   } catch (e) {
     console.error("[nextCalls] log persist error:", e?.message || e);
   }
@@ -408,7 +414,7 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
       // 3. Tạo request giả cho statefulHandler
       const currentUser = options.user || rootCtx.user || null;
       const headersWithUser = {
-        ...headers,
+        ...(headers || {}),
         "Content-Type": "application/json",
       };
 
@@ -439,7 +445,6 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         user: currentUser,
         res: { locals: {} },
       };
-
 
       const started = Date.now();
       const resCapture = createMemoryResponder();
@@ -475,7 +480,10 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         body: callRes.body,
         headers: callRes.headers,
         request: { body: payload },
-        response: callRes.body, // alias convenience
+        // backward-compat: vẫn giữ alias
+        response: callRes.body,
+        // thêm field res để đồng nhất với root.res
+        res: { status: callRes.status, body: callRes.body },
       };
     } catch (e) {
       console.error("[nextCalls] step error:", e?.message || e);
