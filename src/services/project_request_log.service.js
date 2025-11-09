@@ -134,33 +134,54 @@ exports.listLogs = async (pool, opts = {}) => {
   };
 };
 
-exports.getLogsByProjectId = async (pool, projectId) => {
-  const { rows } = await pool.query(
-    `
-      SELECT
-        l.id,
-        l.project_id,
-        l.endpoint_id,
-        l.endpoint_response_id,
-        l.stateful_endpoint_id,
-        l.stateful_endpoint_response_id,
-        l.request_method,
-        l.request_path,
-        l.request_headers,
-        l.request_body,
-        l.response_status_code,
-        l.response_body,
-        l.ip_address,
-        l.latency_ms,
-        l.created_at
-      FROM project_request_logs l
-      WHERE l.project_id = $1
-      ORDER BY l.created_at DESC
-    `,
-    [projectId]
-  );
+exports.getLogsByProjectId = async (pool, projectId, limit, offset) => {
+  projectId = Number(projectId);
+  limit = Number(limit) || 10;
+  offset = Number(offset) || 0;
 
-  return rows; // Trả về danh sách log
+  const sql = `
+    SELECT
+      l.id,
+      l.project_id,
+      l.endpoint_id,
+      l.endpoint_response_id,
+      l.stateful_endpoint_id,
+      l.stateful_endpoint_response_id,
+      l.request_method,
+      l.request_path,
+      l.request_headers,
+      l.request_body,
+      l.response_status_code,
+      l.response_body,
+      l.ip_address,
+      l.latency_ms,
+      l.created_at,
+      COUNT(*) OVER() as total_count
+    FROM project_request_logs l
+    WHERE l.project_id = $1
+    ORDER BY l.created_at DESC
+    LIMIT $2 OFFSET $3
+  `;
+
+  console.log('[DBG] service.getLogsByProjectId - sql params:', { projectId, limit, offset });
+  const { rows } = await pool.query(sql, [projectId, limit, offset]);
+
+  // If rows empty, still need total: run COUNT separately (safe fallback)
+  let total = 0;
+  if (rows.length > 0) {
+    total = Number(rows[0].total_count) || 0;
+    // remove total_count from each item before returning (optional)
+    const items = rows.map(r => {
+      const { total_count, ...rest } = r;
+      return rest;
+    });
+    return { items, total };
+  } else {
+    // fallback: no rows returned, count directly
+    const countRes = await pool.query(`SELECT COUNT(*) AS total FROM project_request_logs WHERE project_id = $1`, [projectId]);
+    total = parseInt(countRes.rows[0]?.total || '0', 10);
+    return { items: [], total };
+  }
 };
 
 exports.nullifyFolderTree = async (client, folderId) => {
