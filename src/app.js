@@ -16,7 +16,14 @@ const path = require("path");
 const auth = require("./middlewares/authMiddleware");
 
 // === Centrifugo routes (auth/publish/token) ===
-const centrifugoTokenRoutes = require("./centrifugo/centrifugo.token.routes");
+function pickMiddleware(mod) {
+  if (!mod) return null;
+  if (typeof mod === "function") return mod;
+  if (mod.default && typeof mod.default === "function") return mod.default;
+  if (mod.router && typeof mod.router === "function") return mod.router;
+  return null;
+}
+const centrifugoTokenRoutes = pickMiddleware(require("./centrifugo/centrifugo.token.routes"));
 
 const app = express();
 
@@ -65,16 +72,22 @@ const https = require("https");
 // ---------------------------------------------
 app.use(express.static(path.join(__dirname, "..", "public")));
 
-// ---------------------------------------------
 // 4) Centrifugo helpers
 // ---------------------------------------------
-//app.use(centrifugoTokenRoutes);
+if (centrifugoTokenRoutes) {
+  app.use(centrifugoTokenRoutes);
+} else {
+  console.warn("[Centrifugo] token routes export is not a middleware - skipping");
+}
 
-// ---------------------------------------------
 // 5) Centrifugo auth/publish endpoints
 // ---------------------------------------------
-//app.use("/api", require("./centrifugo/centrifugo-auth.routes"));
-//app.use("/api", require("./centrifugo/notify.routes"));
+const centrifugoAuthRoutes = pickMiddleware(require("./centrifugo/centrifugo-auth.routes"));
+const notifyRoutes = pickMiddleware(require("./centrifugo/notify.routes"));
+if (centrifugoAuthRoutes) app.use("/api", centrifugoAuthRoutes);
+else console.warn("[Centrifugo] auth routes export is not a middleware - skipping");
+if (notifyRoutes) app.use("/api", notifyRoutes);
+else console.warn("[Centrifugo] notify routes export is not a middleware - skipping");
 
 // ---------------------------------------------
 // 6) Inject DB pools vào req

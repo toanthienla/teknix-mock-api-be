@@ -3,8 +3,8 @@ const endpointSvc = require("../services/endpoint.service");
 const logSvc = require("../services/project_request_log.service");
 const { render } = require("../utils/wsTemplate");
 const { pool } = require("../config/db");
-// ws-manager nằm ở thư mục gốc WS; broadcast sẽ được gán khi initWs() chạy lúc khởi động server
-const wsMgr = require("../utils/ws-manager");
+// Chuyển sang Centrifugo (HTTP API publish)
+const { publish } = require("../centrifugo/centrifugo.service");
 const { match } = require("path-to-regexp");
 
 // Fallback: resolve endpoint_id từ URL nếu chưa có (dùng meta universal + baseUrl)
@@ -241,7 +241,7 @@ function adminResponseLogger(scope = "endpoint_responses") {
           await insertOne({ project_id: baseProjectId, endpoint_id: baseEndpointId, endpoint_response_id: baseEndpointResponseId, response_body });
         }
         // ============================
-        // 🔔 BƯỚC 3: quyết định broadcast WS
+        // 🔔 BƯỚC 3: quyết định publish (Centrifugo)
         // ============================
         try {
           // Chỉ broadcast khi xác định được endpoint_id
@@ -259,9 +259,9 @@ function adminResponseLogger(scope = "endpoint_responses") {
           // Điều kiện: bật + status khớp
           if (!cfg.enabled || !(Number.isInteger(cfg.condition) && cfg.condition === status)) return;
 
-          // Truy ra workspace/project name theo endpoint_id (JOIN folders→projects→workspaces)
+          // Truy ra workspace/project name & project_id theo endpoint_id (JOIN folders→projects→workspaces)
           const q = `
-            SELECT w.name AS workspace, p.name AS project
+            SELECT w.name AS workspace, p.name AS project, p.id AS project_id
             FROM endpoints e
             JOIN folders f   ON f.id = e.folder_id
             JOIN projects p  ON p.id = f.project_id
@@ -271,7 +271,7 @@ function adminResponseLogger(scope = "endpoint_responses") {
           `;
           const { rows } = await pool.query(q, [endpointId]);
           if (!rows.length) return;
-          const { workspace, project } = rows[0];
+          const { workspace, project, project_id: projectIdFromJoin } = rows[0];
 
           // Chuẩn bị context & message
           // Suy params từ pattern nếu có (để dùng trong template)
@@ -312,26 +312,28 @@ function adminResponseLogger(scope = "endpoint_responses") {
             message = renderDeep(cfg.message, ctx, render);
           }
 
-          // >>> THÊM LOG NGAY TRƯỚC KHI TẠO `data` <<<
-          // console.log("[WS] endpointId resolved =", endpointId, "status =", status);
-          // console.log("[WS] cfg =", cfg);
-          // console.log("[WS] channel =", `${workspace}/${project}`, "message =", message);
-          // Gửi WS chỉ phần message (string hoặc object) theo yêu cầu
+          // Data publish lên Centrifugo — giữ nguyên "message" (string|object)
           const data = message;
+
+          // Kênh Centrifugo đề xuất (ít nhất):
+          // - pj:{projectId}
+          // - pj:{projectId}:ep:{endpointId}
+          const projectId = projectIdFromJoin || baseProjectId || ep.project_id || null;
+          const channels = [];
+          if (projectId) {
+            channels.push(`pj:${projectId}`);
+            channels.push(`pj:${projectId}:ep:${endpointId}`);
+          }
 
           // Gửi sau delay_ms (nếu có)
           const delay = Number.isInteger(cfg.delay_ms) && cfg.delay_ms > 0 ? cfg.delay_ms : 0;
           const doSend = () => {
-            if (typeof wsMgr.broadcast === "function") {
-              try {
-                wsMgr.broadcast({ workspace, project, data });
-              } catch (_) {}
-            }
+            Promise.all(channels.map((ch) => publish(ch, data).catch(() => {}))).catch(() => {});
           };
           delay ? setTimeout(doSend, delay) : doSend();
         } catch (err) {
           if (process.env.NODE_ENV !== "production") {
-            console.warn("[adminResponseLogger] WS broadcast failed:", err?.message || err);
+            console.warn("[adminResponseLogger] publish (Centrifugo) failed:", err?.message || err);
           }
         }
       } catch (e) {
