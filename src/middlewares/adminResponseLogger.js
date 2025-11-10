@@ -5,6 +5,7 @@ const { render } = require("../utils/wsTemplate");
 const { pool } = require("../config/db");
 // Chuyển sang Centrifugo (HTTP API publish)
 const { publish } = require("../centrifugo/centrifugo.service");
+const { broadcast } = require("../utils/ws-manager");
 const { match } = require("path-to-regexp");
 
 // Fallback: resolve endpoint_id từ URL nếu chưa có (dùng meta universal + baseUrl)
@@ -322,13 +323,17 @@ function adminResponseLogger(scope = "endpoint_responses") {
           const channels = [];
           if (projectId) {
             channels.push(`pj:${projectId}`);
-            channels.push(`pj:${projectId}:ep:${endpointId}`);
+            channels.push(`pj:${projectId}-ep-${endpointId}`);
           }
 
           // Gửi sau delay_ms (nếu có)
           const delay = Number.isInteger(cfg.delay_ms) && cfg.delay_ms > 0 ? cfg.delay_ms : 0;
           const doSend = () => {
             Promise.all(channels.map((ch) => publish(ch, data).catch(() => {}))).catch(() => {});
+            // Và bắn thẳng qua WS nội bộ (raw)
+            try {
+              broadcast({ workspace, project, data });
+            } catch (_) {}
           };
           delay ? setTimeout(doSend, delay) : doSend();
         } catch (err) {
