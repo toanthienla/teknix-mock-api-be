@@ -597,15 +597,15 @@ router.use(authMiddleware, async (req, res, next) => {
             return res.status(status).json(safeBody);
           }
 
-          // Nếu bị 403 hoặc nhận HTML Cloudflare (Attention Required...), thử fallback bằng cloudscraper
           const looksLikeCloudflareBlock = (r) => {
             if (!r) return false;
-            try {
-              const body = typeof r.data === "string" ? r.data : r.data && typeof r.data === "object" ? JSON.stringify(r.data) : "";
-              if (r.status === 403) return true;
-              if (typeof body === "string" && body.includes("Attention Required")) return true;
-            } catch (e) {}
-            return false;
+            const ct = String(r.headers?.["content-type"] || "").toLowerCase();
+            const isHtml = ct.includes("text/html");
+            const bodyStr = typeof r.data === "string" ? r.data : r.data && typeof r.data === "object" ? JSON.stringify(r.data) : "";
+
+            // Chỉ coi là CF challenge khi là HTML & có dấu hiệu challenge
+            if (!isHtml) return false;
+            return bodyStr.includes("Attention Required") || bodyStr.includes("cf-chl") || bodyStr.includes("Checking your browser");
           };
 
           if (looksLikeCloudflareBlock(proxyResp)) {
@@ -648,6 +648,7 @@ router.use(authMiddleware, async (req, res, next) => {
                   headers: csHeaders,
                   gzip: true, // ✅ tự động decompress
                   resolveWithFullResponse: true,
+                  simple: false,
                 });
 
                 const zlib = require("zlib");
@@ -693,6 +694,7 @@ router.use(authMiddleware, async (req, res, next) => {
                   gzip: true, // ✅ tự động decompress
                   json: true,
                   resolveWithFullResponse: true,
+                  simple: false,
                 });
                 proxyResp = {
                   status: csResp.statusCode,
@@ -703,11 +705,11 @@ router.use(authMiddleware, async (req, res, next) => {
             } catch (csErr) {
               console.error("[Proxy cloudscraper error]", csErr && csErr.message ? csErr.message : csErr);
               // if fallback fails, return original axios error if present
-              return res.status(502).json({
-                error: "Bad Gateway (proxy failed)",
-                message: csErr?.message || "cloudscraper fallback failed",
-                detail: csErr?.response || null,
-              });
+              // return res.status(502).json({
+              //   error: "Bad Gateway (proxy failed)",
+              //   message: csErr?.message || "cloudscraper fallback failed",
+              //   detail: csErr?.response || null,
+              // });
             }
           }
           let safeResponseBody;
