@@ -386,11 +386,13 @@ async function statefulHandler(req, res, next) {
       // Build root context compatible with nextcallRouter.renderTemplate
       // Build root context compatible with nextcallRouter.renderTemplate
       // Seed history[0] = root call để template dùng {{1.request...}} / {{1.response...}}
+      const headersLc = Object.fromEntries(Object.entries(req?.headers || {}).map(([k, v]) => [String(k).toLowerCase(), v]));
       const initialHistory = [
         {
           request: {
             body: req?.body ?? {},
             headers: req?.headers ?? {},
+            headers_lc: headersLc,
             params: req?.params ?? {},
             query: req?.query ?? {},
           },
@@ -405,6 +407,7 @@ async function statefulHandler(req, res, next) {
         request: {
           body: req?.body ?? {},
           headers: req?.headers ?? {},
+          headers_lc: headersLc,
           params: req?.params ?? {},
           query: req?.query ?? {},
         },
