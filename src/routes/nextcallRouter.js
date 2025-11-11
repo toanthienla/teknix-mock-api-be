@@ -11,6 +11,53 @@ function get(obj, path) {
   return path?.split(".").reduce((o, k) => (o && k in o ? o[k] : undefined), obj);
 }
 
+// NEW: header helpers
+function lowerCaseKeys(obj = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) out[String(k).toLowerCase()] = v;
+  return out;
+}
+const HEADER_BLOCKLIST = new Set(["content-length", "host", "connection", "accept-encoding", "transfer-encoding"]);
+function mergeHeadersCI(base = {}, override = {}) {
+  const baseLc = lowerCaseKeys(base);
+  const overLc = lowerCaseKeys(override);
+  const merged = { ...baseLc, ...overLc }; // override wins
+  return merged;
+}
+function pickInheritedHeaders(src = {}, conf = { mode: "none", include: [], exclude: [] }) {
+  const srcLc = lowerCaseKeys(src);
+  const result = {};
+  if (!conf || conf.mode === "none") return result;
+  if (conf.mode === "all") {
+    for (const [k, v] of Object.entries(srcLc)) {
+      if (HEADER_BLOCKLIST.has(k)) continue;
+      if (
+        Array.isArray(conf.exclude) &&
+        conf.exclude
+          .map(String)
+          .map((s) => s.toLowerCase())
+          .includes(k)
+      )
+        continue;
+      result[k] = v;
+    }
+    return result;
+  }
+  if (conf.mode === "list") {
+    const includeLc = (conf.include || []).map((s) => String(s).toLowerCase());
+    for (const name of includeLc) {
+      const k = String(name).toLowerCase();
+      if (HEADER_BLOCKLIST.has(k)) continue;
+      if (k in srcLc) result[k] = srcLc[k];
+    }
+    // apply exclude after include (safety)
+    const excludeLc = (conf.exclude || []).map((s) => String(s).toLowerCase());
+    for (const ex of excludeLc) delete result[ex];
+    return result;
+  }
+  return result;
+}
+
 /**
  * --- NEW ---
  * Select from history by 1-based index, then read a nested path
@@ -227,6 +274,20 @@ function buildPlanFromAdvancedConfig(nextCalls = []) {
       },
       payload: { template: s?.body || {} },
       headers: { template: s?.headers || {} },
+      // NEW: header inheritance config
+      headersFrom: Number.isFinite(Number(s?.headers_from)) ? Number(s.headers_from) : s?.headers_from || "root",
+      inheritHeaders: (() => {
+        const inh = s?.inherit_headers;
+        if (inh === true) return { mode: "all", include: [], exclude: [], from: "root" };
+        if (Array.isArray(inh)) return { mode: "list", include: inh, exclude: [], from: "root" };
+        if (inh && typeof inh === "object") {
+          const from = Number.isFinite(Number(inh.from)) ? Number(inh.from) : inh.from || "root";
+          const include = Array.isArray(inh.include) ? inh.include : [];
+          const exclude = Array.isArray(inh.exclude) ? inh.exclude : [];
+          return { mode: inh.mode === "all" ? "all" : include.length ? "list" : "all", include, exclude, from };
+        }
+        return { mode: "none", include: [], exclude: [], from: "root" };
+      })(),
       condition: typeof s?.condition !== "undefined" ? s.condition : null,
       delayMs: Number(s?.delayMs ?? s?.delay_ms) || 0, // <--- NEW
       timeoutMs: Number(s?.timeoutMs ?? s?.timeout_ms) || 0, // optional
@@ -389,7 +450,7 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
 
       const currentCtxForRender = { root: rootCtx, prev, history };
       const payload = renderTemplate(step.payload?.template ?? {}, currentCtxForRender);
-      const headers = renderTemplate(step.headers?.template ?? {}, currentCtxForRender);
+      const headersTpl = renderTemplate(step.headers?.template ?? {}, currentCtxForRender);
 
       let renderedPath = renderStringTemplate(target.logicalPath || "", currentCtxForRender);
       const method = (target.method || "GET").toUpperCase();
@@ -437,10 +498,24 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
 
       // build internal req for stateful handler
       const currentUser = options.user || rootCtx.user || null;
-      const headersWithUser = {
-        ...(headers || {}),
-        "Content-Type": "application/json",
-      };
+      // --- NEW: compose headers with inheritance ---
+      // choose source for inheritance: number (1-based), "prev" or "root"
+      let sourceHeaders = null;
+      const from = step.inheritHeaders?.from ?? step.headersFrom ?? "root";
+      if (from === "prev" && prev?.request?.headers) {
+        sourceHeaders = prev.request.headers;
+      } else if (Number.isFinite(Number(from)) && history[Number(from) - 1]?.request?.headers) {
+        sourceHeaders = history[Number(from) - 1].request.headers;
+      } else if (history[0]?.request?.headers) {
+        sourceHeaders = history[0].request.headers; // default root
+      }
+      const inherited = pickInheritedHeaders(sourceHeaders, step.inheritHeaders || { mode: "none" });
+      // merge case-insensitive: template overrides inherited
+      const merged = mergeHeadersCI(inherited, headersTpl || {});
+      // add mock user + default content-type if absent
+      if (!merged["content-type"]) merged["content-type"] = "application/json";
+      if (currentUser?.id) merged["x-mock-user-id"] = currentUser.id;
+      const headersWithUser = merged;
       if (currentUser?.id) headersWithUser["x-mock-user-id"] = currentUser.id;
 
       const reqLike = {
@@ -495,7 +570,11 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
 
       // --- NEW: push into history so later steps can reference {{N.request...}}/{{N.response...}}
       history.push({
-        request: { body: payload, headers: headersWithUser },
+        request: {
+          body: payload,
+          headers: headersWithUser,
+          headers_lc: lowerCaseKeys(headersWithUser),
+        },
         response: { body: callRes.body },
         res: { status: callRes.status, body: callRes.body },
         status: callRes.status,
@@ -506,7 +585,7 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         status: callRes.status,
         body: callRes.body,
         headers: callRes.headers,
-        request: { body: payload },
+        request: { body: payload, headers: headersWithUser },
         response: callRes.body,
         res: { status: callRes.status, body: callRes.body },
       };
