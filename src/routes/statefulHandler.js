@@ -252,6 +252,8 @@ async function resolveStatefulResponseId(statefulDb, statefulId, providedId) {
 /* ========== Logging (ghi vào DB stateless) ========== */
 async function logWithStatefulResponse(req, { projectId, originId, statefulId, method, path, status, responseBody, started, payload, statefulResponseId = null }) {
   try {
+    // ⛔ Tránh ghi log trùng cho nextCall nội bộ (log của nextCall sẽ do nextcallRouter tự persist)
+    if (req?.flags?.isNextCall) return;
     // 🆕 gắn user vào log nếu có (lấy từ auth hoặc header X-Mock-User-Id)
     const userIdForLog = pickUserIdFromRequest(req);
     const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId);
@@ -382,6 +384,21 @@ async function statefulHandler(req, res, next) {
       const parentId = insertedLogId ?? req.res?.locals?.lastLogId ?? null;
 
       // Build root context compatible with nextcallRouter.renderTemplate
+      // Build root context compatible with nextcallRouter.renderTemplate
+      // Seed history[0] = root call để template dùng {{1.request...}} / {{1.response...}}
+      const initialHistory = [
+        {
+          request: {
+            body: req?.body ?? {},
+            headers: req?.headers ?? {},
+            params: req?.params ?? {},
+            query: req?.query ?? {},
+          },
+          response: { body },
+          res: { status, body },
+          status,
+        },
+      ];
       const rootCtx = {
         req, // original express request (so templates can access req.headers, req.query, etc.)
         // compact request object so templates can use {{request.body.xxx}}
@@ -398,6 +415,7 @@ async function statefulHandler(req, res, next) {
         user: req.user ?? null,
         log: { id: parentId },
         flags: { suppressNextCalls: false },
+        history: initialHistory,
       };
 
       const plan = buildPlanFromAdvancedConfig(advancedConfig.nextCalls);
