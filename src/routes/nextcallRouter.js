@@ -1,4 +1,3 @@
-// src/routes/nextcallRouter.js
 const express = require("express");
 const router = express.Router();
 const logSvc = require("../services/project_request_log.service");
@@ -6,59 +5,72 @@ const logSvc = require("../services/project_request_log.service");
 console.log("[nextCalls] router loaded");
 
 /* ========================================
- * Helpers (gói trong 1 file)
+ * Helpers
  * ====================================== */
 function get(obj, path) {
   return path?.split(".").reduce((o, k) => (o && k in o ? o[k] : undefined), obj);
 }
 
 /**
+ * --- NEW ---
+ * Select from history by 1-based index, then read a nested path
+ * idx: 1 => history[0], 2 => history[1], ...
+ */
+function getFromHistory(history, idx1Based, subPath) {
+  const i = Number(idx1Based);
+  if (!Number.isFinite(i) || i < 1) return undefined;
+  const entry = Array.isArray(history) ? history[i - 1] : undefined;
+  if (!entry) return undefined;
+  if (!subPath) return entry;
+  return get(entry, subPath);
+}
+
+/**
  * renderTemplate:
  * - tpl: object/array/string containing {{...}} placeholders
- * - ctx: { root, prev } where root = original root context (may contain req/res),
- *        prev = previous step context (we attach prev.request.body and prev.body after each step)
+ * - ctx: { root, prev, history }
  *
  * Support access patterns:
- *  - {{request.body.foo}}  -> tries prev.request first, then root.request
- *  - {{response.body.foo}} -> tries prev.response (prev.body) first, then root.response (root.res)
- *  - {{root.res.status}} or {{prev.status}}
+ *  - {{request.body.foo}} / {{response.body.foo}}  (back-compat; prev-first, then root)
+ *  - {{1.request.body.name}} / {{2.response.body.data.age}} (history, 1-based)
+ *  - {{root.res.status}}, {{prev.status}}
  */
 function renderTemplate(obj, ctx = {}) {
-  // Hỗ trợ đệ quy cho cả object, array và string template
   if (Array.isArray(obj)) return obj.map((v) => renderTemplate(v, ctx));
   if (obj && typeof obj === "object") {
     const result = {};
-    for (const [k, v] of Object.entries(obj)) {
-      result[k] = renderTemplate(v, ctx);
-    }
+    for (const [k, v] of Object.entries(obj)) result[k] = renderTemplate(v, ctx);
     return result;
   }
 
   if (typeof obj === "string") {
-    // Chuẩn bị scope: đảm bảo response luôn có body
+    // normalize prev.response to always have .body
     const rawPrevResponse = ctx.prev?.response;
-    const normalizedPrevResponse =
-      rawPrevResponse &&
-        typeof rawPrevResponse === "object" &&
-        !("body" in rawPrevResponse)
-        ? { body: rawPrevResponse }
-        : rawPrevResponse;
+    const normalizedPrevResponse = rawPrevResponse && typeof rawPrevResponse === "object" && !("body" in rawPrevResponse) ? { body: rawPrevResponse } : rawPrevResponse;
 
     const scope = {
       root: ctx.root,
       prev: ctx.prev,
-      request:
-        ctx.prev?.request ?? ctx.root?.req ?? ctx.root?.request ?? {},
-      response:
-        normalizedPrevResponse ??
-        ctx.root?.res ??
-        ctx.root?.response ??
-        {},
+      history: Array.isArray(ctx.history) ? ctx.history : [],
+      request: ctx.prev?.request ?? ctx.root?.req ?? ctx.root?.request ?? {},
+      response: normalizedPrevResponse ?? ctx.root?.res ?? ctx.root?.response ?? {},
     };
 
-    return obj.replace(/\{\{([^}]+)\}\}/g, (_, expr) => {
+    return obj.replace(/\{\{([^}]+)\}\}/g, (_, exprRaw) => {
       try {
-        const parts = expr.trim().split(".");
+        const expr = exprRaw.trim();
+
+        // --- NEW: history addressing "{{<n>.<rest>}}" ---
+        const m = expr.match(/^(\d+)\.(.+)$/);
+        if (m) {
+          const idx = m[1];
+          const rest = m[2];
+          const val = getFromHistory(scope.history, idx, rest);
+          return val == null ? "" : String(val);
+        }
+
+        // back-compat scope
+        const parts = expr.split(".");
         let val = scope;
         for (const p of parts) {
           if (val == null) break;
@@ -74,29 +86,39 @@ function renderTemplate(obj, ctx = {}) {
   return obj;
 }
 
-
 /**
- * renderStringTemplate:
- * - For rendering path strings that may contain {{...}} placeholders.
- * - ctx: same shape as renderTemplate expects.
+ * renderStringTemplate: for paths with {{...}}
+ * - supports both history {{1.request...}} and back-compat {{request...}}
  */
 function renderStringTemplate(tpl, ctx = {}) {
   if (!tpl || typeof tpl !== "string") return tpl;
+
   const scope = {
     root: ctx.root,
     prev: ctx.prev,
+    history: Array.isArray(ctx.history) ? ctx.history : [],
     request: ctx.prev?.request ?? ctx.root?.req ?? ctx.root?.request ?? {},
     response: ctx.prev?.response ?? ctx.root?.res ?? ctx.root?.response ?? {},
   };
-  return tpl.replace(/\{\{([^}]+)\}\}/g, (_, expr) => {
-    const path = expr.trim();
-    const val = get(scope, path);
+
+  return tpl.replace(/\{\{([^}]+)\}\}/g, (_, exprRaw) => {
+    const expr = exprRaw.trim();
+
+    // NEW: history addressing
+    const m = expr.match(/^(\d+)\.(.+)$/);
+    if (m) {
+      const idx = m[1];
+      const rest = m[2];
+      const val = getFromHistory(scope.history, idx, rest);
+      return typeof val === "undefined" ? "" : String(val);
+    }
+
+    const val = get(scope, expr);
     return typeof val === "undefined" ? "" : String(val);
   });
 }
 
 function checkCondition(cond, { root, prev }) {
-  // Shorthand number / boolean
   if (typeof cond === "number") {
     const base = prev && typeof prev.status !== "undefined" ? prev.status : root?.res?.status;
     console.log(`[nextCalls] cond-eval(shorthand-number) use=${prev ? "prev.status" : "root.status"} actual=${base} expect=${cond}`);
@@ -107,12 +129,11 @@ function checkCondition(cond, { root, prev }) {
     return cond;
   }
 
-  if (!cond) return true; // null/undefined => không ràng buộc
+  if (!cond) return true;
 
-  // Object condition: mặc định source = 'prev' nếu có prev, ngược lại 'root'
   const source = cond.source ?? (prev ? "prev" : "root");
   const src = source === "prev" ? prev : root?.res;
-  const val = get(src, cond.path); // ví dụ "status" hoặc "body.code"
+  const val = get(src, cond.path);
   const op = cond.op || "truey";
   console.log(`[nextCalls] cond-eval source=${source} path=${cond?.path || "(none)"} val=${JSON.stringify(val)} op=${op} expect=${JSON.stringify(cond?.value)}`);
   switch (op) {
@@ -163,20 +184,39 @@ function createMemoryResponder() {
   };
 }
 
+/**
+ * --- UPDATED ---
+ * - Accept full URL in target_endpoint ("http://host/W/P/path") or plain "/W/P/path"
+ * - Allow snake_case delay_ms/timeout_ms
+ */
 function buildPlanFromAdvancedConfig(nextCalls = []) {
   const arr = Array.isArray(nextCalls) ? nextCalls : [];
   const plan = arr.map((s) => {
     let workspace = null,
       project = null,
       logicalPath = null;
-    if (typeof s?.target_endpoint === "string") {
-      const m = s.target_endpoint.match(/^\/([^/]+)\/([^/]+)(\/.*)$/);
+
+    let raw = typeof s?.target_endpoint === "string" ? s.target_endpoint : "";
+
+    // Accept full URL
+    if (/^https?:\/\//i.test(raw)) {
+      try {
+        const u = new URL(raw);
+        raw = u.pathname || "/";
+      } catch {
+        // keep raw as-is
+      }
+    }
+
+    if (typeof raw === "string") {
+      const m = raw.match(/^\/([^/]+)\/([^/]+)(\/.*)$/);
       if (m) {
         workspace = m[1];
         project = m[2];
         logicalPath = m[3];
       }
     }
+
     return {
       name: s?.name || `step-${s?.id ?? ""}`.trim(),
       target: {
@@ -185,14 +225,14 @@ function buildPlanFromAdvancedConfig(nextCalls = []) {
         method: (s?.method || "GET").toUpperCase(),
         logicalPath: logicalPath || "",
       },
-      payload: { template: s?.body || {} }, // map body -> payload.template
+      payload: { template: s?.body || {} },
       headers: { template: s?.headers || {} },
-      condition: typeof s?.condition !== "undefined" ? s.condition : null, // 200 shorthand OK
-      delayMs: Number(s?.delayMs) || 0,
-      timeoutMs: Number(s?.timeoutMs) || 0,
+      condition: typeof s?.condition !== "undefined" ? s.condition : null,
+      delayMs: Number(s?.delayMs ?? s?.delay_ms) || 0, // <--- NEW
+      timeoutMs: Number(s?.timeoutMs ?? s?.timeout_ms) || 0, // optional
       onError: s?.onError === "halt" ? "halt" : "continue",
       log: { persist: s?.log?.persist !== false, notify: !!s?.log?.notify },
-      auth: { mode: s?.auth?.mode || "same-user" }, // "same-user" | "none" | "service-user"
+      auth: { mode: s?.auth?.mode || "same-user" },
     };
   });
   console.log(`[nextCalls] plan normalized: count=${plan.length}`);
@@ -208,7 +248,7 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
 
   console.log(`[nextCalls] resolve: method=${method} ws=${workspaceName} pj=${projectName} path=${logicalPath}`);
 
-  // 1) Project ở stateless (để có projectId cho log)
+  // find project (stateless)
   const pj = await statelessDb.query(
     `SELECT p.id
        FROM projects p
@@ -223,10 +263,10 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
     return null;
   }
 
-  // 2) DB mới: JOIN endpoints để lọc theo method/path
+  // candidates (stateful)
   const ef = await statefulDb.query(
     `SELECT ef.id,
-            ef.endpoint_id       AS origin_id,  -- map về endpoints.id để check tenant
+            ef.endpoint_id       AS origin_id,
             e.path,
             e.method
        FROM endpoints_ful ef
@@ -242,7 +282,7 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
     return null;
   }
 
-  // 3) Chọn đúng candidate bằng origin_id ở stateless
+  // choose candidate by ws + project
   for (const ep of candidates) {
     const chk = await statelessDb.query(
       `SELECT 1
@@ -263,8 +303,8 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
         workspaceName,
         projectName,
         projectId: project.id,
-        endpointId: ep.id, // endpoints_ful.id
-        originId: ep.origin_id, // endpoints.id (stateless)
+        endpointId: ep.id,
+        originId: ep.origin_id,
         isStateful: true,
         logicalPath,
         basePath: ep.path,
@@ -309,13 +349,14 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
 }
 
 /* ========================================
- * Core: chạy tuần tự mảng nextCalls (không đệ quy)
+ * Core: run sequential nextCalls (non-recursive)
  * ====================================== */
 async function runNextCalls(plan, rootCtx = {}, options = {}) {
   let prev = null;
+  // --- NEW: history support. seed with root (#1)
+  const history = Array.isArray(rootCtx.history) ? [...rootCtx.history] : [];
   console.log(`[nextCalls] start: steps=${plan.length} rootStatus=${rootCtx?.res?.status}`);
 
-  // protect: if caller asked to suppress next calls, return early
   if (options?.suppressNextCalls || rootCtx?.flags?.suppressNextCalls) {
     console.log("[nextCalls] suppressed by options/flags");
     return true;
@@ -326,15 +367,13 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
     console.log(`[nextCalls] step #${i + 1}/${plan.length} name=${step.name ?? ""}`);
 
     try {
-      // 1) điều kiện (check using rootCtx and prev)
       const ok = checkCondition(step.condition, { root: rootCtx, prev });
       console.log(`[nextCalls] condition → ${ok} cond=${JSON.stringify(step.condition)} prevStatus=${prev?.status ?? "n/a"} rootStatus=${rootCtx?.res?.status}`);
       if (!ok) {
-        prev = null; // skip but clear prev so subsequent steps default to root
+        prev = null;
         continue;
       }
 
-      // 2) resolve target
       const target = await resolveTargetEndpoint(step, {
         defaultWorkspace: rootCtx.workspaceName,
         defaultProject: rootCtx.projectName,
@@ -348,28 +387,21 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
       }
       console.log(`[nextCalls] target → ${target.method} /${target.workspaceName}/${target.projectName}${target.logicalPath} (endpointId=${target.endpointId})`);
 
-      // 3) render payload/headers using current context (rootCtx + prev)
-      const currentCtxForRender = { root: rootCtx, prev };
+      const currentCtxForRender = { root: rootCtx, prev, history };
       const payload = renderTemplate(step.payload?.template ?? {}, currentCtxForRender);
       const headers = renderTemplate(step.headers?.template ?? {}, currentCtxForRender);
 
-      // 3.1) render logicalPath string (supports templates inside path)
       let renderedPath = renderStringTemplate(target.logicalPath || "", currentCtxForRender);
-
-      // 3.2) If method is PUT/DELETE and path still has no id, try to find id from payload or prev
       const method = (target.method || "GET").toUpperCase();
 
-      // helper: attempt to find an id from payload or prev bodies (common shapes)
+      // try to find id for PUT/DELETE if path lacks id (heuristic)
       const findIdFrom = (candidatePayload, prevObj) => {
-        // Try direct id in payload
         if (candidatePayload && (candidatePayload.id || candidatePayload._id)) return candidatePayload.id ?? candidatePayload._id;
-        // Try prev.response body common shapes
         const b = prevObj?.body ?? prevObj?.response ?? null;
         if (!b) return null;
         if (typeof b === "object") {
           if (b.id) return b.id;
           if (b._id) return b._id;
-          // data_current (array or object with array)
           if (Array.isArray(b?.data_current) && b.data_current.length) {
             const last = b.data_current[b.data_current.length - 1];
             if (last && (last.id || last._id)) return last.id ?? last._id;
@@ -378,7 +410,6 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
             const last = b.data[b.data.length - 1];
             if (last && (last.id || last._id)) return last.id ?? last._id;
           }
-          // if response itself is array
           if (Array.isArray(b) && b.length) {
             const last = b[b.length - 1];
             if (last && (last.id || last._id)) return last.id ?? last._id;
@@ -387,41 +418,30 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         return null;
       };
 
-      // try to detect id from rendered payload or prev
       let idFromPayload = findIdFrom(payload, prev);
-      let idFromPrev = findIdFrom({}, prev); // only prev body
+      let idFromPrev = findIdFrom({}, prev);
       const chosenId = idFromPayload ?? idFromPrev ?? null;
 
-      // If path contains explicit placeholder like /:id, the resolveTargetEndpoint removed /:id earlier.
-      // But if the logicalPath included template like {{request.body.id}} we've already rendered it above.
-      // If still no id and method requires it, append chosenId to path if exists.
       if ((method === "PUT" || method === "DELETE") && (!renderedPath || !/\/[^/]*\d+/.test(renderedPath))) {
-        // if renderedPath doesn't include an id-like segment, append id
         if (chosenId) {
           if (!renderedPath.endsWith("/")) renderedPath = `${renderedPath}/${chosenId}`;
           else renderedPath = `${renderedPath}${chosenId}`;
         } else {
-          // no id found — we still proceed but log warning
           console.warn(`[nextCalls] no id found for ${method} ${renderedPath}; attempt will proceed without explicit id`);
         }
       }
 
       console.log(`[nextCalls] → invoke ${method} ${renderedPath} body=${JSON.stringify(payload)}`);
 
-      if (step.delayMs) await sleep(step.delayMs);
+      if (step.delayMs) await sleep(step.delayMs); // --- NEW ---
 
-      // 4) gọi statefulHandler nội bộ, chặn nextCalls ở endpoint con
-      // 3. Tạo request giả cho statefulHandler
+      // build internal req for stateful handler
       const currentUser = options.user || rootCtx.user || null;
       const headersWithUser = {
         ...(headers || {}),
         "Content-Type": "application/json",
       };
-
-      // Nếu user có id, truyền vào để statefulHandler.requireAuth() đọc được
-      if (currentUser?.id) {
-        headersWithUser["x-mock-user-id"] = currentUser.id;
-      }
+      if (currentUser?.id) headersWithUser["x-mock-user-id"] = currentUser.id;
 
       const reqLike = {
         method,
@@ -448,7 +468,6 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
 
       const started = Date.now();
       const resCapture = createMemoryResponder();
-      // lazy-require để tránh vòng tròn require
       const statefulHandler = require("./statefulHandler");
       if (typeof statefulHandler !== "function") {
         console.error("[nextCalls] FATAL: statefulHandler not loaded as a function");
@@ -458,10 +477,10 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
       const callRes = resCapture.toJSON();
       console.log(`[nextCalls] ← status=${callRes.status}`);
 
-      // persist log if requested
+      // persist nextcall log (single-source of truth for next-call logs)
       if (step.log?.persist) {
         await persistNextCallLog(options.statelessDb, callRes, {
-          parentLogId: rootCtx.log?.id, // có thể null nếu bạn chưa lấy được
+          parentLogId: rootCtx.log?.id,
           nextCallName: step.name,
           projectId: target.projectId,
           originId: target.originId,
@@ -474,15 +493,21 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         });
       }
 
-      // Update prev to include both response and the request that produced it
+      // --- NEW: push into history so later steps can reference {{N.request...}}/{{N.response...}}
+      history.push({
+        request: { body: payload, headers: headersWithUser },
+        response: { body: callRes.body },
+        res: { status: callRes.status, body: callRes.body },
+        status: callRes.status,
+      });
+
+      // prev (back-compat single-step access)
       prev = {
         status: callRes.status,
         body: callRes.body,
         headers: callRes.headers,
         request: { body: payload },
-        // backward-compat: vẫn giữ alias
         response: callRes.body,
-        // thêm field res để đồng nhất với root.res
         res: { status: callRes.status, body: callRes.body },
       };
     } catch (e) {
@@ -496,7 +521,7 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
 }
 
 /* ========================================
- * (Optional) HTTP route nội bộ để test nhanh qua Postman
+ * Internal testing route
  * ====================================== */
 router.post("/__nextcall/execute", async (req, res) => {
   const { plan = [], rootCtx = {}, options = {} } = req.body || {};
