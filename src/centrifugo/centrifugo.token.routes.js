@@ -10,6 +10,7 @@ const {
 } = require("../centrifugo/centrifugo.token.service");
 
 const CONN_TOKEN_TTL = process.env.CENTRIFUGO_CONN_TOKEN_TTL || "7d";
+const WS_URL = (process.env.CENTRIFUGO_WS || "").trim();
 // giống auth.controller.js
 const isProduction = process.env.NODE_ENV === "production";
 const cookieSameSite = isProduction ? "none" : "lax";
@@ -100,6 +101,7 @@ router.post("/centrifugo/endpoint-connect-token", auth, async (req, res) => {
       token,
       user_id: userId,
       channels: [channel],
+      ws_url: WS_URL,
       mode: wantSubs ? "connection_with_subs" : "connection_only",
       exp: exp || CONN_TOKEN_TTL,
       issued_at: new Date(issuedAtMs).toISOString(),
