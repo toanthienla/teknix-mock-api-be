@@ -101,7 +101,6 @@ router.post("/centrifugo/endpoint-connect-token", auth, async (req, res) => {
       token,
       user_id: userId,
       channels: [channel],
-      ws_url: WS_URL,
       mode: wantSubs ? "connection_with_subs" : "connection_only",
       exp: exp || CONN_TOKEN_TTL,
       issued_at: new Date(issuedAtMs).toISOString(),
@@ -147,6 +146,7 @@ router.post("/centrifugo/project-connect-token", auth, async (req, res) => {
     return res.json({
       token,
       user_id: userId,
+      ws_url: WS_URL,
       channels: [channel],
       mode: wantSubs ? "connection_with_subs" : "connection_only",
       exp: exp || CONN_TOKEN_TTL,
