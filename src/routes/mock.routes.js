@@ -500,8 +500,37 @@ router.use(authMiddleware, async (req, res, next) => {
       const handleProxyRequest = async () => {
         const finished = Date.now();
         try {
-          const ctx = { params, query: req.query };
-          const resolvedUrl = renderTemplate(r.proxy_url, ctx);
+          // Build context có đủ path/tail/query
+          const reqPath = req.universal?.subPath || req.path || "";
+          const matcher = getMatcher(patForParams, hasParams);
+          const m = matcher(reqPath);
+          const baseMatched = (m && m.path) || ""; // phần path khớp với endpoint
+          const tail = reqPath.slice(baseMatched.length); // phần path người dùng "nối thêm"
+          const ctx = {
+            params,
+            query: req.query,
+            path: reqPath,
+            basePath: baseMatched,
+            tail,
+            queryString: new URLSearchParams(req.query || {}).toString(),
+          };
+          let resolvedUrl = renderTemplate(r.proxy_url, ctx);
+
+          // Nếu proxy_url KHÔNG chỉ định {{path}}/{{tail}} thì auto-append tail + merge query
+          if (!/\{\{\s*(path|tail)\s*\}\}/.test(r.proxy_url || "")) {
+            try {
+              const u = new URL(resolvedUrl);
+              if (tail) {
+                const left = u.pathname.replace(/\/+$/, "");
+                const right = String(tail).replace(/^\/+/, "");
+                u.pathname = (left + "/" + right).replace(/\/+/g, "/");
+              }
+              for (const [k, v] of Object.entries(req.query || {})) {
+                if (!u.searchParams.has(k)) u.searchParams.append(k, v);
+              }
+              resolvedUrl = u.toString();
+            } catch {}
+          }
           const contentType = (req.headers["content-type"] || "").toLowerCase();
           let axiosConfig = {
             method: r.proxy_method || req.method,
