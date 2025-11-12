@@ -241,12 +241,14 @@ function buildPlanFromAdvancedConfig(nextCalls = []) {
   const plan = arr.map((s) => {
     let workspace = null,
       project = null,
-      logicalPath = null;
+      logicalPath = null,
+      externalUrl = null; // NEW
 
     let raw = typeof s?.target_endpoint === "string" ? s.target_endpoint : "";
 
-    // Accept full URL
+    // Accept full URL and preserve it
     if (/^https?:\/\//i.test(raw)) {
+      externalUrl = raw; // keep full URL for proxy
       try {
         const u = new URL(raw);
         raw = u.pathname || "/";
@@ -271,27 +273,13 @@ function buildPlanFromAdvancedConfig(nextCalls = []) {
         project,
         method: (s?.method || "GET").toUpperCase(),
         logicalPath: logicalPath || "",
+        externalUrl, // <-- thêm dòng này
       },
       payload: { template: s?.body || {} },
       headers: { template: s?.headers || {} },
-      // NEW: header inheritance config
-      headersFrom: Number.isFinite(Number(s?.headers_from)) ? Number(s.headers_from) : s?.headers_from || "root",
-      inheritHeaders: (() => {
-        const inh = s?.inherit_headers;
-        if (inh === true) return { mode: "all", include: [], exclude: [], from: "root" };
-        if (Array.isArray(inh)) return { mode: "list", include: inh, exclude: [], from: "root" };
-        if (inh && typeof inh === "object") {
-          const from = Number.isFinite(Number(inh.from)) ? Number(inh.from) : inh.from || "root";
-          const include = Array.isArray(inh.include) ? inh.include : [];
-          const exclude = Array.isArray(inh.exclude) ? inh.exclude : [];
-          return { mode: inh.mode === "all" ? "all" : include.length ? "list" : "all", include, exclude, from };
-        }
-        return { mode: "none", include: [], exclude: [], from: "root" };
-      })(),
       condition: typeof s?.condition !== "undefined" ? s.condition : null,
-      delayMs: Number(s?.delayMs ?? s?.delay_ms) || 0, // <--- NEW
-      timeoutMs: Number(s?.timeoutMs ?? s?.timeout_ms) || 0, // optional
-      onError: s?.onError === "halt" ? "halt" : "continue",
+      delayMs: Number(s?.delayMs ?? s?.delay_ms) || 0,
+      timeoutMs: Number(s?.timeoutMs ?? s?.timeout_ms) || 0,
       log: { persist: s?.log?.persist !== false, notify: !!s?.log?.notify },
       auth: { mode: s?.auth?.mode || "same-user" },
     };
@@ -390,16 +378,41 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
       },
     };
 
+    // --- Normalize response body để luôn là JSON ---
+    let safeResponseBody = callRes.body;
+    if (typeof safeResponseBody === "string") {
+      try {
+        safeResponseBody = { text: safeResponseBody };
+      } catch {
+        safeResponseBody = { text: String(safeResponseBody) };
+      }
+    }
+
     const inserted = await statelessDb.query(
       `INSERT INTO project_request_logs
-         (project_id, endpoint_id, endpoint_response_id, user_id,
-          stateful_endpoint_id, stateful_endpoint_response_id,
-          request_method, request_path, request_headers, request_body,
-          response_status_code, response_body, ip_address, latency_ms)
-       VALUES
-         ($1,$2,$3,$4, $5,$6, $7,$8,$9,$10, $11,$12,$13,$14)
-       RETURNING id`,
-      [meta.projectId ?? null, meta.originId ?? null, null, meta.userId ?? null, meta.statefulId ?? null, null, meta.method, meta.path, headersMeta, meta.payload || {}, callRes.status, callRes.body, null, Date.now() - (meta.started || Date.now())]
+     (project_id, endpoint_id, endpoint_response_id, user_id,
+      stateful_endpoint_id, stateful_endpoint_response_id,
+      request_method, request_path, request_headers, request_body,
+      response_status_code, response_body, ip_address, latency_ms)
+   VALUES
+     ($1,$2,$3,$4, $5,$6, $7,$8,$9,$10, $11,$12,$13,$14)
+   RETURNING id`,
+      [
+        meta.projectId ?? null,
+        meta.originId ?? null,
+        null,
+        meta.userId ?? null,
+        meta.statefulId ?? null,
+        null,
+        meta.method,
+        meta.path,
+        headersMeta,
+        meta.payload || {},
+        callRes.status,
+        safeResponseBody, // ✅ dùng body đã đảm bảo JSON
+        null,
+        Date.now() - (meta.started || Date.now()),
+      ]
     );
 
     const logId = inserted?.rows?.[0]?.id || null;
@@ -414,7 +427,6 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
  * ====================================== */
 async function runNextCalls(plan, rootCtx = {}, options = {}) {
   let prev = null;
-  // --- NEW: history support. seed with root (#1)
   const history = Array.isArray(rootCtx.history) ? [...rootCtx.history] : [];
   console.log(`[nextCalls] start: steps=${plan.length} rootStatus=${rootCtx?.res?.status}`);
 
@@ -435,6 +447,80 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         continue;
       }
 
+      // ============ NEW: detect proxy external ==============
+      const externalUrl = step?.target?.externalUrl;
+      const isExternal = !!externalUrl;
+
+      // =====================================================
+
+      // Nếu là external proxy -> dùng fetch
+      // Nếu là external proxy -> dùng fetch
+      if (isExternal) {
+        const url = externalUrl;
+        const method = (step?.target?.method || step?.method || "GET").toUpperCase();
+        const ctx = { root: rootCtx, prev, history };
+        const payload = renderTemplate(step.payload?.template ?? {}, ctx);
+        const headersTpl = renderTemplate(step.headers?.template ?? {}, ctx);
+
+        const currentUser = options.user || rootCtx.user || null;
+        const mergedHeaders = mergeHeadersCI({}, headersTpl || {});
+        if (!mergedHeaders["content-type"]) mergedHeaders["content-type"] = "application/json";
+        if (currentUser?.id) mergedHeaders["x-mock-user-id"] = currentUser.id;
+
+        console.log(`[nextCalls] proxy → ${method} ${url} body=${JSON.stringify(payload)}`);
+        try {
+          const started = Date.now();
+          const res = await fetch(url, {
+            method,
+            headers: mergedHeaders,
+            body: method === "GET" ? undefined : JSON.stringify(payload),
+          });
+          const text = await res.text();
+          let body;
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = text;
+          }
+
+          console.log(`[nextCalls] proxy result ← ${res.status} ${url}`);
+
+          const callRes = { status: res.status, body };
+
+          // lưu log nếu cần
+          if (step.log?.persist) {
+            await persistNextCallLog(options.statelessDb, callRes, {
+              parentLogId: rootCtx.log?.id,
+              nextCallName: step.name,
+              projectId: null,
+              originId: null,
+              statefulId: null,
+              method,
+              path: url,
+              started,
+              payload,
+              userId: currentUser?.id ?? null,
+            });
+          }
+
+          // push history để step sau có thể dùng {{N.response.body}}
+          history.push({
+            request: { body: payload, headers: mergedHeaders },
+            response: { body },
+            res: { status: res.status, body },
+            status: res.status,
+          });
+
+          prev = callRes;
+          continue; // sang step tiếp theo
+        } catch (err) {
+          console.error(`[nextCalls] proxy error for ${url}:`, err.message || err);
+          prev = null;
+          continue;
+        }
+      }
+
+      // ============ INTERNAL STATEFUL CALL (giữ nguyên logic cũ) ==============
       const target = await resolveTargetEndpoint(step, {
         defaultWorkspace: rootCtx.workspaceName,
         defaultProject: rootCtx.projectName,
@@ -446,6 +532,7 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         prev = null;
         continue;
       }
+
       console.log(`[nextCalls] target → ${target.method} /${target.workspaceName}/${target.projectName}${target.logicalPath} (endpointId=${target.endpointId})`);
 
       const currentCtxForRender = { root: rootCtx, prev, history };
@@ -455,67 +542,11 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
       let renderedPath = renderStringTemplate(target.logicalPath || "", currentCtxForRender);
       const method = (target.method || "GET").toUpperCase();
 
-      // try to find id for PUT/DELETE if path lacks id (heuristic)
-      const findIdFrom = (candidatePayload, prevObj) => {
-        if (candidatePayload && (candidatePayload.id || candidatePayload._id)) return candidatePayload.id ?? candidatePayload._id;
-        const b = prevObj?.body ?? prevObj?.response ?? null;
-        if (!b) return null;
-        if (typeof b === "object") {
-          if (b.id) return b.id;
-          if (b._id) return b._id;
-          if (Array.isArray(b?.data_current) && b.data_current.length) {
-            const last = b.data_current[b.data_current.length - 1];
-            if (last && (last.id || last._id)) return last.id ?? last._id;
-          }
-          if (Array.isArray(b?.data) && b.data.length) {
-            const last = b.data[b.data.length - 1];
-            if (last && (last.id || last._id)) return last.id ?? last._id;
-          }
-          if (Array.isArray(b) && b.length) {
-            const last = b[b.length - 1];
-            if (last && (last.id || last._id)) return last.id ?? last._id;
-          }
-        }
-        return null;
-      };
+      if (step.delayMs) await sleep(step.delayMs);
 
-      let idFromPayload = findIdFrom(payload, prev);
-      let idFromPrev = findIdFrom({}, prev);
-      const chosenId = idFromPayload ?? idFromPrev ?? null;
-
-      if ((method === "PUT" || method === "DELETE") && (!renderedPath || !/\/[^/]*\d+/.test(renderedPath))) {
-        if (chosenId) {
-          if (!renderedPath.endsWith("/")) renderedPath = `${renderedPath}/${chosenId}`;
-          else renderedPath = `${renderedPath}${chosenId}`;
-        } else {
-          console.warn(`[nextCalls] no id found for ${method} ${renderedPath}; attempt will proceed without explicit id`);
-        }
-      }
-
-      console.log(`[nextCalls] → invoke ${method} ${renderedPath} body=${JSON.stringify(payload)}`);
-
-      if (step.delayMs) await sleep(step.delayMs); // --- NEW ---
-
-      // build internal req for stateful handler
       const currentUser = options.user || rootCtx.user || null;
-      // --- NEW: compose headers with inheritance ---
-      // choose source for inheritance: number (1-based), "prev" or "root"
-      let sourceHeaders = null;
-      const from = step.inheritHeaders?.from ?? step.headersFrom ?? "root";
-      if (from === "prev" && prev?.request?.headers) {
-        sourceHeaders = prev.request.headers;
-      } else if (Number.isFinite(Number(from)) && history[Number(from) - 1]?.request?.headers) {
-        sourceHeaders = history[Number(from) - 1].request.headers;
-      } else if (history[0]?.request?.headers) {
-        sourceHeaders = history[0].request.headers; // default root
-      }
-      const inherited = pickInheritedHeaders(sourceHeaders, step.inheritHeaders || { mode: "none" });
-      // merge case-insensitive: template overrides inherited
-      const merged = mergeHeadersCI(inherited, headersTpl || {});
-      // add mock user + default content-type if absent
-      if (!merged["content-type"]) merged["content-type"] = "application/json";
-      if (currentUser?.id) merged["x-mock-user-id"] = currentUser.id;
-      const headersWithUser = merged;
+      const headersWithUser = mergeHeadersCI({}, headersTpl || {});
+      if (!headersWithUser["content-type"]) headersWithUser["content-type"] = "application/json";
       if (currentUser?.id) headersWithUser["x-mock-user-id"] = currentUser.id;
 
       const reqLike = {
@@ -544,15 +575,10 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
       const started = Date.now();
       const resCapture = createMemoryResponder();
       const statefulHandler = require("./statefulHandler");
-      if (typeof statefulHandler !== "function") {
-        console.error("[nextCalls] FATAL: statefulHandler not loaded as a function");
-        throw new Error("statefulHandler not a function");
-      }
       await statefulHandler(reqLike, resCapture);
       const callRes = resCapture.toJSON();
       console.log(`[nextCalls] ← status=${callRes.status}`);
 
-      // persist nextcall log (single-source of truth for next-call logs)
       if (step.log?.persist) {
         await persistNextCallLog(options.statelessDb, callRes, {
           parentLogId: rootCtx.log?.id,
@@ -568,35 +594,22 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         });
       }
 
-      // --- NEW: push into history so later steps can reference {{N.request...}}/{{N.response...}}
       history.push({
-        request: {
-          body: payload,
-          headers: headersWithUser,
-          headers_lc: lowerCaseKeys(headersWithUser),
-        },
+        request: { body: payload, headers: headersWithUser },
         response: { body: callRes.body },
         res: { status: callRes.status, body: callRes.body },
         status: callRes.status,
       });
 
-      // prev (back-compat single-step access)
-      prev = {
-        status: callRes.status,
-        body: callRes.body,
-        headers: callRes.headers,
-        request: { body: payload, headers: headersWithUser },
-        response: callRes.body,
-        res: { status: callRes.status, body: callRes.body },
-      };
-    } catch (e) {
-      console.error("[nextCalls] step error:", e?.message || e);
-      if (step.onError === "halt") break;
+      prev = callRes;
+      // ========================================================================
+    } catch (err) {
+      console.error("[nextCalls] runNextCalls error:", err?.message || err);
       prev = null;
     }
   }
+
   console.log("[nextCalls] done");
-  return true;
 }
 
 /* ========================================
