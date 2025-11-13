@@ -5,7 +5,6 @@ const { render } = require("../utils/wsTemplate");
 const { pool } = require("../config/db");
 // Chuyển sang Centrifugo (HTTP API publish)
 const { publish } = require("../centrifugo/centrifugo.service");
-const { broadcast } = require("../utils/ws-manager");
 const { match } = require("path-to-regexp");
 
 // Fallback: resolve endpoint_id từ URL nếu chưa có (dùng meta universal + baseUrl)

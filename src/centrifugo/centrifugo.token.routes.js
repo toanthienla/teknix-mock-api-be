@@ -9,8 +9,11 @@ const {
   createSubscriptionToken, // (chưa dùng, để sẵn)
 } = require("../centrifugo/centrifugo.token.service");
 
+// TTL chuỗi kiểu '7d'
 const CONN_TOKEN_TTL = process.env.CENTRIFUGO_CONN_TOKEN_TTL || "7d";
 const WS_URL = (process.env.CENTRIFUGO_WS || "").trim();
+// TTL tối thiểu của cookie hiển thị token cho FE (vd '10m')
+const COOKIE_MIN_TTL = process.env.CENTRIFUGO_WS_COOKIE_MIN_TTL || "10m";
 // giống auth.controller.js
 const isProduction = process.env.NODE_ENV === "production";
 const cookieSameSite = isProduction ? "none" : "lax";
@@ -18,12 +21,15 @@ const cookieSecure = isProduction;
 
 // helper: set các cookie để FE hiển thị / copy
 function setWsTokenCookies(res, { token, channels, ttlMs }) {
+  // minAge từ env, fallback 10 phút
+  const minAgeMs = parseTtlToMs(COOKIE_MIN_TTL) || 10 * 60 * 1000;
+
   const optsReadable = {
     httpOnly: false, // cho FE đọc được -> Application > Cookies
     secure: cookieSecure,
     sameSite: cookieSameSite,
     path: "/",
-    maxAge: Math.max(10 * 60 * 1000, ttlMs || 0), // ít nhất 10 phút cho dev
+    maxAge: Math.max(minAgeMs, ttlMs || 0),
   };
   // token thô
   res.cookie("centrifugo_ws_token", token, optsReadable);
