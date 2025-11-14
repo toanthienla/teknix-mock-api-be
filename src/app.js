@@ -82,10 +82,7 @@ if (centrifugoTokenRoutes) {
 
 // 5) Centrifugo auth/publish endpoints
 // ---------------------------------------------
-const centrifugoAuthRoutes = pickMiddleware(require("./centrifugo/centrifugo-auth.routes"));
 const notifyRoutes = pickMiddleware(require("./centrifugo/notify.routes"));
-if (centrifugoAuthRoutes) app.use("/api", centrifugoAuthRoutes);
-else console.warn("[Centrifugo] auth routes export is not a middleware - skipping");
 if (notifyRoutes) app.use("/api", notifyRoutes);
 else console.warn("[Centrifugo] notify routes export is not a middleware - skipping");
 
