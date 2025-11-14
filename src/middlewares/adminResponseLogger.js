@@ -64,10 +64,24 @@ async function resolveEndpointIdByUrl(req) {
       const pat = String(e.path || "/");
       const hasParams = pat.includes(":") || pat.includes("*");
       const fn = match(pat, { decode: decodeURIComponent, end: true, strict: false });
-      if (hasParams ? Boolean(fn(restPath)) : pat === restPath) {
-        return e.id;
+
+      if (hasParams) {
+        // endpoint dạng /kratos/:id, /kratos/:id/:sub...
+        if (fn(restPath)) return e.id;
+      } else {
+        // endpoint dạng /kratos (GET all)
+        if (pat === restPath) return e.id;
+
+        // Fallback: request là /kratos/123 -> vẫn coi là cùng endpoint
+        if (restPath.startsWith(pat + "/")) {
+          const tail = restPath.slice(pat.length + 1); // "123" trong "/kratos/123"
+          if (/^\d+$/.test(tail)) {
+            return e.id;
+          }
+        }
       }
     }
+
     return null;
   } catch {
     return null;
@@ -251,13 +265,16 @@ function adminResponseLogger(scope = "endpoint_responses") {
           }
           if (!endpointId) return;
 
-          // Lấy endpoint (bao gồm websocket_config) và project_id
-          // Service mới cần truyền dbPool
+          // Lấy endpoint (bao gồm websocket_config) từ bảng endpoints
           const ep = await endpointSvc.getEndpointById(pool, endpointId);
           if (!ep) return;
+
           const cfg = ep.websocket_config || {};
+
           // Điều kiện: bật + status khớp
-          if (!cfg.enabled || !(Number.isInteger(cfg.condition) && cfg.condition === status)) return;
+          if (!cfg.enabled || !(Number.isInteger(cfg.condition) && cfg.condition === status)) {
+            return;
+          }
 
           // Truy ra workspace/project name & project_id theo endpoint_id (JOIN folders→projects→workspaces)
           const q = `
@@ -303,8 +320,10 @@ function adminResponseLogger(scope = "endpoint_responses") {
             },
           };
           // message có thể là string hoặc object (theo spec mới)
+          // message có thể là string hoặc object (theo spec mới)
           let message;
           if (cfg.message == null) {
+            // Nếu không cấu hình message thì dùng chuỗi mặc định
             message = `${ctx.request.method} ${ctx.request.path} → ${status}`;
           } else if (typeof cfg.message === "string") {
             message = render(String(cfg.message), ctx);
@@ -312,8 +331,11 @@ function adminResponseLogger(scope = "endpoint_responses") {
             message = renderDeep(cfg.message, ctx, render);
           }
 
-          // Data publish lên Centrifugo — giữ nguyên "message" (string|object)
-          const data = message;
+          // 👉 Data publish lên Centrifugo: chỉ gửi đúng nội dung message
+          // - Nếu message là object: gửi object đó (event, status, device_id, ...)
+          // - Nếu message là string: gửi string
+          // - Nếu bằng null/undefined (trường hợp hiếm): gửi {}
+          const data = message == null ? {} : message;
 
           // Kênh Centrifugo đề xuất (ít nhất):
           // - pj:{projectId}
