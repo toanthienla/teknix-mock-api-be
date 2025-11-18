@@ -462,8 +462,14 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         const payload = renderTemplate(step.payload?.template ?? {}, ctx);
         const headersTpl = renderTemplate(step.headers?.template ?? {}, ctx);
 
+        const rootHeaders = rootCtx?.request?.headers_lc || rootCtx?.request?.headers || {};
+        const mergedHeaders = mergeHeadersCI(rootHeaders, headersTpl || {});
+
+        if (!mergedHeaders["content-type"]) mergedHeaders["content-type"] = "application/json";
+
         const currentUser = options.user || rootCtx.user || null;
-        const mergedHeaders = mergeHeadersCI({}, headersTpl || {});
+        if (currentUser?.id) mergedHeaders["x-mock-user-id"] = currentUser.id;
+
         if (!mergedHeaders["content-type"]) mergedHeaders["content-type"] = "application/json";
         if (currentUser?.id) mergedHeaders["x-mock-user-id"] = currentUser.id;
 
@@ -492,14 +498,16 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
             await persistNextCallLog(options.statelessDb, callRes, {
               parentLogId: rootCtx.log?.id,
               nextCallName: step.name,
-              projectId: null,
+              projectId: null,     // External call → không thuộc project nội bộ
               originId: null,
               statefulId: null,
               method,
-              path: url,
-              started,
+              path: url,           // external full URL
               payload,
-              userId: currentUser?.id ?? null,
+              rootHeaders: rootHeaders,
+              userId: step.auth?.mode === "same-user"
+                ? options.user?.id || rootCtx.user?.id || null
+                : null,
             });
           }
 
@@ -543,9 +551,18 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
       const method = (target.method || "GET").toUpperCase();
 
       if (step.delayMs) await sleep(step.delayMs);
+      // headers gốc từ API root (đã lowercase ở statefulHandler)
+      const rootHeaders = rootCtx?.request?.headers_lc || rootCtx?.request?.headers || {};
+
+      // kế thừa tất cả header root + override bởi step.headers
+      const headersWithUser = mergeHeadersCI(rootHeaders, headersTpl || {});
+
+      // bắt buộc content-type + user
+      if (!headersWithUser["content-type"]) headersWithUser["content-type"] = "application/json";
 
       const currentUser = options.user || rootCtx.user || null;
-      const headersWithUser = mergeHeadersCI({}, headersTpl || {});
+      if (currentUser?.id) headersWithUser["x-mock-user-id"] = currentUser.id;
+
       if (!headersWithUser["content-type"]) headersWithUser["content-type"] = "application/json";
       if (currentUser?.id) headersWithUser["x-mock-user-id"] = currentUser.id;
 
@@ -588,9 +605,11 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
           statefulId: target.endpointId,
           method,
           path: renderedPath,
-          started,
           payload,
-          userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,
+          rootHeaders: rootCtx?.request?.headers_lc || rootCtx?.request?.headers || {},
+          userId: step.auth?.mode === "same-user"
+            ? options.user?.id || rootCtx.user?.id || null
+            : null,
         });
       }
 
