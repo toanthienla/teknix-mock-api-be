@@ -1,4 +1,8 @@
 require("dotenv").config();
+const { webcrypto } = require("node:crypto");
+if (!globalThis.crypto) {
+  globalThis.crypto = webcrypto;
+}
 const HMAC_SECRET = process.env.CENTRIFUGO_HMAC_SECRET;
 if (!HMAC_SECRET) throw new Error("Missing env CENTRIFUGO_HMAC_SECRET");
 
