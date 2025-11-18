@@ -585,10 +585,13 @@ router.use(authMiddleware, async (req, res, next) => {
           try {
             const u = new URL(resolvedUrl);
 
-            if (!hasCustomPath) {
+            const forwardPath = req.universal?.subPath || req.path || "/";
+            const proxyPath = u.pathname || "/";
+
+            // Chỉ override khi proxy_url KHÔNG có path gì (chỉ là host root "/")
+            if (!hasCustomPath && (proxyPath === "/" || proxyPath === "")) {
               // MẶC ĐỊNH: forward đúng subPath/path mà client gọi vào mock
               // Ví dụ: /api/v1/groups hoặc /api/v1/groups/:group_id/queue
-              const forwardPath = req.universal?.subPath || req.path || "/";
               u.pathname = forwardPath;
             }
 
