@@ -123,12 +123,37 @@ function getMatcher(pattern, end = true) {
   }
   return fn;
 }
+
 function buildLoosePatternIfNeeded(pattern) {
   // Nếu KHÔNG có ":" hoặc "*" thì tự mở rộng để match sâu: "/a/b" => "/a/b/:rest(.*)?"
   if (!pattern.includes(":") && !pattern.includes("*")) {
     return pattern.endsWith("/") ? `${pattern}:rest(.*)?` : `${pattern}/:rest(.*)?`;
   }
   return pattern;
+}
+
+// 🔥 Độ "cụ thể" của path: nhiều segment hơn, nhiều segment tĩnh hơn, ít dynamic hơn
+function computeSpecificity(path) {
+  if (!path || typeof path !== "string") {
+    return { segments: 0, staticSegs: 0, dynamicSegs: 0 };
+  }
+  const parts = path.split("/").filter(Boolean);
+  let staticSegs = 0;
+  let dynamicSegs = 0;
+
+  for (const p of parts) {
+    if (p.startsWith(":") || p.includes("*")) {
+      dynamicSegs++;
+    } else {
+      staticSegs++;
+    }
+  }
+
+  return {
+    segments: parts.length,
+    staticSegs,
+    dynamicSegs,
+  };
 }
 
 function getClientIp(req) {
@@ -222,16 +247,27 @@ router.use(authMiddleware, async (req, res, next) => {
       });
     }
 
-    // Ưu tiên endpoint đúng project nếu universal cung cấp projectId,
-    // còn nếu không có projectId (gọi thẳng /cat) thì chọn ứng viên "tốt nhất":
-    // stateless trước, active trước, và có response trước.
+    // Ưu tiên endpoint đúng project + đúng statelessId từ universal (nếu có),
+    // nếu không thì chọn ứng viên "cụ thể" nhất:
     let ep = null;
     if (matches.length > 0) {
-      if (req.universal && req.universal.projectId) {
-        ep = matches.find((e) => e.project_id === req.universal.projectId) || matches[0];
-      } else {
+      // 1) Nếu universal đã chọn sẵn statelessId thì dùng lại đúng endpoint đó
+      if (req.universal && req.universal.statelessId) {
+        ep = matches.find((e) => e.id === req.universal.statelessId) || null;
+      }
+
+      // 2) Nếu chưa chọn được, lọc theo projectId (nếu có)
+      let candidates = matches;
+      if (!ep && req.universal && req.universal.projectId) {
+        const byProject = matches.filter((e) => e.project_id === req.universal.projectId);
+        if (byProject.length > 0) {
+          candidates = byProject;
+        }
+      }
+
+      if (!ep) {
         // Lấy danh sách id để kiểm tra có response hay không
-        const ids = matches.map((m) => m.id);
+        const ids = candidates.map((m) => m.id);
         const { rows: respCounts } = await req.db.stateless.query(
           `SELECT endpoint_id, COUNT(*)::int AS cnt
              FROM endpoint_responses
@@ -240,19 +276,45 @@ router.use(authMiddleware, async (req, res, next) => {
           [ids]
         );
         const countMap = new Map(respCounts.map((r) => [Number(r.endpoint_id), Number(r.cnt)]));
-        // xếp hạng: stateless > active > có response
-        matches.sort((a, b) => {
+
+        // xếp hạng: PATH CỤ THỂ HƠN > stateless > active > có response
+        candidates.sort((a, b) => {
+          // Ưu tiên path cụ thể hơn
+          const specA = computeSpecificity(a.path);
+          const specB = computeSpecificity(b.path);
+
+          // 1) nhiều segment hơn trước (/groups/:id/queue > /groups)
+          if (specA.segments !== specB.segments) {
+            return specB.segments - specA.segments;
+          }
+
+          // 2) nhiều segment tĩnh hơn trước
+          if (specA.staticSegs !== specB.staticSegs) {
+            return specB.staticSegs - specA.staticSegs;
+          }
+
+          // 3) ít segment dynamic hơn trước
+          if (specA.dynamicSegs !== specB.dynamicSegs) {
+            return specA.dynamicSegs - specB.dynamicSegs;
+          }
+
+          // 4) stateless (0) trước stateful (1)
           const sa = a.is_stateful ? 1 : 0;
           const sb = b.is_stateful ? 1 : 0;
-          if (sa !== sb) return sa - sb; // stateless (0) trước stateful (1)
+          if (sa !== sb) return sa - sb;
+
+          // 5) active trước inactive
           const aa = a.is_active ? 1 : 0;
           const ab = b.is_active ? 1 : 0;
-          if (aa !== ab) return ab - aa; // active (1) trước inactive (0)
+          if (aa !== ab) return ab - aa;
+
+          // 6) nhiều response hơn trước
           const ca = countMap.get(a.id) || 0;
           const cb = countMap.get(b.id) || 0;
-          return cb - ca; // nhiều response trước
+          return cb - ca;
         });
-        ep = matches[0];
+
+        ep = candidates[0];
       }
     }
 
@@ -514,23 +576,36 @@ router.use(authMiddleware, async (req, res, next) => {
             tail,
             queryString: new URLSearchParams(req.query || {}).toString(),
           };
+
+          // Nếu user có dùng {{path}} hoặc {{tail}} trong proxy_url
+          // thì coi như họ tự control path → mình không đụng vào nữa.
+          const hasCustomPath = /\{\{\s*(path|tail)\s*\}\}/.test(r.proxy_url || "");
           let resolvedUrl = renderTemplate(r.proxy_url, ctx);
 
-          // Nếu proxy_url KHÔNG chỉ định {{path}}/{{tail}} thì auto-append tail + merge query
-          if (!/\{\{\s*(path|tail)\s*\}\}/.test(r.proxy_url || "")) {
-            try {
-              const u = new URL(resolvedUrl);
-              if (tail) {
-                const left = u.pathname.replace(/\/+$/, "");
-                const right = String(tail).replace(/^\/+/, "");
-                u.pathname = (left + "/" + right).replace(/\/+/g, "/");
-              }
-              for (const [k, v] of Object.entries(req.query || {})) {
-                if (!u.searchParams.has(k)) u.searchParams.append(k, v);
-              }
-              resolvedUrl = u.toString();
-            } catch {}
-          }
+          try {
+            const u = new URL(resolvedUrl);
+
+            if (!hasCustomPath) {
+              // MẶC ĐỊNH: forward đúng subPath/path mà client gọi vào mock
+              // Ví dụ: /api/v1/groups hoặc /api/v1/groups/:group_id/queue
+              const forwardPath = req.universal?.subPath || req.path || "/";
+              u.pathname = forwardPath;
+            }
+
+            // Luôn merge thêm query từ request nếu upstream chưa có
+            for (const [k, v] of Object.entries(req.query || {})) {
+              if (!u.searchParams.has(k)) u.searchParams.append(k, v);
+            }
+
+            resolvedUrl = u.toString();
+          } catch {}
+
+          console.log("[Proxy debug]", {
+            endpointPath: ep.path,
+            subPath: req.universal?.subPath,
+            resolvedUrl,
+          });
+
           const contentType = (req.headers["content-type"] || "").toLowerCase();
           let axiosConfig = {
             method: r.proxy_method || req.method,
