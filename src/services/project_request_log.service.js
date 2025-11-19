@@ -233,8 +233,8 @@ exports.listLogs = async (pool, opts = {}) => {
   if (opts.endpointId != null) add(`l.endpoint_id = ?`, opts.endpointId);
   if (opts.statusCode != null) add(`l.response_status_code = ?`, opts.statusCode);
   if (opts.method) add(`UPPER(l.request_method) = ?`, String(opts.method).toUpperCase());
-  if (opts.dateFrom) add(`l.created_at >= ?`, opts.dateFrom);
-  if (opts.dateTo) add(`l.created_at <= ?`, opts.dateTo);
+  if (opts.dateFrom) add(`l.created_at >= ?`, new Date(opts.dateFrom));
+  if (opts.dateTo) add(`l.created_at <= ?`, new Date(opts.dateTo));
 
   // New filters for stateful ids
   if (opts.endpointResponseId != null) add(`l.endpoint_response_id = ?`, opts.endpointResponseId);
