@@ -11,8 +11,17 @@ exports.listLogs = async (req, res) => {
     const projectId = toInt(req.query.project_id);
     const endpointId = toInt(req.query.endpoint_id);
     const statusCode = toInt(req.query.status_code);
-    const limit = toInt(req.query.limit, 100);
-    const offset = toInt(req.query.offset, 0);
+
+    // HỖ TRỢ THÊM page, nhưng vẫn giữ limit/offset cũ
+    const pageFromQuery = toInt(req.query.page, null);
+    let limit = toInt(req.query.limit, 100);
+    let offset = toInt(req.query.offset, 0);
+
+    if (pageFromQuery && pageFromQuery > 0) {
+      // Nếu FE truyền page thì ưu tiên page, tính lại offset
+      offset = (pageFromQuery - 1) * limit;
+    }
+
     const method = req.query.method ? String(req.query.method).toUpperCase() : null;
 
     // New query params
@@ -65,7 +74,19 @@ exports.listLogs = async (req, res) => {
       search,
     });
 
-    return res.status(200).json({ count: result.count, items: result.items });
+    const total = result.count; // tổng số record sau filter (toàn bộ)
+    const items = result.items || []; // danh sách record trong trang hiện tại
+    const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
+    const currentPage = limit > 0 ? Math.floor(offset / limit) + 1 : 1;
+
+    return res.status(200).json({
+      page: currentPage,
+      limit,
+      total,
+      totalPages,
+      count: items.length, // số bản ghi trong trang hiện tại
+      items,
+    });
   } catch (err) {
     console.error("[project_request_logs] list error:", err);
     return res.status(500).json({ message: "Internal Server Error", error: err.message });

@@ -505,18 +505,68 @@ router.use(authMiddleware, async (req, res, next) => {
     }
 
     const isPlainObject = (v) => v && typeof v === "object" && !Array.isArray(v);
+
+    // Chuẩn hoá headers về lowercase key để so sánh case-insensitive
+    const normalizeHeaderKeys = (h = {}) => {
+      const out = {};
+      for (const [k, v] of Object.entries(h || {})) {
+        if (k == null) continue;
+        out[String(k).toLowerCase()] = v;
+      }
+      return out;
+    };
+
     const matchesCondition = (cond) => {
-      if (!isPlainObject(cond) || Object.keys(cond).length === 0) return false;
-      if (isPlainObject(cond.params)) {
+      if (!isPlainObject(cond)) return false;
+      const hasParamsRules = isPlainObject(cond.params) && Object.keys(cond.params).length > 0;
+      const hasQueryRules = isPlainObject(cond.query) && Object.keys(cond.query).length > 0;
+      const hasHeaderRules = isPlainObject(cond.headers) && Object.keys(cond.headers).length > 0;
+      const hasBodyRules = isPlainObject(cond.body) && Object.keys(cond.body).length > 0;
+
+      // Nếu không có rule nào được khai báo thì coi như "không dùng condition" → không match
+      if (!hasParamsRules && !hasQueryRules && !hasHeaderRules && !hasBodyRules) {
+        return false;
+      }
+
+      // params
+      if (hasParamsRules) {
         for (const [k, v] of Object.entries(cond.params)) {
           if (String(params[k] ?? "") !== String(v)) return false;
         }
       }
-      if (isPlainObject(cond.query)) {
+
+      // query
+      if (hasQueryRules) {
         for (const [k, v] of Object.entries(cond.query)) {
           if (String(req.query[k] ?? "") !== String(v)) return false;
         }
       }
+
+      // headers (so sánh key lower-case, value stringify)
+      if (hasHeaderRules) {
+        const reqHeadersLc = normalizeHeaderKeys(req.headers || {});
+        for (const [k, v] of Object.entries(cond.headers)) {
+          const actual = reqHeadersLc[String(k).toLowerCase()];
+          if (actual === undefined) return false;
+          if (String(actual) !== String(v)) return false;
+        }
+      }
+
+      // body: yêu cầu cond.body là "subset" của req.body (so sánh shallow + deep JSON nếu là object)
+      if (hasBodyRules) {
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        for (const [k, expected] of Object.entries(cond.body)) {
+          const actual = body[k];
+          if (actual === undefined) return false;
+          if (expected != null && typeof expected === "object") {
+            // deep compare đơn giản
+            if (JSON.stringify(actual) !== JSON.stringify(expected)) return false;
+          } else {
+            if (String(actual) !== String(expected)) return false;
+          }
+        }
+      }
+
       return true;
     };
 
