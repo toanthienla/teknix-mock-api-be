@@ -6,6 +6,42 @@ function toInt(v, fallback = null) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function parseTimeRange(rawTimeRange) {
+  if (!rawTimeRange) return { dateFrom: null, dateTo: null };
+
+  // Giữ đặc biệt cho "recent" nếu bạn muốn dùng để chỉ "không filter"
+  if (rawTimeRange === "recent") {
+    return { dateFrom: null, dateTo: null };
+  }
+
+  // Hỗ trợ pattern: <number><unit>  (vd: 1h, 2h, 3d, 10d, 72h,...)
+  const m = /^(\d+)([hd])$/.exec(rawTimeRange);
+  if (!m) {
+    // format lạ -> bỏ qua filter time
+    return { dateFrom: null, dateTo: null };
+  }
+
+  const value = parseInt(m[1], 10);
+  const unit = m[2];
+
+  if (!value || value <= 0) {
+    return { dateFrom: null, dateTo: null };
+  }
+
+  const now = new Date();
+  let ms = 0;
+
+  if (unit === "h") {
+    ms = value * 60 * 60 * 1000; // giờ
+  } else if (unit === "d") {
+    ms = value * 24 * 60 * 60 * 1000; // ngày
+  }
+
+  const dateFrom = new Date(now.getTime() - ms).toISOString();
+  // dateTo có thể để null, service đang chỉ check >= dateFrom
+  return { dateFrom, dateTo: null };
+}
+
 exports.listLogs = async (req, res) => {
   try {
     const projectId = toInt(req.query.project_id);
@@ -32,24 +68,11 @@ exports.listLogs = async (req, res) => {
     let dateFrom = req.query.date_from ? String(req.query.date_from) : null;
     let dateTo = req.query.date_to ? String(req.query.date_to) : null;
 
-    // Nếu không truyền date_from/date_to thì mới dùng time_range
+    // Nếu không truyền date_from/date_to thì mới dùng time_range (1h, 2h, 3d, 33d,...)
     if (!dateFrom && !dateTo && rawTimeRange) {
-      const now = new Date();
-      switch (rawTimeRange) {
-        case "24h":
-          dateFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-          break;
-        case "7d":
-          dateFrom = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-          break;
-        case "30d":
-          dateFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-          break;
-        case "recent":
-        default:
-          // recent hoặc value lạ thì không filter thời gian
-          break;
-      }
+      const parsed = parseTimeRange(rawTimeRange);
+      dateFrom = parsed.dateFrom;
+      dateTo = parsed.dateTo;
     }
 
     const search = rawSearch && rawSearch.trim() !== "" ? rawSearch.trim() : null;
@@ -116,21 +139,9 @@ exports.getLogsByProjectId = async (req, res) => {
     let dateTo = null;
 
     if (rawTimeRange) {
-      const now = new Date();
-      switch (rawTimeRange) {
-        case "24h":
-          dateFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-          break;
-        case "7d":
-          dateFrom = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-          break;
-        case "30d":
-          dateFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-          break;
-        case "recent":
-        default:
-          break;
-      }
+      const parsed = parseTimeRange(rawTimeRange);
+      dateFrom = parsed.dateFrom;
+      dateTo = parsed.dateTo;
     }
 
     const search = rawSearch && rawSearch.trim() !== "" ? rawSearch.trim() : null;
