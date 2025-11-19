@@ -28,7 +28,9 @@ function parseTimeRange(rawTimeRange) {
     return { dateFrom: null, dateTo: null };
   }
 
-  const now = new Date();
+  // ✅ Sử dụng Date.now() để lấy UTC timestamp, tránh vấn đề timezone
+  // Database lưu trữ timestamp ở UTC, nên cần so sánh với UTC time
+  const now = Date.now();
   let ms = 0;
 
   if (unit === "h") {
@@ -37,7 +39,7 @@ function parseTimeRange(rawTimeRange) {
     ms = value * 24 * 60 * 60 * 1000; // ngày
   }
 
-  const dateFrom = new Date(now.getTime() - ms).toISOString();
+  const dateFrom = new Date(now - ms).toISOString();
   // dateTo có thể để null, service đang chỉ check >= dateFrom
   return { dateFrom, dateTo: null };
 }
