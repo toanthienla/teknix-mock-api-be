@@ -60,19 +60,21 @@ module.exports = function validateEndpoint(req, res, next) {
     return next();
   }
 
-  // --- UPDATE (PUT): cho phép cập nhật name hoặc schema ---
+  // --- UPDATE (PUT): cho phép cập nhật name, path, schema, hoặc websocket_config ---
   if (req.method === "PUT") {
     const hasNameOnly = onlyHas("name");
+    const hasPathOnly = onlyHas("path");
+    const hasNameAndPath = Object.keys(body).length === 2 && "name" in body && "path" in body;
     const hasSchemaOnly = onlyHas("schema");
     const hasFieldsOnly = onlyHas("fields");
     const hasWsConfigOnly = onlyHas("websocket_config");
 
     // ❌ Chặn các key không hợp lệ
-    const forbiddenKeys = ["method", "path", "folder_id", "is_stateful", "is_active"];
+    const forbiddenKeys = ["method", "folder_id", "is_stateful", "is_active"];
     if (Object.keys(body).some((k) => forbiddenKeys.includes(k))) {
       return res.status(400).json({
         success: false,
-        errors: [{ field: "body", message: "PUT update only allows name or schema" }],
+        errors: [{ field: "body", message: "PUT update does not allow method, folder_id, is_stateful, or is_active" }],
       });
     }
 
@@ -87,7 +89,95 @@ module.exports = function validateEndpoint(req, res, next) {
       return next();
     }
 
-    // ✅ CASE 2: { fields: [...] } (GET schema)
+    // ✅ CASE 2: { path: "..." }
+    if (hasPathOnly) {
+      if (typeof path !== "string" || path.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "path", message: "Path must be a non-empty string" }],
+        });
+      }
+      if (!path.startsWith("/")) {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "path", message: "Path must start with /" }],
+        });
+      }
+      if (path.length > 1 && path.endsWith("/")) {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "path", message: "Path must not end with /" }],
+        });
+      }
+      const routePart = path.split("?")[0];
+      const routeParamRegex = /^\/(?:[a-zA-Z0-9_-]+|:[a-zA-Z][\w]*)(?:\/(?:[a-zA-Z0-9_-]+|:[a-zA-Z][\w]*))*$/;
+      if (!routeParamRegex.test(routePart)) {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "path", message: "Invalid route parameter format" }],
+        });
+      }
+      const queryPart = path.split("?")[1];
+      if (queryPart) {
+        const queryParamRegex = /^[a-zA-Z0-9_]+=[^&]*(&[a-zA-Z0-9_]+=[^&]*)*$/;
+        if (!queryParamRegex.test(queryPart)) {
+          return res.status(400).json({
+            success: false,
+            errors: [{ field: "path", message: "Invalid query parameter format" }],
+          });
+        }
+      }
+      return next();
+    }
+
+    // ✅ CASE 3: { name: "...", path: "..." }
+    if (hasNameAndPath) {
+      if (typeof name !== "string" || name.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "name", message: "Name must be a non-empty string" }],
+        });
+      }
+      if (typeof path !== "string" || path.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "path", message: "Path must be a non-empty string" }],
+        });
+      }
+      if (!path.startsWith("/")) {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "path", message: "Path must start with /" }],
+        });
+      }
+      if (path.length > 1 && path.endsWith("/")) {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "path", message: "Path must not end with /" }],
+        });
+      }
+      const routePart = path.split("?")[0];
+      const routeParamRegex = /^\/(?:[a-zA-Z0-9_-]+|:[a-zA-Z][\w]*)(?:\/(?:[a-zA-Z0-9_-]+|:[a-zA-Z][\w]*))*$/;
+      if (!routeParamRegex.test(routePart)) {
+        return res.status(400).json({
+          success: false,
+          errors: [{ field: "path", message: "Invalid route parameter format" }],
+        });
+      }
+      const queryPart = path.split("?")[1];
+      if (queryPart) {
+        const queryParamRegex = /^[a-zA-Z0-9_]+=[^&]*(&[a-zA-Z0-9_]+=[^&]*)*$/;
+        if (!queryParamRegex.test(queryPart)) {
+          return res.status(400).json({
+            success: false,
+            errors: [{ field: "path", message: "Invalid query parameter format" }],
+          });
+        }
+      }
+      return next();
+    }
+
+    // ✅ CASE 4: { fields: [...] } (GET schema)
     if (hasFieldsOnly) {
       if (!isStringArray(fields)) {
         return res.status(400).json({
@@ -98,7 +188,7 @@ module.exports = function validateEndpoint(req, res, next) {
       return next();
     }
 
-    // ✅ CASE 3: { schema: {...} } (POST/PUT schema)
+    // ✅ CASE 5: { schema: {...} } (POST/PUT schema)
     if (hasSchemaOnly) {
       if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
         return res.status(400).json({
@@ -116,7 +206,8 @@ module.exports = function validateEndpoint(req, res, next) {
       }
       return next();
     }
-    // ✅ CASE 4: { websocket_config: {...} }
+
+    // ✅ CASE 6: { websocket_config: {...} }
     if (hasWsConfigOnly) {
       const cfg = body.websocket_config || {};
       if (typeof cfg.enabled !== "boolean") {
@@ -138,10 +229,10 @@ module.exports = function validateEndpoint(req, res, next) {
       return next();
     }
 
-    // ❌ Không hợp lệ (trộn nhiều field hoặc thiếu key)
+    // ❌ Không hợp lệ (trộn các groups hoặc thiếu key)
     return res.status(400).json({
       success: false,
-      errors: [{ field: "body", message: "PUT payload must be one of {name}, {fields}, {schema}, or {websocket_config}" }],
+      errors: [{ field: "body", message: "PUT payload must be one of {name}, {path}, {name,path}, {fields}, {schema}, or {websocket_config}" }],
     });
   }
 

@@ -181,7 +181,10 @@ async function updateEndpoint(req, res) {
       delete payload.fields;
     }
 
-    // --- Cho phép payload chỉ có { schema } (đã normalize) ---
+    // --- Cho phép payload có: 
+    //     - { name, path } hoặc subset
+    //     - { schema } riêng
+    //     - { websocket_config } riêng ---
     const result = await svc.updateEndpoint(req.db.stateless, req.db.stateful, id, payload);
 
     if (!result) {
