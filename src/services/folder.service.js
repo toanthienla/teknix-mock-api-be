@@ -1,8 +1,23 @@
 const logSvc = require("./project_request_log.service");
 const { getCollection2 } = require("../config/db");
 const endpointsFulSvc = require("./endpoints_ful.service");
-const { validateNameOrError } = require("../middlewares/validateNameOrError");
 
+// Cho phép: A-Z a-z 0-9, dấu gạch dưới (_), dấu gạch ngang (-) và dấu cách
+const NAME_RE = /^[A-Za-z0-9_\- ]+$/;
+function validateNameOrError(name) {
+  if (typeof name !== "string" || !NAME_RE.test(name)) {
+    return {
+      success: false,
+      errors: [
+        {
+          field: "name",
+          message: "Folder name can only contain letters, numbers, spaces, underscores (_) and hyphens (-).",
+        },
+      ],
+    };
+  }
+  return null;
+}
 // Get all folders (optionally filter by project_id)
 async function getFolders(db, project_id) {
   let query = `

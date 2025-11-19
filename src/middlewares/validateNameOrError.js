@@ -1,9 +1,10 @@
 // middlewares/validateNameOrError.js
 
-const NAME_RE = /^[A-Za-z0-9_\- ]+$/;
+const NAME_RE = /^[A-Za-z0-9_-]+$/;
 
 /**
  * Dùng cho logic service (validate trước khi query DB)
+ * Workspace và Project không cho phép dấu cách
  */
 function validateNameOrError(name) {
   if (!name || typeof name !== "string" || name.trim() === "") {
@@ -20,7 +21,7 @@ function validateNameOrError(name) {
       errors: [
         {
           field: "name",
-          message: "Name can only contain letters (A–Z, a–z), numbers (0–9), spaces, underscores (_), and hyphens (-)",
+          message: "Name can only contain letters (A–Z, a–z), numbers (0–9), underscores (_) and hyphens (-)",
         },
       ],
     };
