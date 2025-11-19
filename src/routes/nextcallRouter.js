@@ -376,9 +376,7 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
 
 async function persistNextCallLog(statelessDb, callRes, meta) {
   try {
-    // build full path cho log:
-    // - nếu là external URL: giữ nguyên (http/https)
-    // - nếu là internal: /workspace/project/path
+    // 1) Chuẩn hóa path như cũ
     let requestPath = meta.path || "";
     if (requestPath && !/^https?:\/\//i.test(requestPath)) {
       const ws = meta.workspaceName;
@@ -391,6 +389,7 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
 
     console.log(`[nextCalls] log persist → method=${meta.method} path=${requestPath} status=${callRes.status} parentLogId=${meta.parentLogId ?? "null"}`);
 
+    // 2) Gắn meta __nextcall vào headers để sau này UI / service khác có thể biết đây là log của nextCall
     const headersMeta = {
       __nextcall: {
         parent_log_id: meta.parentLogId ?? null,
@@ -399,45 +398,34 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
       },
     };
 
-    // --- Normalize response body để luôn là JSON ---
+    // 3) Normalize response_body về JSON (cho chắc)
     let safeResponseBody = callRes.body;
     if (typeof safeResponseBody === "string") {
-      try {
-        safeResponseBody = { text: safeResponseBody };
-      } catch {
-        safeResponseBody = { text: String(safeResponseBody) };
-      }
+      safeResponseBody = { text: safeResponseBody };
     }
 
-    const inserted = await statelessDb.query(
-      `INSERT INTO project_request_logs
-     (project_id, endpoint_id, endpoint_response_id, user_id,
-      stateful_endpoint_id, stateful_endpoint_response_id,
-      request_method, request_path, request_headers, request_body,
-      response_status_code, response_body, ip_address, latency_ms)
-   VALUES
-     ($1,$2,$3,$4, $5,$6, $7,$8,$9,$10, $11,$12,$13,$14)
-   RETURNING id`,
-      [
-        meta.projectId ?? null,
-        meta.originId ?? null,
-        null,
-        meta.userId ?? null,
-        meta.statefulId ?? null,
-        null,
-        meta.method,
-        requestPath, // 👈 dùng path đã chuẩn hóa
-        headersMeta,
-        meta.payload || {},
-        callRes.status,
-        safeResponseBody,
-        null,
-        Date.now() - (meta.started || Date.now()),
-      ]
-    );
+    // 4) Dùng chung service insertLog → để **mọi logic notify WS đều tập trung trong insertLog**
+    const logPayload = {
+      project_id: meta.projectId ?? null,
+      endpoint_id: meta.originId ?? null, // internal: id endpoint stateless của step
+      endpoint_response_id: null,
+      stateful_endpoint_id: meta.statefulId ?? null,
+      stateful_endpoint_response_id: null,
+      user_id: meta.userId ?? null,
 
-    const logId = inserted?.rows?.[0]?.id || null;
-    console.log(`[nextCalls] log id=${logId ?? "null"}`);
+      request_method: meta.method,
+      request_path: requestPath,
+      request_headers: headersMeta, // chỉ chứa meta nextcall (nếu muốn có headers thật thì sau này merge thêm)
+      request_body: meta.payload || {},
+
+      response_status_code: callRes.status,
+      response_body: safeResponseBody,
+      ip_address: null,
+      latency_ms: Date.now() - (meta.started || Date.now()),
+    };
+
+    const logId = await logSvc.insertLog(statelessDb, logPayload);
+    console.log(`[nextCalls] log id=${logId ?? "null"} (via insertLog)`);
   } catch (e) {
     console.error("[nextCalls] log persist error:", e?.message || e);
   }
@@ -515,13 +503,16 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
             await persistNextCallLog(options.statelessDb, callRes, {
               parentLogId: rootCtx.log?.id ?? null,
               nextCallName: step.name,
-              projectId: rootCtx.projectId ?? null, // cùng project với call gốc
-              originId: null, // external → không có endpoint_id
-              statefulId: null,
+
+              // 🔧 dùng project/endpoint của CHÍNH endpoint target
+              projectId: target.projectId, // vd: 23 (pj8)
+              originId: target.originId, // vd: 94
+              statefulId: target.endpointId, // vd: 56
+
               method,
-              path: url, // 👈 external: full URL
-              workspaceName: rootCtx.workspaceName,
-              projectName: rootCtx.projectName,
+              path: renderedPath, // "/next3"
+              workspaceName: target.workspaceName,
+              projectName: target.projectName,
               started,
               payload,
               userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,

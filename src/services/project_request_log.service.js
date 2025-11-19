@@ -1,5 +1,68 @@
 // src/services/project_request_log.service.js
 
+// giả sử bạn có service publish WS
+const wsNotify = require("../centrifugo/centrifugo.service"); // đặt tên cho đúng với project của bạn
+
+async function maybePublishWsOnLog(pool, logId, log) {
+  // cần có cả project_id + endpoint_id để join
+  if (!log.project_id || !log.endpoint_id) return;
+
+  // 1) Lấy thông tin project + endpoint + websocket_config
+  const { rows } = await pool.query(
+    `
+      SELECT
+        p.id                AS project_id,
+        p.ws_global_enabled AS ws_project_enabled,   -- ⚠️ sửa tên cột đúng với DB của bạn
+        e.websocket_config  AS ws_config             -- jsonb: { enabled, condition, message }
+      FROM projects p
+      JOIN endpoints e ON e.id = $2
+      WHERE p.id = $1
+      LIMIT 1
+    `,
+    [log.project_id, log.endpoint_id]
+  );
+
+  if (!rows.length) return;
+  const row = rows[0];
+
+  // 2) Công tắc tổng project
+  if (!row.ws_project_enabled) {
+    return;
+  }
+
+  const cfg = row.ws_config || {};
+  if (!cfg.enabled) {
+    return;
+  }
+
+  // 3) Check điều kiện status nếu có
+  const status = Number(log.response_status_code);
+  if (cfg.condition != null) {
+    const expect = Number(cfg.condition);
+    if (Number.isFinite(expect) && Number.isFinite(status) && status !== expect) {
+      return;
+    }
+  }
+
+  // 4) Payload gửi ra WS:
+  const payload =
+    cfg.message && typeof cfg.message === "object"
+      ? { ...cfg.message, log_id: logId, status } // có thể merge thêm log_id/status
+      : {
+          event: "request_log_created",
+          project_id: row.project_id,
+          endpoint_id: log.endpoint_id,
+          log_id: logId,
+          status,
+        };
+
+  try {
+    await wsNotify.publishToProjectChannel(row.project_id, payload);
+  } catch (e) {
+    console.error("[logs] WS publish failed:", e?.message || e);
+  }
+}
+
 function safeStringify(obj) {
   try {
     return JSON.stringify(obj ?? {});
