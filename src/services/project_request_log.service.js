@@ -86,6 +86,55 @@ function safeStringify(obj) {
   }
 }
 
+// Chuẩn hoá request_path: luôn gắn prefix /{workspace_name}/{project_name}
+// cho cả stateless và stateful dựa trên project_id.
+async function buildFullRequestPath(pool, log) {
+  let p = log.request_path;
+  if (!p) return p ?? null;
+  if (typeof p !== "string") p = String(p);
+
+  p = p.trim();
+  if (!p) return null;
+  if (!p.startsWith("/")) p = "/" + p;
+
+  // Không có project_id thì đành dùng nguyên path đang có
+  if (!log.project_id) {
+    return p;
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT w.name AS workspace_name, p.name AS project_name
+         FROM projects p
+         JOIN workspaces w ON w.id = p.workspace_id
+        WHERE p.id = $1
+        LIMIT 1`,
+      [log.project_id]
+    );
+
+    const ws = rows[0]?.workspace_name;
+    const pj = rows[0]?.project_name;
+    if (!ws || !pj) {
+      return p;
+    }
+
+    const prefix = `/${ws}/${pj}`;
+    const lowerP = p.toLowerCase();
+    const lowerPrefix = prefix.toLowerCase();
+
+    // Nếu đã có đúng prefix /ws/pj rồi thì giữ nguyên
+    if (lowerP === lowerPrefix || lowerP.startsWith(lowerPrefix + "/")) {
+      return p;
+    }
+
+    // Ngược lại, ghép prefix vào trước path gốc
+    return prefix + p;
+  } catch (e) {
+    console.error("[logs] buildFullRequestPath failed:", e?.message || e);
+    return p;
+  }
+}
+
 /**
  * Ghi một bản log.
  * pool: pg Pool DB stateless (req.db.stateless)
@@ -107,6 +156,9 @@ exports.insertLog = async (pool, log) => {
     console.log("[logs] skip insertLog: missing project_id/endpoint_id/stateful_endpoint_id", log.request_method, log.request_path);
     return null;
   }
+
+  // Chuẩn hoá request_path về dạng /workspaceName/projectName/path
+  const requestPath = await buildFullRequestPath(pool, log);
 
   const text = `
     INSERT INTO project_request_logs
@@ -135,7 +187,7 @@ exports.insertLog = async (pool, log) => {
     log.stateful_endpoint_response_id ?? null,
     log.user_id ?? null,
     log.request_method ?? null,
-    log.request_path ?? null,
+    requestPath ?? null,
     safeStringify(log.request_headers),
     safeStringify(log.request_body),
     Number.isFinite(Number(log.response_status_code)) ? Number(log.response_status_code) : null,
