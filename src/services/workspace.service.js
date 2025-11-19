@@ -16,10 +16,7 @@ async function renameWorkspaceCollections(oldWorkspaceName, newWorkspaceName) {
 
   for (const col of collections) {
     if (regex.test(col.name)) {
-      const newName = col.name.replace(
-        new RegExp(`\\.${oldWorkspaceName}\\.`),
-        `.${newWorkspaceName}.`
-      );
+      const newName = col.name.replace(new RegExp(`\\.${oldWorkspaceName}\\.`), `.${newWorkspaceName}.`);
       console.log(`🔁 Đổi tên collection: ${col.name} → ${newName}`);
       renameTasks.push(mongo.renameCollection(col.name, newName));
     }
@@ -89,10 +86,7 @@ async function updateWorkspace(db, id, { name }) {
   }
 
   // Check duplicate name
-  const { rows: existRows } = await db.query(
-    "SELECT id FROM workspaces WHERE LOWER(name)=LOWER($1) AND id<>$2",
-    [newName, id]
-  );
+  const { rows: existRows } = await db.query("SELECT id FROM workspaces WHERE LOWER(name)=LOWER($1) AND id<>$2", [newName, id]);
   if (existRows.length > 0) {
     return {
       success: false,
@@ -101,10 +95,7 @@ async function updateWorkspace(db, id, { name }) {
   }
 
   // Cập nhật trong PostgreSQL
-  const { rows } = await db.query(
-    "UPDATE workspaces SET name=$1, updated_at=NOW() WHERE id=$2 RETURNING *",
-    [newName, id]
-  );
+  const { rows } = await db.query("UPDATE workspaces SET name=$1, updated_at=NOW() WHERE id=$2 RETURNING *", [newName, id]);
 
   // Cập nhật trong MongoDB (rename collection)
   try {

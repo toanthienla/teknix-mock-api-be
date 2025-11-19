@@ -163,7 +163,7 @@ exports.getLogsByProjectId = async (pool, projectId, limit, offset) => {
     LIMIT $2 OFFSET $3
   `;
 
-  console.log('[DBG] service.getLogsByProjectId - sql params:', { projectId, limit, offset });
+  console.log("[DBG] service.getLogsByProjectId - sql params:", { projectId, limit, offset });
   const { rows } = await pool.query(sql, [projectId, limit, offset]);
 
   // If rows empty, still need total: run COUNT separately (safe fallback)
@@ -171,7 +171,7 @@ exports.getLogsByProjectId = async (pool, projectId, limit, offset) => {
   if (rows.length > 0) {
     total = Number(rows[0].total_count) || 0;
     // remove total_count from each item before returning (optional)
-    const items = rows.map(r => {
+    const items = rows.map((r) => {
       const { total_count, ...rest } = r;
       return rest;
     });
@@ -179,7 +179,7 @@ exports.getLogsByProjectId = async (pool, projectId, limit, offset) => {
   } else {
     // fallback: no rows returned, count directly
     const countRes = await pool.query(`SELECT COUNT(*) AS total FROM project_request_logs WHERE project_id = $1`, [projectId]);
-    total = parseInt(countRes.rows[0]?.total || '0', 10);
+    total = parseInt(countRes.rows[0]?.total || "0", 10);
     return { items: [], total };
   }
 };
