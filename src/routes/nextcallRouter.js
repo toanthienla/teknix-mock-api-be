@@ -376,7 +376,11 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
 
 async function persistNextCallLog(statelessDb, callRes, meta) {
   try {
-    // 1) Chuẩn hóa path như cũ
+    if (!meta || (meta.projectId == null && meta.originId == null && meta.statefulId == null)) {
+      console.log("[nextCalls] skip persistNextCallLog vì thiếu projectId/originId/statefulId:", meta);
+      return null;
+    }
+
     let requestPath = meta.path || "";
     if (requestPath && !/^https?:\/\//i.test(requestPath)) {
       const ws = meta.workspaceName;
@@ -389,7 +393,6 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
 
     console.log(`[nextCalls] log persist → method=${meta.method} path=${requestPath} status=${callRes.status} parentLogId=${meta.parentLogId ?? "null"}`);
 
-    // 2) Gắn meta __nextcall vào headers để sau này UI / service khác có thể biết đây là log của nextCall
     const headersMeta = {
       __nextcall: {
         parent_log_id: meta.parentLogId ?? null,
@@ -398,26 +401,22 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
       },
     };
 
-    // 3) Normalize response_body về JSON (cho chắc)
     let safeResponseBody = callRes.body;
     if (typeof safeResponseBody === "string") {
       safeResponseBody = { text: safeResponseBody };
     }
 
-    // 4) Dùng chung service insertLog → để **mọi logic notify WS đều tập trung trong insertLog**
     const logPayload = {
       project_id: meta.projectId ?? null,
-      endpoint_id: meta.originId ?? null, // internal: id endpoint stateless của step
+      endpoint_id: meta.originId ?? null,
       endpoint_response_id: null,
       stateful_endpoint_id: meta.statefulId ?? null,
       stateful_endpoint_response_id: null,
       user_id: meta.userId ?? null,
-
       request_method: meta.method,
       request_path: requestPath,
-      request_headers: headersMeta, // chỉ chứa meta nextcall (nếu muốn có headers thật thì sau này merge thêm)
+      request_headers: headersMeta,
       request_body: meta.payload || {},
-
       response_status_code: callRes.status,
       response_body: safeResponseBody,
       ip_address: null,
@@ -426,8 +425,10 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
 
     const logId = await logSvc.insertLog(statelessDb, logPayload);
     console.log(`[nextCalls] log id=${logId ?? "null"} (via insertLog)`);
+    return logId || null;
   } catch (e) {
     console.error("[nextCalls] log persist error:", e?.message || e);
+    return null;
   }
 }
 
