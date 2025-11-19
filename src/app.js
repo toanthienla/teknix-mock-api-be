@@ -14,6 +14,7 @@ const cors = require("cors");
 const path = require("path");
 
 const auth = require("./middlewares/authMiddleware");
+const conditionalAuth = require("./middlewares/conditionalAuthMiddleware");
 
 // === Centrifugo routes (auth/publish/token) ===
 function pickMiddleware(mod) {
@@ -134,22 +135,23 @@ app.use("/", statefulRoutes);
 // Logs stateless/stateful
 app.use("/project_request_logs", projectRequestLogRoutes);
 
-//Legacy stateless (không prefix) — đặt SAU các route cụ thể
-app.use(mockRoutes);
+// Legacy stateless (không prefix) — sẽ được mount SAU conditionalAuth
+// app.use(mockRoutes);  // ← MOVE ĐI, sẽ mount ở dưới
 
-// ---------------------------------------------
+// --------------------------------------------- 
 // 9) Universal handler — ĐẶT CUỐI CÙNG
-// ---------------------------------------------
+// --------------------------------------------- 
 // Gắn logger để bắt response và broadcast WS theo endpoints.websocket_config
 const adminResponseLogger = require("./middlewares/adminResponseLogger");
 app.use(
   "/:workspace/:project",
-  auth,
+  conditionalAuth,
   adminResponseLogger("universal"), // phải đứng TRƯỚC universalHandler
   require("./routes/universalHandler")
 );
 
-// ---------------------------------------------
+// Mount mockRoutes ở ĐÂY, SAU conditionalAuth
+app.use(mockRoutes);// ---------------------------------------------
 // 10) Health-check
 // ---------------------------------------------
 app.get("/health", (req, res) => {

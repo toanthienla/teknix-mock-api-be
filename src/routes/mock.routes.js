@@ -1,7 +1,6 @@
 const express = require("express");
 const { match } = require("path-to-regexp");
 const router = express.Router();
-const authMiddleware = require("../middlewares/authMiddleware");
 const axios = require("axios");
 const https = require("https");
 const logSvc = require("../services/project_request_log.service");
@@ -194,7 +193,7 @@ function renderTemplate(value, ctx) {
   return value;
 }
 
-router.use(authMiddleware, async (req, res, next) => {
+router.use(async (req, res, next) => {
   const started = Date.now();
   const safeUserId = await getSafeUserId(req);
   try {

@@ -238,12 +238,20 @@ function validateAndSanitizePayload(schema, payload, { allowMissingRequired = fa
 }
 
 /* ========== Resolve ResponseId bảo đảm có id để log ========== */
-async function resolveStatefulResponseId(statefulDb, statefulId, providedId) {
+async function resolveStatefulResponseId(statefulDb, statefulId, providedId, statusCode = null) {
   if (providedId != null) return providedId;
   if (statefulId == null) return null;
   try {
-    const r = await statefulDb.query("SELECT id FROM endpoint_responses_ful WHERE endpoint_id = $1 ORDER BY id ASC LIMIT 1", [statefulId]);
-    return r.rows?.[0]?.id ?? null;
+    // If status code is provided, try to find matching response
+    if (statusCode != null) {
+      const r = await statefulDb.query(
+        "SELECT id FROM endpoint_responses_ful WHERE endpoint_id = $1 AND status_code = $2 LIMIT 1",
+        [statefulId, statusCode]
+      );
+      if (r.rows?.[0]?.id) return r.rows[0].id;
+    }
+    // Fallback: no response found for status code, return null (don't pick arbitrary response)
+    return null;
   } catch {
     return null;
   }
@@ -256,7 +264,7 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
     if (req?.flags?.isNextCall) return;
     // 🆕 gắn user vào log nếu có (lấy từ auth hoặc header X-Mock-User-Id)
     const userIdForLog = pickUserIdFromRequest(req);
-    const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId);
+    const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId, status);
     const _log = await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
       endpoint_id: originId ?? null, // stateless endpoints.id
@@ -575,15 +583,8 @@ async function statefulHandler(req, res, next) {
     const responsesBucket = await loadResponsesBucket(req.db.stateful, statefulId);
     /* ===== GET ===== */
     if (method === "GET") {
-      // ===== DEBUG GET START =====
-      try {
-        console.log("[GET:stateful] ENTER", { workspaceName, projectName, logicalPath, rawPath, statefulId, originId, folderId, projectId, isPublic });
-      } catch {}
       res.set("x-mock-mode", "stateful");
       res.set("x-mock-path", logicalPath);
-      // ===== DEBUG GET START =====
-
-      const userIdMaybe = pickUserIdFromRequest(req);
 
       const pickForGET = (obj) => {
         const fields = Array.isArray(effectiveSchema?.fields) ? effectiveSchema.fields : Object.keys(effectiveSchema || {});
@@ -690,8 +691,29 @@ async function statefulHandler(req, res, next) {
       }
 
       // ---------- PRIVATE ----------
+      // For PRIVATE folders, require authentication
+      const uid = pickUserIdFromRequest(req);
+      if (uid == null) {
+        // Try to access without authentication - reject
+        const status = 401;
+        const body = { error: "Unauthorized: login required." };
+        await logWithStatefulResponse(req, {
+          projectId,
+          originId,
+          statefulId,
+          method,
+          path: rawPath,
+          status,
+          responseBody: body,
+          started,
+          payload: req.body,
+        });
+        res.status(status).json(body);
+        fireNextCallsIfAny(status, body);
+        return;
+      }
+
       if (hasId) {
-        const uid = pickUserIdFromRequest(req);
         const rec = current.find((x) => Number(x?.id) === Number(idFromUrl));
         const allowed = rec && (rec.user_id == null || (uid != null && Number(rec.user_id) === Number(uid)));
         if (allowed) {
@@ -755,7 +777,6 @@ async function statefulHandler(req, res, next) {
       }
 
       // GET all for private user
-      const uid = pickUserIdFromRequest(req);
       const defaults = current.filter((x) => x.user_id == null || x.user_id === undefined).map(pickForGET);
       const mine = uid == null ? [] : current.filter((x) => Number(x?.user_id) === Number(uid)).map(pickForGET);
 
