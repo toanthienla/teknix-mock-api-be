@@ -161,7 +161,7 @@ function pickUserIdFromRequest(req) {
       try {
         const v = req.get(key);
         if (v != null) return v;
-      } catch { }
+      } catch {}
     }
     const h = req.headers || {};
     // try common variants
@@ -290,7 +290,7 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
         req.res = req.res || {};
         req.res.locals = req.res.locals || {};
         req.res.locals.lastLogId = logId;
-      } catch { }
+      } catch {}
     }
   } catch (e) {
     console.error("[statefulHandler] log error:", e?.message || e);
@@ -402,8 +402,7 @@ async function statefulHandler(req, res, next) {
         },
       ];
       const rootCtx = {
-        req, // original express request (so templates can access req.headers, req.query, etc.)
-        // compact request object so templates can use {{request.body.xxx}}
+        req,
         request: {
           body: req?.body ?? {},
           headers: req?.headers ?? {},
@@ -411,10 +410,12 @@ async function statefulHandler(req, res, next) {
           params: req?.params ?? {},
           query: req?.query ?? {},
         },
-        // response available for templates as {{response.body...}}
         res: { status, body },
         workspaceName,
         projectName,
+        projectId, // project gốc (26)
+        originId, // 👈 THÊM: stateless endpoint gốc (92)
+        statefulId, // 👈 THÊM: endpoints_ful gốc (54)
         user: req.user ?? null,
         log: { id: parentId },
         flags: { suppressNextCalls: false },
@@ -577,7 +578,7 @@ async function statefulHandler(req, res, next) {
       // ===== DEBUG GET START =====
       try {
         console.log("[GET:stateful] ENTER", { workspaceName, projectName, logicalPath, rawPath, statefulId, originId, folderId, projectId, isPublic });
-      } catch { }
+      } catch {}
       res.set("x-mock-mode", "stateful");
       res.set("x-mock-path", logicalPath);
       // ===== DEBUG GET START =====

@@ -217,7 +217,8 @@ function createMemoryResponder() {
     set(k, v) {
       store.headers[String(k).toLowerCase()] = v;
     },
-    setHeader(k, v) {                 // <── THÊM ALIAS NÀY
+    setHeader(k, v) {
+      // <── THÊM ALIAS NÀY
       this.set(k, v);
     },
     json(obj) {
@@ -233,7 +234,6 @@ function createMemoryResponder() {
     },
   };
 }
-
 
 /**
  * --- UPDATED ---
@@ -277,14 +277,18 @@ function buildPlanFromAdvancedConfig(nextCalls = []) {
         project,
         method: (s?.method || "GET").toUpperCase(),
         logicalPath: logicalPath || "",
-        externalUrl, // <-- thêm dòng này
+        externalUrl,
       },
       payload: { template: s?.body || {} },
       headers: { template: s?.headers || {} },
       condition: typeof s?.condition !== "undefined" ? s.condition : null,
       delayMs: Number(s?.delayMs ?? s?.delay_ms) || 0,
       timeoutMs: Number(s?.timeoutMs ?? s?.timeout_ms) || 0,
-      log: { persist: s?.log?.persist !== false, notify: !!s?.log?.notify },
+      log: {
+        // mặc định persist = true, chỉ tắt khi log.persist === false
+        persist: s?.log?.persist !== false,
+        notify: !!s?.log?.notify,
+      },
       auth: { mode: s?.auth?.mode || "same-user" },
     };
   });
@@ -372,7 +376,20 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
 
 async function persistNextCallLog(statelessDb, callRes, meta) {
   try {
-    console.log(`[nextCalls] log persist → method=${meta.method} path=${meta.path} status=${callRes.status} parentLogId=${meta.parentLogId ?? "null"}`);
+    // build full path cho log:
+    // - nếu là external URL: giữ nguyên (http/https)
+    // - nếu là internal: /workspace/project/path
+    let requestPath = meta.path || "";
+    if (requestPath && !/^https?:\/\//i.test(requestPath)) {
+      const ws = meta.workspaceName;
+      const pj = meta.projectName;
+      if (ws && pj) {
+        const cleanPath = requestPath.startsWith("/") ? requestPath : `/${requestPath}`;
+        requestPath = `/${ws}/${pj}${cleanPath}`;
+      }
+    }
+
+    console.log(`[nextCalls] log persist → method=${meta.method} path=${requestPath} status=${callRes.status} parentLogId=${meta.parentLogId ?? "null"}`);
 
     const headersMeta = {
       __nextcall: {
@@ -409,11 +426,11 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
         meta.statefulId ?? null,
         null,
         meta.method,
-        meta.path,
+        requestPath, // 👈 dùng path đã chuẩn hóa
         headersMeta,
         meta.payload || {},
         callRes.status,
-        safeResponseBody, // ✅ dùng body đã đảm bảo JSON
+        safeResponseBody,
         null,
         Date.now() - (meta.started || Date.now()),
       ]
@@ -469,11 +486,7 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
         const rootHeaders = rootCtx?.request?.headers_lc || rootCtx?.request?.headers || {};
         const mergedHeaders = mergeHeadersCI(rootHeaders, headersTpl || {});
 
-        if (!mergedHeaders["content-type"]) mergedHeaders["content-type"] = "application/json";
-
         const currentUser = options.user || rootCtx.user || null;
-        if (currentUser?.id) mergedHeaders["x-mock-user-id"] = currentUser.id;
-
         if (!mergedHeaders["content-type"]) mergedHeaders["content-type"] = "application/json";
         if (currentUser?.id) mergedHeaders["x-mock-user-id"] = currentUser.id;
 
@@ -500,18 +513,18 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
           // lưu log nếu cần
           if (step.log?.persist) {
             await persistNextCallLog(options.statelessDb, callRes, {
-              parentLogId: rootCtx.log?.id,
+              parentLogId: rootCtx.log?.id ?? null,
               nextCallName: step.name,
-              projectId: null,     // External call → không thuộc project nội bộ
-              originId: null,
+              projectId: rootCtx.projectId ?? null, // cùng project với call gốc
+              originId: null, // external → không có endpoint_id
               statefulId: null,
               method,
-              path: url,           // external full URL
+              path: url, // 👈 external: full URL
+              workspaceName: rootCtx.workspaceName,
+              projectName: rootCtx.projectName,
+              started,
               payload,
-              rootHeaders: rootHeaders,
-              userId: step.auth?.mode === "same-user"
-                ? options.user?.id || rootCtx.user?.id || null
-                : null,
+              userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,
             });
           }
 
@@ -600,20 +613,28 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
       const callRes = resCapture.toJSON();
       console.log(`[nextCalls] ← status=${callRes.status}`);
 
+      // trước khi gọi persistNextCallLog, thêm:
+      const projectIdForLog = rootCtx.projectId ?? target.projectId;
+      const originIdForLog = rootCtx.originId ?? target.originId;
+      const statefulIdForLog = rootCtx.statefulId ?? target.endpointId;
+
       if (step.log?.persist) {
         await persistNextCallLog(options.statelessDb, callRes, {
-          parentLogId: rootCtx.log?.id,
+          parentLogId: rootCtx.log?.id ?? null,
           nextCallName: step.name,
-          projectId: target.projectId,
-          originId: target.originId,
-          statefulId: target.endpointId,
+
+          // 🔧 dùng project/endpoint của CHÍNH endpoint target
+          projectId: target.projectId, // vd: 23 (pj8)
+          originId: target.originId, // vd: 94
+          statefulId: target.endpointId, // vd: 56
+
           method,
-          path: renderedPath,
+          path: renderedPath, // "/next3"
+          workspaceName: target.workspaceName,
+          projectName: target.projectName,
+          started,
           payload,
-          rootHeaders: rootCtx?.request?.headers_lc || rootCtx?.request?.headers || {},
-          userId: step.auth?.mode === "same-user"
-            ? options.user?.id || rootCtx.user?.id || null
-            : null,
+          userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,
         });
       }
 
