@@ -474,7 +474,17 @@ async function ResponsesForGET(endpointId, endpointPath) {
     {
       name: "Get Detail Not Found",
       status_code: 404,
-      response_body: { message: `${R} with id {{params.id}} not found.` },
+      response_body: { message: `${R} not found.` },
+    },
+    {
+      name: "Unauthorized Access",
+      status_code: 401,
+      response_body: { error: "Unauthorized: login required." },
+    },
+    {
+      name: "Forbidden Access",
+      status_code: 403,
+      response_body: { error: "Forbidden: access denied." },
     },
   ];
   return insertResponses(endpointId, responses);
@@ -499,8 +509,18 @@ async function ResponsesForPOST(endpointId, endpointPath) {
       name: "ID Conflict",
       status_code: 409,
       response_body: {
-        message: `${R} {{params.id}} conflict: {{params.id}} already exists.`,
+        message: `${R} conflict: item already exists.`,
       },
+    },
+    {
+      name: "Unauthorized Request",
+      status_code: 401,
+      response_body: { error: "Unauthorized: login required." },
+    },
+    {
+      name: "Forbidden Request",
+      status_code: 403,
+      response_body: { error: "Forbidden: access denied." },
     },
   ];
   return insertResponses(endpointId, responses);
@@ -513,7 +533,7 @@ async function ResponsesForPUT(endpointId, endpointPath) {
       name: "Update Success",
       status_code: 200,
       response_body: {
-        message: `${R} with id {{params.id}} updated successfully.`,
+        message: `${R} updated successfully.`,
       },
     },
     {
@@ -527,13 +547,23 @@ async function ResponsesForPUT(endpointId, endpointPath) {
       name: "ID Conflict",
       status_code: 409,
       response_body: {
-        message: `Update id {{params.id}} conflict: ${R} id {{params.id}} in request body already exists.`,
+        message: `${R} conflict: item already exists in request body.`,
       },
     },
     {
       name: "Not Found",
       status_code: 404,
-      response_body: { message: `${R} with id {{params.id}} not found.` },
+      response_body: { message: `${R} not found.` },
+    },
+    {
+      name: "Unauthorized Request",
+      status_code: 401,
+      response_body: { error: "Unauthorized: login required." },
+    },
+    {
+      name: "Forbidden Request",
+      status_code: 403,
+      response_body: { error: "Forbidden: access denied." },
     },
   ];
   return insertResponses(endpointId, responses);
@@ -545,21 +575,31 @@ async function ResponsesForDELETE(endpointId, endpointPath) {
     {
       name: "Delete All Success",
       status_code: 200,
-      response_body: { message: `Delete all data with ${R} successfully.` },
+      response_body: { message: `Delete all ${R} successfully.` },
     },
     {
       name: "Delete Success",
       status_code: 200,
       response_body: {
-        message: `${R} with id {{params.id}} deleted successfully.`,
+        message: `${R} deleted successfully.`,
       },
     },
     {
       name: "Not Found",
       status_code: 404,
       response_body: {
-        message: `${R} with id {{params.id}} to delete not found.`,
+        message: `${R} to delete not found.`,
       },
+    },
+    {
+      name: "Unauthorized Request",
+      status_code: 401,
+      response_body: { error: "Unauthorized: login required." },
+    },
+    {
+      name: "Forbidden Request",
+      status_code: 403,
+      response_body: { error: "Forbidden: access denied." },
     },
   ];
   return insertResponses(endpointId, responses);
@@ -1118,4 +1158,5 @@ module.exports = {
   updateAdvancedConfigByOriginId,
   getActiveStatefulPaths,
   getEndpointsByOriginId,
+  mongoUpsertEmptyIfMissing,
 };
