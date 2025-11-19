@@ -6,16 +6,76 @@ function toInt(v, fallback = null) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function parseTimeRange(rawTimeRange) {
+  if (!rawTimeRange) return { dateFrom: null, dateTo: null };
+
+  // Giữ đặc biệt cho "recent" nếu bạn muốn dùng để chỉ "không filter"
+  if (rawTimeRange === "recent") {
+    return { dateFrom: null, dateTo: null };
+  }
+
+  // Hỗ trợ pattern: <number><unit>  (vd: 1h, 2h, 3d, 10d, 72h,...)
+  const m = /^(\d+)([hd])$/.exec(rawTimeRange);
+  if (!m) {
+    // format lạ -> bỏ qua filter time
+    return { dateFrom: null, dateTo: null };
+  }
+
+  const value = parseInt(m[1], 10);
+  const unit = m[2];
+
+  if (!value || value <= 0) {
+    return { dateFrom: null, dateTo: null };
+  }
+
+  const now = new Date();
+  let ms = 0;
+
+  if (unit === "h") {
+    ms = value * 60 * 60 * 1000; // giờ
+  } else if (unit === "d") {
+    ms = value * 24 * 60 * 60 * 1000; // ngày
+  }
+
+  const dateFrom = new Date(now.getTime() - ms).toISOString();
+  // dateTo có thể để null, service đang chỉ check >= dateFrom
+  return { dateFrom, dateTo: null };
+}
+
 exports.listLogs = async (req, res) => {
   try {
     const projectId = toInt(req.query.project_id);
     const endpointId = toInt(req.query.endpoint_id);
     const statusCode = toInt(req.query.status_code);
-    const limit = toInt(req.query.limit, 100);
-    const offset = toInt(req.query.offset, 0);
+
+    // HỖ TRỢ THÊM page, nhưng vẫn giữ limit/offset cũ
+    const pageFromQuery = toInt(req.query.page, null);
+    let limit = toInt(req.query.limit, 100);
+    let offset = toInt(req.query.offset, 0);
+
+    if (pageFromQuery && pageFromQuery > 0) {
+      // Nếu FE truyền page thì ưu tiên page, tính lại offset
+      offset = (pageFromQuery - 1) * limit;
+    }
+
     const method = req.query.method ? String(req.query.method).toUpperCase() : null;
-    const dateFrom = req.query.date_from ? String(req.query.date_from) : null;
-    const dateTo = req.query.date_to ? String(req.query.date_to) : null;
+
+    // New query params
+    const rawTimeRange = req.query.time_range ? String(req.query.time_range) : null;
+    const rawSearch = req.query.search ? String(req.query.search) : null;
+
+    // Ưu tiên date_from/date_to nếu được truyền tay
+    let dateFrom = req.query.date_from ? String(req.query.date_from) : null;
+    let dateTo = req.query.date_to ? String(req.query.date_to) : null;
+
+    // Nếu không truyền date_from/date_to thì mới dùng time_range (1h, 2h, 3d, 33d,...)
+    if (!dateFrom && !dateTo && rawTimeRange) {
+      const parsed = parseTimeRange(rawTimeRange);
+      dateFrom = parsed.dateFrom;
+      dateTo = parsed.dateTo;
+    }
+
+    const search = rawSearch && rawSearch.trim() !== "" ? rawSearch.trim() : null;
 
     // New filters
     const endpointResponseId = toInt(req.query.endpoint_response_id);
@@ -34,9 +94,22 @@ exports.listLogs = async (req, res) => {
       statefulEndpointResponseId,
       limit,
       offset,
+      search,
     });
 
-    return res.status(200).json({ count: result.count, items: result.items });
+    const total = result.count; // tổng số record sau filter (toàn bộ)
+    const items = result.items || []; // danh sách record trong trang hiện tại
+    const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
+    const currentPage = limit > 0 ? Math.floor(offset / limit) + 1 : 1;
+
+    return res.status(200).json({
+      page: currentPage,
+      limit,
+      total,
+      totalPages,
+      count: items.length, // số bản ghi trong trang hiện tại
+      items,
+    });
   } catch (err) {
     console.error("[project_request_logs] list error:", err);
     return res.status(500).json({ message: "Internal Server Error", error: err.message });
@@ -47,7 +120,8 @@ exports.listLogs = async (req, res) => {
 exports.getLogsByProjectId = async (req, res) => {
   console.log(">>> [Controller] getLogsByProjectId called");
   try {
-    const projectId = parseInt(req.query.project_id);
+    // hỗ trợ cả query ?project_id= lẫn param /project/:id (nếu sau này dùng đúng như comment)
+    const projectId = toInt(req.query.project_id ?? req.params.id);
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
 
@@ -57,12 +131,32 @@ exports.getLogsByProjectId = async (req, res) => {
 
     const offset = (page - 1) * limit;
 
-    const { items, total } = await service.getLogsByProjectId(
-      req.db.stateless,
+    // New query params
+    const rawTimeRange = req.query.time_range ? String(req.query.time_range) : null;
+    const rawSearch = req.query.search ? String(req.query.search) : null;
+
+    let dateFrom = null;
+    let dateTo = null;
+
+    if (rawTimeRange) {
+      const parsed = parseTimeRange(rawTimeRange);
+      dateFrom = parsed.dateFrom;
+      dateTo = parsed.dateTo;
+    }
+
+    const search = rawSearch && rawSearch.trim() !== "" ? rawSearch.trim() : null;
+
+    // Dùng lại service.listLogs để đồng bộ logic Project Logs
+    const { count, items } = await service.listLogs(req.db.stateless, {
       projectId,
+      dateFrom,
+      dateTo,
       limit,
-      offset
-    );
+      offset,
+      search,
+    });
+
+    const total = count;
 
     return res.status(200).json({
       page,
