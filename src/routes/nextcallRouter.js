@@ -217,6 +217,9 @@ function createMemoryResponder() {
     set(k, v) {
       store.headers[String(k).toLowerCase()] = v;
     },
+    setHeader(k, v) {                 // <── THÊM ALIAS NÀY
+      this.set(k, v);
+    },
     json(obj) {
       store.body = obj;
       return this;
@@ -230,6 +233,7 @@ function createMemoryResponder() {
     },
   };
 }
+
 
 /**
  * --- UPDATED ---

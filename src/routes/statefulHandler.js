@@ -161,7 +161,7 @@ function pickUserIdFromRequest(req) {
       try {
         const v = req.get(key);
         if (v != null) return v;
-      } catch {}
+      } catch { }
     }
     const h = req.headers || {};
     // try common variants
@@ -290,7 +290,7 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
         req.res = req.res || {};
         req.res.locals = req.res.locals || {};
         req.res.locals.lastLogId = logId;
-      } catch {}
+      } catch { }
     }
   } catch (e) {
     console.error("[statefulHandler] log error:", e?.message || e);
@@ -577,9 +577,9 @@ async function statefulHandler(req, res, next) {
       // ===== DEBUG GET START =====
       try {
         console.log("[GET:stateful] ENTER", { workspaceName, projectName, logicalPath, rawPath, statefulId, originId, folderId, projectId, isPublic });
-      } catch {}
-      res.setHeader("x-mock-mode", "stateful");
-      res.setHeader("x-mock-path", logicalPath);
+      } catch { }
+      res.set("x-mock-mode", "stateful");
+      res.set("x-mock-path", logicalPath);
       // ===== DEBUG GET START =====
 
       const userIdMaybe = pickUserIdFromRequest(req);

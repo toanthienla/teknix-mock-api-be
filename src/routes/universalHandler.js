@@ -58,6 +58,28 @@ function splitBaseAndNumericId(path) {
   return { base: path, id: null };
 }
 
+function computeSpecificity(pattern) {
+  const path = normalizePath(pattern);
+  const parts = path.split("/").filter(Boolean);
+
+  let staticSegs = 0;
+  let dynamicSegs = 0;
+
+  for (const p of parts) {
+    if (p.startsWith(":") || p.includes("*")) {
+      dynamicSegs++;
+    } else {
+      staticSegs++;
+    }
+  }
+
+  return {
+    segments: parts.length,
+    staticSegs,
+    dynamicSegs,
+  };
+}
+
 function runHandler(handler, req, res, next) {
   if (handler && typeof handler.handle === "function") {
     return handler.handle(req, res, next);
@@ -194,8 +216,37 @@ router.use(async (req, res, next) => {
       return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
     }
 
-    // Prefer exact match on pathForLookup, otherwise fall back to baseCandidate
-    const matchedStateless = candidateRows.find((r) => normalizePath(r.path) === pathForLookup) || candidateRows.find((r) => normalizePath(r.path) === baseCandidate) || candidateRows[0];
+    // 🔥 Ưu tiên endpoint có path "cụ thể" hơn
+    candidateRows.sort((a, b) => {
+      const specA = computeSpecificity(a.path);
+      const specB = computeSpecificity(b.path);
+
+      // 1) Nhiều segment hơn trước
+      if (specA.segments !== specB.segments) {
+        return specB.segments - specA.segments;
+      }
+
+      // 2) Nhiều segment tĩnh hơn trước
+      if (specA.staticSegs !== specB.staticSegs) {
+        return specB.staticSegs - specA.staticSegs;
+      }
+
+      // 3) Ít segment dynamic hơn trước
+      if (specA.dynamicSegs !== specB.dynamicSegs) {
+        return specA.dynamicSegs - specB.dynamicSegs;
+      }
+
+      // 4) Active trước inactive (phòng khi có nhiều bản giống nhau)
+      const activeA = a.is_active ? 1 : 0;
+      const activeB = b.is_active ? 1 : 0;
+      if (activeA !== activeB) {
+        return activeB - activeA;
+      }
+
+      return 0;
+    });
+
+    const matchedStateless = candidateRows[0];
 
     if (!matchedStateless) {
       return res.status(404).json({ message: "Endpoint not found", detail: { method, path: normPath } });
