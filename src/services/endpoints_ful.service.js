@@ -476,6 +476,16 @@ async function ResponsesForGET(endpointId, endpointPath) {
       status_code: 404,
       response_body: { message: `${R} not found.` },
     },
+    {
+      name: "Unauthorized Access",
+      status_code: 401,
+      response_body: { error: "Unauthorized: login required." },
+    },
+    {
+      name: "Forbidden Access",
+      status_code: 403,
+      response_body: { error: "Forbidden: access denied." },
+    },
   ];
   return insertResponses(endpointId, responses);
 }
@@ -501,6 +511,16 @@ async function ResponsesForPOST(endpointId, endpointPath) {
       response_body: {
         message: `${R} conflict: item already exists.`,
       },
+    },
+    {
+      name: "Unauthorized Request",
+      status_code: 401,
+      response_body: { error: "Unauthorized: login required." },
+    },
+    {
+      name: "Forbidden Request",
+      status_code: 403,
+      response_body: { error: "Forbidden: access denied." },
     },
   ];
   return insertResponses(endpointId, responses);
@@ -535,6 +555,16 @@ async function ResponsesForPUT(endpointId, endpointPath) {
       status_code: 404,
       response_body: { message: `${R} not found.` },
     },
+    {
+      name: "Unauthorized Request",
+      status_code: 401,
+      response_body: { error: "Unauthorized: login required." },
+    },
+    {
+      name: "Forbidden Request",
+      status_code: 403,
+      response_body: { error: "Forbidden: access denied." },
+    },
   ];
   return insertResponses(endpointId, responses);
 }
@@ -560,6 +590,16 @@ async function ResponsesForDELETE(endpointId, endpointPath) {
       response_body: {
         message: `${R} to delete not found.`,
       },
+    },
+    {
+      name: "Unauthorized Request",
+      status_code: 401,
+      response_body: { error: "Unauthorized: login required." },
+    },
+    {
+      name: "Forbidden Request",
+      status_code: 403,
+      response_body: { error: "Forbidden: access denied." },
     },
   ];
   return insertResponses(endpointId, responses);
