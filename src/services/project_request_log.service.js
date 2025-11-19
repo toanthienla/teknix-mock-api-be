@@ -1,4 +1,82 @@
-// src/services/project_request_log.service.js
+const wsNotify = require("../centrifugo/centrifugo.service");
+
+async function maybePublishWsOnLog(pool, logId, log) {
+  // cần có project + endpoint để join config
+  if (!log.project_id || !log.endpoint_id) return;
+
+  const headers = log.request_headers || {};
+  const ncMeta = headers.__nextcall || null;
+  const isNextCall = !!ncMeta?.is_nextcall;
+
+  // 1️⃣ Chọn project để publish
+  //  - normal log: publish về chính project của log
+  //  - nextCall: cố gắng publish về project của log cha
+  let channelProjectId = log.project_id;
+
+  if (isNextCall && ncMeta.parent_log_id) {
+    try {
+      const parentRes = await pool.query(`SELECT project_id FROM project_request_logs WHERE id = $1 LIMIT 1`, [ncMeta.parent_log_id]);
+      const parentPid = parentRes.rows?.[0]?.project_id;
+      if (parentPid) {
+        channelProjectId = parentPid; // 💡 project của endpoint gốc
+      }
+    } catch (e) {
+      console.error("[logs] maybePublishWsOnLog parent lookup error:", e?.message || e);
+    }
+  }
+
+  // 2️⃣ Lấy config project + endpoint của CHÍNH endpoint trong log
+  const { rows } = await pool.query(
+    `
+      SELECT
+        p.id                 AS project_id,
+        p.websocket_enabled  AS ws_project_enabled,
+        e.websocket_config   AS ws_config
+      FROM projects p
+      JOIN endpoints e ON e.id = $2
+      WHERE p.id = $1
+      LIMIT 1
+    `,
+    [log.project_id, log.endpoint_id]
+  );
+
+  if (!rows.length) return;
+  const row = rows[0];
+
+  // project chứa endpoint này có bật WS không?
+  if (!row.ws_project_enabled) return;
+
+  const cfg = row.ws_config || {};
+  if (!cfg.enabled) return;
+
+  const status = Number(log.response_status_code);
+  if (cfg.condition != null) {
+    const expect = Number(cfg.condition);
+    if (Number.isFinite(expect) && Number.isFinite(status) && status !== expect) {
+      return;
+    }
+  }
+
+  // 3️⃣ Payload: nếu user cấu hình message thì trả nguyên message
+  const payload =
+    cfg.message && typeof cfg.message === "object"
+      ? cfg.message
+      : {
+          event: "request_log_created",
+          project_id: row.project_id,
+          endpoint_id: row.endpoint_id,
+          log_id: logId,
+          status,
+        };
+
+  try {
+    // 🔥 Normal: publish về project của log
+    //    NextCall: publish về project cha (nếu tìm được)
+    await wsNotify.publishToProjectChannel(channelProjectId, payload);
+  } catch (e) {
+    console.error("[logs] WS publish failed:", e?.message || e);
+  }
+}
 
 function safeStringify(obj) {
   try {
@@ -23,6 +101,13 @@ function safeStringify(obj) {
  * }
  */
 exports.insertLog = async (pool, log) => {
+  // 🚫 Nếu không có bất kỳ thông tin project/endpoint nào
+  // thì bỏ qua, tránh sinh log rác (như dòng 1709 bạn đang thấy)
+  if (log.project_id == null && log.endpoint_id == null && log.stateful_endpoint_id == null) {
+    console.log("[logs] skip insertLog: missing project_id/endpoint_id/stateful_endpoint_id", log.request_method, log.request_path);
+    return null;
+  }
+
   const text = `
     INSERT INTO project_request_logs
        (project_id, endpoint_id,
@@ -45,11 +130,9 @@ exports.insertLog = async (pool, log) => {
   const values = [
     log.project_id ?? null,
     log.endpoint_id ?? null,
-
-    // Chỉ một trong 2 hướng dùng: stateless hoặc stateful
-    log.endpoint_response_id ?? null, // stateless
-    log.stateful_endpoint_id ?? null, // stateful (no FK)
-    log.stateful_endpoint_response_id ?? null, // stateful (no FK)
+    log.endpoint_response_id ?? null,
+    log.stateful_endpoint_id ?? null,
+    log.stateful_endpoint_response_id ?? null,
     log.user_id ?? null,
     log.request_method ?? null,
     log.request_path ?? null,
@@ -61,7 +144,19 @@ exports.insertLog = async (pool, log) => {
     Number.isFinite(Number(log.latency_ms)) ? Number(log.latency_ms) : null,
   ];
   const { rows } = await pool.query(text, values);
-  return rows[0]?.id ?? null;
+
+  const id = rows[0]?.id ?? null;
+
+  // 🔔 Sau khi insert xong, xử lý WS CHO NEXTCALL (nhờ guard trong maybePublishWsOnLog)
+  if (id) {
+    try {
+      await maybePublishWsOnLog(pool, id, log);
+    } catch (e) {
+      console.error("[logs] maybePublishWsOnLog error:", e?.message || e);
+    }
+  }
+
+  return id;
 };
 
 /**
@@ -94,6 +189,44 @@ exports.listLogs = async (pool, opts = {}) => {
   if (opts.statefulEndpointId != null) add(`l.stateful_endpoint_id = ?`, opts.statefulEndpointId);
   if (opts.statefulEndpointResponseId != null) add(`l.stateful_endpoint_response_id = ?`, opts.statefulEndpointResponseId);
 
+  // 🔍 Full-text search trên các cột hiển thị:
+  //    - Matched Response: id + name (stateless + stateful)
+  //    - Method: request_method
+  //    - Path: request_path
+  //    - Status: response_status_code
+  //    - Latency: latency_ms
+  //    (+ bonus: response_body::text)
+  if (opts.search && String(opts.search).trim() !== "") {
+    const pattern = `%${String(opts.search).trim()}%`;
+
+    conds.push(
+      `(
+        l.request_method ILIKE $${idx}
+        OR l.request_path ILIKE $${idx + 1}
+        OR CAST(l.response_status_code AS TEXT) ILIKE $${idx + 2}
+        OR CAST(l.latency_ms AS TEXT) ILIKE $${idx + 3}
+        OR CAST(l.endpoint_response_id AS TEXT) ILIKE $${idx + 4}
+        OR CAST(l.stateful_endpoint_response_id AS TEXT) ILIKE $${idx + 5}
+        OR er.name ILIKE $${idx + 6}
+        OR erf.name ILIKE $${idx + 7}
+        OR l.response_body::text ILIKE $${idx + 8}
+      )`
+    );
+
+    params.push(
+      pattern, // method
+      pattern, // path
+      pattern, // status
+      pattern, // latency
+      pattern, // endpoint_response_id (Matched Response - ID)
+      pattern, // stateful_endpoint_response_id (Matched Response - ID)
+      pattern, // er.name (Matched Response - tên stateless)
+      pattern, // erf.name (Matched Response - tên stateful)
+      pattern // response_body
+    );
+    idx += 9;
+  }
+
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const limit = Number.isFinite(Number(opts.limit)) ? Math.max(1, Math.min(500, Number(opts.limit))) : 100;
   const offset = Number.isFinite(Number(opts.offset)) ? Math.max(0, Number(opts.offset)) : 0;
@@ -116,13 +249,22 @@ exports.listLogs = async (pool, opts = {}) => {
       l.latency_ms,
       l.created_at
     FROM project_request_logs l
+    LEFT JOIN endpoint_responses er
+      ON er.id = l.endpoint_response_id
+    LEFT JOIN endpoint_responses_ful erf
+      ON erf.id = l.stateful_endpoint_response_id
     ${where}
     ORDER BY l.id DESC
     LIMIT ${limit} OFFSET ${offset}
   `;
+
   const countSql = `
     SELECT COUNT(*)::int AS cnt
     FROM project_request_logs l
+    LEFT JOIN endpoint_responses er
+      ON er.id = l.endpoint_response_id
+    LEFT JOIN endpoint_responses_ful erf
+      ON erf.id = l.stateful_endpoint_response_id
     ${where}
   `;
 

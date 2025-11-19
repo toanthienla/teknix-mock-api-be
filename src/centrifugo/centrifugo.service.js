@@ -1,4 +1,5 @@
 // src/centrifugo/centrifugo.service.js
+
 const axios = require("axios");
 require("dotenv").config();
 const need = (k) => {
@@ -10,15 +11,9 @@ const BASE = need("CENTRIFUGO_HTTP").replace(/\/+$/, "");
 const API_KEY = need("CENTRIFUGO_API_KEY");
 
 function logDebug(...args) {
-  // Bật tạm thời, xong việc có thể tắt
   console.log("[centrifugo]", ...args);
 }
 
-/**
- * Publish qua RPC /api
- * @param {string} channel
- * @param {object} data
- */
 async function publish(channel, data = {}) {
   const url = `${BASE}/api`;
   const cmd = { method: "publish", params: { channel, data } };
@@ -30,7 +25,7 @@ async function publish(channel, data = {}) {
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": API_KEY,
-        Authorization: `apikey ${API_KEY}`, // để tương thích
+        Authorization: `apikey ${API_KEY}`,
       },
       timeout: 5000,
     });
@@ -44,4 +39,25 @@ async function publish(channel, data = {}) {
   }
 }
 
-module.exports = { publish };
+/**
+ * Publish theo project (kênh pj:{projectId})
+ * Phù hợp với token /centrifugo/project-connect-token (subs pj:{projectId})
+ */
+async function publishToProjectChannel(projectId, data = {}) {
+  if (!projectId) throw new Error("projectId required for publishToProjectChannel");
+  const channel = `pj:${projectId}`;
+  return publish(channel, data);
+}
+
+/**
+ * Optional: publish theo endpoint (kênh pj:{projectId}-ep-{endpointId})
+ * Phù hợp với token /centrifugo/endpoint-connect-token
+ */
+async function publishToEndpointChannel(projectId, endpointId, data = {}) {
+  if (!projectId) throw new Error("projectId required for publishToEndpointChannel");
+  const base = `pj:${projectId}`;
+  const channel = endpointId ? `${base}-ep-${endpointId}` : base;
+  return publish(channel, data);
+}
+
+module.exports = { publish, publishToProjectChannel, publishToEndpointChannel };
