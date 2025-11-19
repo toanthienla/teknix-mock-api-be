@@ -2,8 +2,8 @@ const logSvc = require("./project_request_log.service");
 const { getCollection2 } = require("../config/db");
 const endpointsFulSvc = require("./endpoints_ful.service");
 
-// Chỉ cho phép: A-Z a-z 0-9 và dấu gạch dưới (_)
-const NAME_RE = /^[A-Za-z0-9_]+$/;
+// Cho phép: A-Z a-z 0-9, dấu gạch dưới (_), dấu gạch ngang (-) và dấu cách
+const NAME_RE = /^[A-Za-z0-9_\- ]+$/;
 function validateNameOrError(name) {
   if (typeof name !== "string" || !NAME_RE.test(name)) {
     return {
@@ -11,7 +11,7 @@ function validateNameOrError(name) {
       errors: [
         {
           field: "name",
-          message: "Tên chỉ được chứa chữ cái tiếng Anh, số và dấu gạch dưới (_). Không được có dấu cách, dấu hoặc ký tự đặc biệt.",
+          message: "Folder name can only contain letters, numbers, spaces, underscores (_) and hyphens (-).",
         },
       ],
     };
