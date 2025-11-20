@@ -297,13 +297,13 @@ exports.listLogs = async (pool, opts = {}) => {
     params.push(...opts.latencyExact);
   }
 
-  // 🔍 Full-text search trên các cột hiển thị:
-  //    - Matched Response: id + name (stateless + stateful)
+  // 🔍 Full-text search trên các cột hiển thị (KHÔNG bao gồm ID fields):
   //    - Method: request_method
   //    - Path: request_path
   //    - Status: response_status_code
   //    - Latency: latency_ms
-  //    (+ bonus: response_body::text)
+  //    - Response names (stateless + stateful)
+  //    - Response body
   if (opts.search && String(opts.search).trim() !== "") {
     const pattern = `%${String(opts.search).trim()}%`;
 
@@ -313,11 +313,9 @@ exports.listLogs = async (pool, opts = {}) => {
         OR l.request_path ILIKE $${idx + 1}
         OR CAST(l.response_status_code AS TEXT) ILIKE $${idx + 2}
         OR CAST(l.latency_ms AS TEXT) ILIKE $${idx + 3}
-        OR CAST(l.endpoint_response_id AS TEXT) ILIKE $${idx + 4}
-        OR CAST(l.stateful_endpoint_response_id AS TEXT) ILIKE $${idx + 5}
-        OR er.name ILIKE $${idx + 6}
-        OR erf.name ILIKE $${idx + 7}
-        OR l.response_body::text ILIKE $${idx + 8}
+        OR er.name ILIKE $${idx + 4}
+        OR erf.name ILIKE $${idx + 5}
+        OR l.response_body::text ILIKE $${idx + 6}
       )`
     );
 
@@ -326,13 +324,11 @@ exports.listLogs = async (pool, opts = {}) => {
       pattern, // path
       pattern, // status
       pattern, // latency
-      pattern, // endpoint_response_id (Matched Response - ID)
-      pattern, // stateful_endpoint_response_id (Matched Response - ID)
       pattern, // er.name (Matched Response - tên stateless)
       pattern, // erf.name (Matched Response - tên stateful)
-      pattern // response_body
+      pattern  // response_body
     );
-    idx += 9;
+    idx += 7;
   }
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
@@ -345,8 +341,10 @@ exports.listLogs = async (pool, opts = {}) => {
       l.project_id,
       l.endpoint_id,
       l.endpoint_response_id,
+      er.name AS endpoint_response_name,
       l.stateful_endpoint_id,
       l.stateful_endpoint_response_id,
+      erf.name AS stateful_endpoint_response_name,
       l.request_method,
       l.request_path,
       l.request_headers,
