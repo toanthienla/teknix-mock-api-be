@@ -290,6 +290,13 @@ exports.listLogs = async (pool, opts = {}) => {
   if (opts.minLatency != null) add(`l.latency_ms >= ?`, opts.minLatency);
   if (opts.maxLatency != null) add(`l.latency_ms <= ?`, opts.maxLatency);
 
+  // Latency exact value filter (single or multiple)
+  if (opts.latencyExact && Array.isArray(opts.latencyExact) && opts.latencyExact.length > 0) {
+    const placeholders = opts.latencyExact.map(() => `$${idx++}`).join(",");
+    conds.push(`l.latency_ms IN (${placeholders})`);
+    params.push(...opts.latencyExact);
+  }
+
   // 🔍 Full-text search trên các cột hiển thị:
   //    - Matched Response: id + name (stateless + stateful)
   //    - Method: request_method

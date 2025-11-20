@@ -65,6 +65,18 @@ exports.listLogs = async (req, res) => {
     // Latency filter (ms)
     const minLatency = toInt(req.query.min_latency);
     const maxLatency = toInt(req.query.max_latency);
+    // latency: "32" hoặc "32,200,500" (multiple values)
+    let latencyExact = null;
+    if (req.query.latency) {
+      const rawExact = String(req.query.latency).trim();
+      if (rawExact) {
+        latencyExact = rawExact
+          .split(",")
+          .map((v) => toInt(v))
+          .filter((v) => v != null);
+        if (latencyExact.length === 0) latencyExact = null;
+      }
+    }
 
     // New query params
     const rawTimeRange = req.query.time_range ? String(req.query.time_range) : null;
@@ -100,6 +112,7 @@ exports.listLogs = async (req, res) => {
       statefulEndpointResponseId,
       minLatency,
       maxLatency,
+      latencyExact,
       limit,
       offset,
       search,
