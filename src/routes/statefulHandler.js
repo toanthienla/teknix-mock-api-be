@@ -360,10 +360,10 @@ async function statefulHandler(req, res, next) {
   const projectName = baseSegs[1] || null;
 
   // Vars for selected endpoint / tenant
-  let statefulId = null;
-  let originId = null;
+  let statefulId = meta.statefulId || null;  // ✅ Use statefulId from universalHandler
+  let originId = meta.statelessId || null;   // ✅ Use originId (statelessId) from universalHandler
   let folderId = null;
-  let projectId = null;
+  let projectId = meta.projectId || null;  // ✅ Use projectId from universalHandler
   let isPublic = false;
 
   // nextCall flags
