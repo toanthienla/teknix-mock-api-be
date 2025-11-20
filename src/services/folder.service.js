@@ -4,6 +4,20 @@ const endpointsFulSvc = require("./endpoints_ful.service");
 
 // Cho phép: A-Z a-z 0-9, dấu gạch dưới (_), dấu gạch ngang (-) và dấu cách
 const NAME_RE = /^[A-Za-z0-9_\- ]+$/;
+
+/**
+ * Convert base_schema (POST/PUT format) sang GET format
+ * POST/PUT format: { "field": { "type": "...", "required": ... }, ... }
+ * GET format: { "fields": ["field1", "field2", ...] }
+ */
+function convertBaseSchemaToGetFormat(baseSchema) {
+  if (!baseSchema || typeof baseSchema !== 'object' || Array.isArray(baseSchema)) {
+    return { fields: [] };
+  }
+  
+  const fields = Object.keys(baseSchema).filter(key => key !== 'user_id');
+  return { fields };
+}
 function validateNameOrError(name) {
   if (typeof name !== "string" || !NAME_RE.test(name)) {
     return {
@@ -138,13 +152,38 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
 
     // 🔄 Đồng bộ xuống endpoints_ful + refresh
     try {
-      await dbStateful.query(
-        `UPDATE endpoints_ful
-       SET schema = $1::jsonb,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE folder_id = $2`,
-        [JSON.stringify(base_schema), id]
+      // Lấy tất cả endpoint trong folder để biết method của mỗi endpoint
+      const { rows: endpointsFul } = await dbStateful.query(
+        `SELECT ef.id, ef.endpoint_id, e.method
+         FROM endpoints_ful ef
+         JOIN endpoints e ON e.id = ef.endpoint_id
+         WHERE e.folder_id = $1`,
+        [id]
       );
+
+      // Cập nhật schema cho từng endpoint dựa vào method
+      for (const ep of endpointsFul) {
+        let schemaToSet = base_schema;
+        
+        if (ep.method && ep.method.toUpperCase() === 'GET') {
+          // GET: Convert base_schema sang format { "fields": [...] }
+          schemaToSet = convertBaseSchemaToGetFormat(base_schema);
+        } else if (ep.method && ['POST', 'PUT'].includes(ep.method.toUpperCase())) {
+          // POST/PUT: Giữ nguyên base_schema (đã là format { field: { type, required }, ... })
+          schemaToSet = base_schema;
+        }
+        // DELETE: Không cập nhật schema
+        
+        if (ep.method && ep.method.toUpperCase() !== 'DELETE') {
+          await dbStateful.query(
+            `UPDATE endpoints_ful
+             SET schema = $1::jsonb,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2`,
+            [JSON.stringify(schemaToSet), ep.id]
+          );
+        }
+      }
 
       await dbStateful.query(
         `UPDATE endpoints_ful
