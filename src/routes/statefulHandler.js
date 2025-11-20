@@ -238,21 +238,64 @@ function validateAndSanitizePayload(schema, payload, { allowMissingRequired = fa
 }
 
 /* ========== Resolve ResponseId bảo đảm có id để log ========== */
-async function resolveStatefulResponseId(statefulDb, statefulId, providedId, statusCode = null) {
+async function resolveStatefulResponseId(statefulDb, statefulId, providedId, statusCode = null, responseBody = null) {
   if (providedId != null) return providedId;
   if (statefulId == null) return null;
   try {
     // If status code is provided, try to find matching response
     if (statusCode != null) {
-      const r = await statefulDb.query(
-        "SELECT id FROM endpoint_responses_ful WHERE endpoint_id = $1 AND status_code = $2 LIMIT 1",
-        [statefulId, statusCode]
-      );
-      if (r.rows?.[0]?.id) return r.rows[0].id;
+      // 🔍 Phân biệt GET all vs GET detail bằng response body
+      // GET all: data là array [{}] hoặc [{},...] → tìm response có {{params.id}} HOẶC response body là array
+      // GET detail: data là object {} → tìm response KHÔNG có {{params.id}} HOẶC response body là object
+      const isArray = Array.isArray(responseBody?.data);
+      console.log(`[resolveStatefulResponseId] isArray=${isArray}, data type=${typeof responseBody?.data}, statefulId=${statefulId}, statusCode=${statusCode}`);
+
+      const { rows } = await statefulDb.query("SELECT id, response_body FROM endpoint_responses_ful WHERE endpoint_id = $1 AND status_code = $2 ORDER BY id ASC", [statefulId, statusCode]);
+
+      if (rows.length === 0) {
+        console.log(`[resolveStatefulResponseId] No responses found for status ${statusCode}`);
+        return null;
+      }
+      console.log(`[resolveStatefulResponseId] found ${rows.length} responses for status ${statusCode}`);
+
+      // Nếu GET all (data là array), tìm response_body trong DB cũng là array
+      if (isArray) {
+        console.log(`[resolveStatefulResponseId] GET ALL mode - looking for array response`);
+        for (const r of rows) {
+          const rBody = typeof r.response_body === "string" ? JSON.parse(r.response_body) : r.response_body;
+          // response_body trong DB là data trực tiếp, không có .data wrapper
+          const isRBodyArray = Array.isArray(rBody);
+          console.log(`  Response id=${r.id}: isArray=${isRBodyArray}, type=${typeof rBody}`);
+          // Nếu response body cũng là array, chọn cái này (GET all response)
+          if (isRBodyArray) {
+            console.log(`  ✓ Selected GET all response id=${r.id} (array response)`);
+            return r.id;
+          }
+        }
+      } else {
+        // Nếu GET detail (data là object), tìm response_body trong DB cũng là object (không phải array)
+        console.log(`[resolveStatefulResponseId] GET DETAIL mode - looking for object response`);
+        for (const r of rows) {
+          const rBody = typeof r.response_body === "string" ? JSON.parse(r.response_body) : r.response_body;
+          // response_body trong DB là data trực tiếp, không có .data wrapper
+          const isRBodyArray = Array.isArray(rBody);
+          console.log(`  Response id=${r.id}: isArray=${isRBodyArray}, type=${typeof rBody}`);
+          // Nếu response body cũng là object (không phải array), chọn cái này (GET detail response)
+          if (!isRBodyArray && typeof rBody === "object") {
+            console.log(`  ✓ Selected GET detail response id=${r.id} (object response)`);
+            return r.id;
+          }
+        }
+      }
+
+      // Fallback: không tìm được specific, trả response đầu tiên
+      console.log(`[resolveStatefulResponseId] No specific match found, using first response id=${rows[0]?.id}`);
+      return rows[0]?.id || null;
     }
     // Fallback: no response found for status code, return null (don't pick arbitrary response)
     return null;
-  } catch {
+  } catch (e) {
+    console.error(`[resolveStatefulResponseId] Error:`, e);
     return null;
   }
 }
@@ -264,7 +307,7 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
     if (req?.flags?.isNextCall) return;
     // 🆕 gắn user vào log nếu có (lấy từ auth hoặc header X-Mock-User-Id)
     const userIdForLog = pickUserIdFromRequest(req);
-    const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId, status);
+    const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId, status, responseBody);
     const _log = await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
       endpoint_id: originId ?? null, // stateless endpoints.id
@@ -360,10 +403,10 @@ async function statefulHandler(req, res, next) {
   const projectName = baseSegs[1] || null;
 
   // Vars for selected endpoint / tenant
-  let statefulId = meta.statefulId || null;  // ✅ Use statefulId from universalHandler
-  let originId = meta.statelessId || null;   // ✅ Use originId (statelessId) from universalHandler
+  let statefulId = meta.statefulId || null; // ✅ Use statefulId from universalHandler
+  let originId = meta.statelessId || null; // ✅ Use originId (statelessId) from universalHandler
   let folderId = null;
-  let projectId = meta.projectId || null;  // ✅ Use projectId from universalHandler
+  let projectId = meta.projectId || null; // ✅ Use projectId from universalHandler
   let isPublic = false;
 
   // nextCall flags
