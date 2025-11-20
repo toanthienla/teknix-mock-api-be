@@ -608,6 +608,19 @@ async function statefulHandler(req, res, next) {
           if (any) {
             const data = pickForGET(any);
             const status = 200;
+            
+            // 🔍 Tìm response mapping từ response bucket với requireParamId: true (GET detail)
+            const { responseId } = selectAndRenderResponseAdv(
+              responsesBucket,
+              status,
+              { params: { id: idFromUrl } },
+              {
+                fallback: null,
+                requireParamId: true,
+                logicalPath,
+              }
+            );
+            
             const body = {
               code: status,
               message: "Success",
@@ -624,6 +637,7 @@ async function statefulHandler(req, res, next) {
               responseBody: body,
               started,
               payload: req.body,
+              statefulResponseId: responseId,
             });
             res.status(status).json(body);
             fireNextCallsIfAny(status, body);
@@ -668,6 +682,19 @@ async function statefulHandler(req, res, next) {
         // GET all
         const all = current.map(pickForGET);
         const status = 200;
+        
+        // 🔍 Tìm response mapping từ response bucket với requireParamId: false (GET all)
+        const { responseId } = selectAndRenderResponseAdv(
+          responsesBucket,
+          status,
+          {},
+          {
+            fallback: null,
+            requireParamId: false,
+            logicalPath,
+          }
+        );
+        
         const body = {
           code: status,
           message: "Success",
@@ -684,6 +711,7 @@ async function statefulHandler(req, res, next) {
           responseBody: body,
           started,
           payload: req.body,
+          statefulResponseId: responseId,
         });
         res.status(status).json(body);
         fireNextCallsIfAny(status, body);
@@ -719,6 +747,19 @@ async function statefulHandler(req, res, next) {
         if (allowed) {
           const data = pickForGET(rec);
           const status = 200;
+          
+          // 🔍 Tìm response mapping từ response bucket với requireParamId: true (GET detail)
+          const { responseId } = selectAndRenderResponseAdv(
+            responsesBucket,
+            status,
+            { params: { id: idFromUrl } },
+            {
+              fallback: null,
+              requireParamId: true,
+              logicalPath,
+            }
+          );
+          
           const body = {
             code: status,
             message: "Success",
@@ -735,6 +776,7 @@ async function statefulHandler(req, res, next) {
             responseBody: body,
             started,
             payload: req.body,
+            statefulResponseId: responseId,
           });
           res.status(status).json(body);
           fireNextCallsIfAny(status, body);
@@ -782,6 +824,19 @@ async function statefulHandler(req, res, next) {
 
       const data = [...defaults, ...mine];
       const status = 200;
+      
+      // 🔍 Tìm response mapping từ response bucket với requireParamId: false (GET all)
+      const { responseId } = selectAndRenderResponseAdv(
+        responsesBucket,
+        status,
+        {},
+        {
+          fallback: null,
+          requireParamId: false,
+          logicalPath,
+        }
+      );
+      
       const body = {
         code: status,
         message: "Success",
@@ -798,6 +853,7 @@ async function statefulHandler(req, res, next) {
         responseBody: body,
         started,
         payload: req.body,
+        statefulResponseId: responseId,
       });
       res.status(status).json(body);
       fireNextCallsIfAny(status, body);
