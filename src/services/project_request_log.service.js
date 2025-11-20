@@ -298,37 +298,36 @@ exports.listLogs = async (pool, opts = {}) => {
   }
 
   // 🔍 Full-text search trên các cột hiển thị (KHÔNG bao gồm ID fields):
-  //    - Method: request_method
-  //    - Path: request_path
-  //    - Status: response_status_code
-  //    - Latency: latency_ms
-  //    - Response names (stateless + stateful)
-  //    - Response body
+  //    - Method: request_method (ILIKE - substring)
+  //    - Status: response_status_code (exact match hoặc bắt đầu bằng)
+  //    - Latency: latency_ms (exact match hoặc bắt đầu bằng)
+  //    - Response names (stateless + stateful) (ILIKE - substring)
+  //    ⚠️ BỎ request_path: tránh match chữ số/ký tự không liên quan trong path
+  //    ⚠️ BỎ response_body: không search trong data
   if (opts.search && String(opts.search).trim() !== "") {
     const pattern = `%${String(opts.search).trim()}%`;
+    const searchNum = String(opts.search).trim();
+    // Regex: match chính xác (^8$) hoặc bắt đầu bằng (^8[0-9]+)
+    const numPattern = `^(${searchNum}|${searchNum}[0-9]+)$`;
 
     conds.push(
       `(
         l.request_method ILIKE $${idx}
-        OR l.request_path ILIKE $${idx + 1}
-        OR CAST(l.response_status_code AS TEXT) ILIKE $${idx + 2}
-        OR CAST(l.latency_ms AS TEXT) ILIKE $${idx + 3}
-        OR er.name ILIKE $${idx + 4}
-        OR erf.name ILIKE $${idx + 5}
-        OR l.response_body::text ILIKE $${idx + 6}
+        OR CAST(l.response_status_code AS TEXT) ~ $${idx + 1}
+        OR CAST(l.latency_ms AS TEXT) ~ $${idx + 2}
+        OR er.name ILIKE $${idx + 3}
+        OR erf.name ILIKE $${idx + 4}
       )`
     );
 
     params.push(
-      pattern, // method
-      pattern, // path
-      pattern, // status
-      pattern, // latency
-      pattern, // er.name (Matched Response - tên stateless)
-      pattern, // erf.name (Matched Response - tên stateful)
-      pattern // response_body
+      pattern, // method (substring match)
+      numPattern, // status (exact or starts with)
+      numPattern, // latency (exact or starts with)
+      pattern, // er.name (substring match)
+      pattern  // erf.name (substring match)
     );
-    idx += 7;
+    idx += 5;
   }
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
