@@ -516,23 +516,28 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
 
           // lưu log nếu cần
           if (step.log?.persist) {
-            await persistNextCallLog(options.statelessDb, callRes, {
-              parentLogId: rootCtx.log?.id ?? null,
-              nextCallName: step.name,
+            await persistNextCallLog(
+              options.statelessDb,
+              callRes,
+              {
+                parentLogId: rootCtx.log?.id ?? null,
+                nextCallName: step.name,
 
-              // 🔧 dùng project/endpoint của CHÍNH endpoint target
-              projectId: target.projectId, // vd: 23 (pj8)
-              originId: target.originId, // vd: 94
-              statefulId: target.endpointId, // vd: 56
+                // 🔧 dùng project/endpoint của CHÍNH endpoint target
+                projectId: target.projectId, // vd: 23 (pj8)
+                originId: target.originId, // vd: 94
+                statefulId: target.endpointId, // vd: 56
 
-              method,
-              path: renderedPath, // "/next3"
-              workspaceName: target.workspaceName,
-              projectName: target.projectName,
-              started,
-              payload,
-              userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,
-            }, options.statefulDb);
+                method,
+                path: renderedPath, // "/next3"
+                workspaceName: target.workspaceName,
+                projectName: target.projectName,
+                started,
+                payload,
+                userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,
+              },
+              options.statefulDb
+            );
           }
 
           // push history để step sau có thể dùng {{N.response.body}}
@@ -626,23 +631,28 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
       const statefulIdForLog = rootCtx.statefulId ?? target.endpointId;
 
       if (step.log?.persist) {
-        await persistNextCallLog(options.statelessDb, callRes, {
-          parentLogId: rootCtx.log?.id ?? null,
-          nextCallName: step.name,
+        await persistNextCallLog(
+          options.statelessDb,
+          callRes,
+          {
+            parentLogId: rootCtx.log?.id ?? null,
+            nextCallName: step.name,
 
-          // 🔧 dùng project/endpoint của CHÍNH endpoint target
-          projectId: target.projectId, // vd: 23 (pj8)
-          originId: target.originId, // vd: 94
-          statefulId: target.endpointId, // vd: 56
+            // 🔧 dùng project/endpoint của CHÍNH endpoint target
+            projectId: target.projectId, // vd: 23 (pj8)
+            originId: target.originId, // vd: 94
+            statefulId: target.endpointId, // vd: 56
 
-          method,
-          path: renderedPath, // "/next3"
-          workspaceName: target.workspaceName,
-          projectName: target.projectName,
-          started,
-          payload,
-          userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,
-        }, options.statefulDb);
+            method,
+            path: renderedPath, // "/next3"
+            workspaceName: target.workspaceName,
+            projectName: target.projectName,
+            started,
+            payload,
+            userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,
+          },
+          options.statefulDb
+        );
       }
 
       history.push({
