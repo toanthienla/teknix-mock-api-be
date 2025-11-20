@@ -374,7 +374,7 @@ async function resolveTargetEndpoint(step, { defaultWorkspace, defaultProject, s
   return null;
 }
 
-async function persistNextCallLog(statelessDb, callRes, meta) {
+async function persistNextCallLog(statelessDb, callRes, meta, statefulDb) {
   try {
     if (!meta || (meta.projectId == null && meta.originId == null && meta.statefulId == null)) {
       console.log("[nextCalls] skip persistNextCallLog vì thiếu projectId/originId/statefulId:", meta);
@@ -406,12 +406,27 @@ async function persistNextCallLog(statelessDb, callRes, meta) {
       safeResponseBody = { text: safeResponseBody };
     }
 
+    // 🆕 Resolve response id cho stateful nextcall
+    let resolvedResponseId = null;
+    if (meta.statefulId && statefulDb && callRes.status) {
+      try {
+        // Dynamic require để tránh circular dependency
+        const { resolveStatefulResponseId } = require("./statefulHandler");
+        // Wrap response body theo stateless format để resolve
+        const wrappedBody = { data: safeResponseBody };
+        resolvedResponseId = await resolveStatefulResponseId(statefulDb, meta.statefulId, null, callRes.status, wrappedBody);
+        console.log(`[nextCalls] resolved response id=${resolvedResponseId} for status=${callRes.status}`);
+      } catch (e) {
+        console.log(`[nextCalls] failed to resolve response id:`, e?.message || e);
+      }
+    }
+
     const logPayload = {
       project_id: meta.projectId ?? null,
       endpoint_id: meta.originId ?? null,
       endpoint_response_id: null,
       stateful_endpoint_id: meta.statefulId ?? null,
-      stateful_endpoint_response_id: null,
+      stateful_endpoint_response_id: resolvedResponseId ?? null,
       user_id: meta.userId ?? null,
       request_method: meta.method,
       request_path: requestPath,
@@ -517,7 +532,7 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
               started,
               payload,
               userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,
-            });
+            }, options.statefulDb);
           }
 
           // push history để step sau có thể dùng {{N.response.body}}
@@ -627,7 +642,7 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
           started,
           payload,
           userId: step.auth?.mode === "same-user" ? options.user?.id || rootCtx.user?.id || null : null,
-        });
+        }, options.statefulDb);
       }
 
       history.push({
