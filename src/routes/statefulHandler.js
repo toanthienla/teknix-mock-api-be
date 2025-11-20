@@ -238,17 +238,44 @@ function validateAndSanitizePayload(schema, payload, { allowMissingRequired = fa
 }
 
 /* ========== Resolve ResponseId bảo đảm có id để log ========== */
-async function resolveStatefulResponseId(statefulDb, statefulId, providedId, statusCode = null) {
+async function resolveStatefulResponseId(statefulDb, statefulId, providedId, statusCode = null, responseBody = null) {
   if (providedId != null) return providedId;
   if (statefulId == null) return null;
   try {
     // If status code is provided, try to find matching response
     if (statusCode != null) {
-      const r = await statefulDb.query(
-        "SELECT id FROM endpoint_responses_ful WHERE endpoint_id = $1 AND status_code = $2 LIMIT 1",
+      // 🔍 Phân biệt GET all vs GET detail bằng response body
+      // GET all: data là array [{}] → tìm response có {{params.id}}
+      // GET detail: data là object {} → tìm response KHÔNG có {{params.id}}
+      const isArray = Array.isArray(responseBody?.data);
+      
+      const { rows } = await statefulDb.query(
+        "SELECT id, response_body FROM endpoint_responses_ful WHERE endpoint_id = $1 AND status_code = $2 ORDER BY id ASC",
         [statefulId, statusCode]
       );
-      if (r.rows?.[0]?.id) return r.rows[0].id;
+      
+      if (rows.length === 0) return null;
+      
+      // Nếu GET all (data là array), tìm response KHÔNG có {{params.id}}
+      if (isArray) {
+        for (const r of rows) {
+          const rBody = typeof r.response_body === "string" ? JSON.parse(r.response_body) : r.response_body;
+          const bodyStr = JSON.stringify(rBody || "");
+          const hasParamId = /\{\{\s*params\.id\s*\}\}/.test(bodyStr);
+          if (!hasParamId) return r.id;
+        }
+      } else {
+        // Nếu GET detail (data là object), tìm response CÓ {{params.id}}
+        for (const r of rows) {
+          const rBody = typeof r.response_body === "string" ? JSON.parse(r.response_body) : r.response_body;
+          const bodyStr = JSON.stringify(rBody || "");
+          const hasParamId = /\{\{\s*params\.id\s*\}\}/.test(bodyStr);
+          if (hasParamId) return r.id;
+        }
+      }
+      
+      // Fallback: nếu không tìm được specific, trả response đầu tiên
+      return rows[0]?.id || null;
     }
     // Fallback: no response found for status code, return null (don't pick arbitrary response)
     return null;
@@ -264,7 +291,7 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
     if (req?.flags?.isNextCall) return;
     // 🆕 gắn user vào log nếu có (lấy từ auth hoặc header X-Mock-User-Id)
     const userIdForLog = pickUserIdFromRequest(req);
-    const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId, status);
+    const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId, status, responseBody);
     const _log = await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,
       endpoint_id: originId ?? null, // stateless endpoints.id
@@ -608,19 +635,6 @@ async function statefulHandler(req, res, next) {
           if (any) {
             const data = pickForGET(any);
             const status = 200;
-            
-            // 🔍 Tìm response mapping từ response bucket với requireParamId: true (GET detail)
-            const { responseId } = selectAndRenderResponseAdv(
-              responsesBucket,
-              status,
-              { params: { id: idFromUrl } },
-              {
-                fallback: null,
-                requireParamId: true,
-                logicalPath,
-              }
-            );
-            
             const body = {
               code: status,
               message: "Success",
@@ -637,7 +651,6 @@ async function statefulHandler(req, res, next) {
               responseBody: body,
               started,
               payload: req.body,
-              statefulResponseId: responseId,
             });
             res.status(status).json(body);
             fireNextCallsIfAny(status, body);
@@ -682,19 +695,6 @@ async function statefulHandler(req, res, next) {
         // GET all
         const all = current.map(pickForGET);
         const status = 200;
-        
-        // 🔍 Tìm response mapping từ response bucket với requireParamId: false (GET all)
-        const { responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          {},
-          {
-            fallback: null,
-            requireParamId: false,
-            logicalPath,
-          }
-        );
-        
         const body = {
           code: status,
           message: "Success",
@@ -711,7 +711,6 @@ async function statefulHandler(req, res, next) {
           responseBody: body,
           started,
           payload: req.body,
-          statefulResponseId: responseId,
         });
         res.status(status).json(body);
         fireNextCallsIfAny(status, body);
@@ -747,19 +746,6 @@ async function statefulHandler(req, res, next) {
         if (allowed) {
           const data = pickForGET(rec);
           const status = 200;
-          
-          // 🔍 Tìm response mapping từ response bucket với requireParamId: true (GET detail)
-          const { responseId } = selectAndRenderResponseAdv(
-            responsesBucket,
-            status,
-            { params: { id: idFromUrl } },
-            {
-              fallback: null,
-              requireParamId: true,
-              logicalPath,
-            }
-          );
-          
           const body = {
             code: status,
             message: "Success",
@@ -776,7 +762,6 @@ async function statefulHandler(req, res, next) {
             responseBody: body,
             started,
             payload: req.body,
-            statefulResponseId: responseId,
           });
           res.status(status).json(body);
           fireNextCallsIfAny(status, body);
@@ -824,19 +809,6 @@ async function statefulHandler(req, res, next) {
 
       const data = [...defaults, ...mine];
       const status = 200;
-      
-      // 🔍 Tìm response mapping từ response bucket với requireParamId: false (GET all)
-      const { responseId } = selectAndRenderResponseAdv(
-        responsesBucket,
-        status,
-        {},
-        {
-          fallback: null,
-          requireParamId: false,
-          logicalPath,
-        }
-      );
-      
       const body = {
         code: status,
         message: "Success",
@@ -853,7 +825,6 @@ async function statefulHandler(req, res, next) {
         responseBody: body,
         started,
         payload: req.body,
-        statefulResponseId: responseId,
       });
       res.status(status).json(body);
       fireNextCallsIfAny(status, body);
