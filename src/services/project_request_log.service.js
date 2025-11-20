@@ -1,4 +1,18 @@
 const wsNotify = require("../centrifugo/centrifugo.service");
+const { render } = require("../utils/wsTemplate");
+
+// Helper: render đệ quy (đối với message là object/array)
+function renderDeep(value, ctx, renderFn) {
+  if (value == null) return value;
+  if (typeof value === "string") return renderFn(value, ctx);
+  if (Array.isArray(value)) return value.map((v) => renderDeep(v, ctx, renderFn));
+  if (typeof value === "object") {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = renderDeep(value[k], ctx, renderFn);
+    return out;
+  }
+  return value;
+}
 
 async function maybePublishWsOnLog(pool, logId, log) {
   // cần có project + endpoint để join config
@@ -57,17 +71,48 @@ async function maybePublishWsOnLog(pool, logId, log) {
     }
   }
 
-  // 3️⃣ Payload: nếu user cấu hình message thì trả nguyên message
-  const payload =
-    cfg.message && typeof cfg.message === "object"
-      ? cfg.message
-      : {
-          event: "request_log_created",
-          project_id: row.project_id,
-          endpoint_id: row.endpoint_id,
-          log_id: logId,
-          status,
-        };
+  // 3️⃣ Payload: render template nếu có cfg.message, ngược lại dùng default
+  let payload;
+  if (cfg.message && typeof cfg.message === "object") {
+    // cfg.message là object → render từng field
+    const ctx = {
+      request: {
+        method: (log.request_method || "").toUpperCase(),
+        path: log.request_path || "",
+        headers: log.request_headers || {},
+        body: log.request_body || {},
+      },
+      response: {
+        status_code: status,
+        body: log.response_body || {},
+      },
+    };
+    payload = renderDeep(cfg.message, ctx, render);
+  } else if (cfg.message && typeof cfg.message === "string") {
+    // cfg.message là string → render string
+    const ctx = {
+      request: {
+        method: (log.request_method || "").toUpperCase(),
+        path: log.request_path || "",
+        headers: log.request_headers || {},
+        body: log.request_body || {},
+      },
+      response: {
+        status_code: status,
+        body: log.response_body || {},
+      },
+    };
+    payload = render(cfg.message, ctx);
+  } else {
+    // Mặc định: object với thông tin log
+    payload = {
+      event: "request_log_created",
+      project_id: row.project_id,
+      endpoint_id: row.endpoint_id,
+      log_id: logId,
+      status,
+    };
+  }
 
   try {
     // 🔥 Normal: publish về project của log
