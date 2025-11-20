@@ -102,11 +102,12 @@ async function getTemplateResponse(statefulPool, epFulId, name, fallback) {
 
 async function getSafeUserId(req) {
   try {
+    // Lấy user ID từ req.user (được set bởi middleware auth)
     const raw = req.user && req.user.id != null ? req.user.id : null;
     const idNum = Number(raw);
+    // Chỉ return nếu là number hợp lệ > 0
     if (!Number.isInteger(idNum) || idNum <= 0) return null;
-    const { rows } = await req.db.stateless.query("SELECT 1 FROM users WHERE id = $1 LIMIT 1", [idNum]);
-    return rows && rows[0] ? idNum : null;
+    return idNum;
   } catch (e) {
     return null;
   }

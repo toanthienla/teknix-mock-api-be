@@ -14,6 +14,7 @@ const cors = require("cors");
 const path = require("path");
 
 const auth = require("./middlewares/authMiddleware");
+const optionalAuth = require("./middlewares/optionalAuthMiddleware");
 
 // === Centrifugo routes (auth/publish/token) ===
 function pickMiddleware(mod) {
@@ -144,7 +145,8 @@ app.use("/project_request_logs", projectRequestLogRoutes);
 const adminResponseLogger = require("./middlewares/adminResponseLogger");
 app.use(
   "/:workspace/:project",
-  adminResponseLogger("universal"), // gắn logger nhưng không apply conditionalAuth (nó sẽ được xử lý trong handlers)
+  optionalAuth,  // Lấy user từ token nếu có, không require auth
+  adminResponseLogger("universal"), // gắn logger
   require("./routes/universalHandler")
 );
 
