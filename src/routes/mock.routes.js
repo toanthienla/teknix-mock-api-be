@@ -211,7 +211,7 @@ router.use(async (req, res, next) => {
     const pathForMatch = req.universal?.subPath || req.path || "";
 
     const { rows: endpoints } = await req.db.stateless.query(
-      `SELECT e.id, e.method, e.path, e.folder_id, e.is_stateful, e.is_active, f.project_id
+      `SELECT e.id, e.method, e.path, e.folder_id, e.is_stateful, e.is_active, f.project_id, f.is_public
     FROM endpoints e
     LEFT JOIN folders f ON e.folder_id = f.id
     WHERE UPPER(e.method) = $1`,
@@ -328,6 +328,34 @@ router.use(async (req, res, next) => {
     if (ep.is_stateful === true) {
       return next();
     }
+
+    // 🔐 CHECK ACCESS CONTROL cho STATELESS endpoints
+    // Nếu folder là PRIVATE (is_public=false), cần đăng nhập
+    if (method === "GET" && ep.is_public === false) {
+      // Private folder - require authentication for GET
+      const uid = await getSafeUserId(req);
+      if (uid == null) {
+        // Không có user → trả 401
+        const status = 401;
+        const body = { error: "Unauthorized: login required" };
+        const _log = await logSvc.insertLog(req.db.stateless, {
+          project_id: ep.project_id || null,
+          endpoint_id: ep.id,
+          user_id: null,
+          request_method: method,
+          request_path: req.path,
+          request_headers: req.headers || {},
+          request_body: req.body || {},
+          response_status_code: status,
+          response_body: body,
+          ip_address: getClientIp(req),
+          latency_ms: Date.now() - started,
+        });
+        console.log("[stateless] private folder, no auth, logged. _log =", _log);
+        return res.status(status).json(body);
+      }
+    }
+
     // Helper function để validate dữ liệu dựa trên schema
     const validateSchema = (schema, data) => {
       const errors = [];
