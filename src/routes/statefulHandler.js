@@ -1624,3 +1624,4 @@ async function statefulHandler(req, res, next) {
 }
 
 module.exports = statefulHandler;
+module.exports.resolveStatefulResponseId = resolveStatefulResponseId;
