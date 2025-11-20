@@ -111,13 +111,33 @@ function pickResponseEntryAdv(bucket, status, { requireParamId = null, paramsIdO
   if (arr.length === 0) return undefined;
 
   let candidates = arr;
-  if (requireParamId === true) candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) >= 1);
-  else if (requireParamId === false) candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) === 0);
+  
+  // Debug log
+  console.log(`[pickResponseEntryAdv] status=${status}, total responses=${arr.length}, requireParamId=${requireParamId}, paramsIdOccurrences=${paramsIdOccurrences}`);
+  for (let i = 0; i < arr.length; i++) {
+    const occurrences = countParamsIdOccurrences(arr[i].body);
+    console.log(`  [${i}] id=${arr[i].id}, body=${JSON.stringify(arr[i].body)}, occurrences=${occurrences}`);
+  }
+  
+  if (requireParamId === true) {
+    candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) >= 1);
+    console.log(`[pickResponseEntryAdv] after filter requireParamId=true, candidates=${candidates.length}`);
+  } else if (requireParamId === false) {
+    candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) === 0);
+    console.log(`[pickResponseEntryAdv] after filter requireParamId=false, candidates=${candidates.length}`);
+  }
+  
   if (paramsIdOccurrences != null) {
     const exact = candidates.filter((e) => countParamsIdOccurrences(e.body) === paramsIdOccurrences);
-    if (exact.length) candidates = exact;
+    if (exact.length) {
+      candidates = exact;
+      console.log(`[pickResponseEntryAdv] after filter paramsIdOccurrences=${paramsIdOccurrences}, candidates=${candidates.length}`);
+    }
   }
-  return candidates[0] || arr[0];
+  
+  const picked = candidates[0] || arr[0];
+  console.log(`[pickResponseEntryAdv] picked id=${picked.id}, body=${JSON.stringify(picked.body)}`);
+  return picked;
 }
 function pickAnyResponseEntry(bucket) {
   for (const [, list] of bucket.entries()) {
