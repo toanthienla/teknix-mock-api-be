@@ -258,37 +258,30 @@ async function resolveStatefulResponseId(statefulDb, statefulId, providedId, sta
       }
       console.log(`[resolveStatefulResponseId] found ${rows.length} responses for status ${statusCode}`);
 
-      // Nếu GET all (data là array), tìm response có data là array hoặc có {{params.id}}
+      // Nếu GET all (data là array), tìm response_body trong DB cũng là array
       if (isArray) {
         console.log(`[resolveStatefulResponseId] GET ALL mode - looking for array response`);
         for (const r of rows) {
           const rBody = typeof r.response_body === "string" ? JSON.parse(r.response_body) : r.response_body;
-          const bodyStr = JSON.stringify(rBody || "");
-          const hasParamId = /\{\{\s*params\.id\s*\}\}/.test(bodyStr);
-          const isRBodyArray = Array.isArray(rBody?.data);
-          console.log(`  Response id=${r.id}: hasParamId=${hasParamId}, isRBodyArray=${isRBodyArray}`);
+          // response_body trong DB là data trực tiếp, không có .data wrapper
+          const isRBodyArray = Array.isArray(rBody);
+          console.log(`  Response id=${r.id}: isArray=${isRBodyArray}, type=${typeof rBody}`);
           // Nếu response body cũng là array, chọn cái này (GET all response)
           if (isRBodyArray) {
             console.log(`  ✓ Selected GET all response id=${r.id} (array response)`);
             return r.id;
           }
-          // Nếu có {{params.id}}, có thể là GET all response
-          if (hasParamId) {
-            console.log(`  ✓ Selected GET all response id=${r.id} (has {{params.id}})`);
-            return r.id;
-          }
         }
       } else {
-        // Nếu GET detail (data là object), tìm response có data là object hoặc KHÔNG có {{params.id}}
+        // Nếu GET detail (data là object), tìm response_body trong DB cũng là object (không phải array)
         console.log(`[resolveStatefulResponseId] GET DETAIL mode - looking for object response`);
         for (const r of rows) {
           const rBody = typeof r.response_body === "string" ? JSON.parse(r.response_body) : r.response_body;
-          const bodyStr = JSON.stringify(rBody || "");
-          const hasParamId = /\{\{\s*params\.id\s*\}\}/.test(bodyStr);
-          const isRBodyArray = Array.isArray(rBody?.data);
-          console.log(`  Response id=${r.id}: hasParamId=${hasParamId}, isRBodyArray=${isRBodyArray}`);
-          // Nếu response body cũng là object, chọn cái này (GET detail response)
-          if (!isRBodyArray) {
+          // response_body trong DB là data trực tiếp, không có .data wrapper
+          const isRBodyArray = Array.isArray(rBody);
+          console.log(`  Response id=${r.id}: isArray=${isRBodyArray}, type=${typeof rBody}`);
+          // Nếu response body cũng là object (không phải array), chọn cái này (GET detail response)
+          if (!isRBodyArray && typeof rBody === "object") {
             console.log(`  ✓ Selected GET detail response id=${r.id} (object response)`);
             return r.id;
           }
