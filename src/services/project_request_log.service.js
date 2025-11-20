@@ -326,7 +326,7 @@ exports.listLogs = async (pool, opts = {}) => {
       pattern, // latency
       pattern, // er.name (Matched Response - tên stateless)
       pattern, // erf.name (Matched Response - tên stateful)
-      pattern  // response_body
+      pattern // response_body
     );
     idx += 7;
   }
