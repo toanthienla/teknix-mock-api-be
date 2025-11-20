@@ -286,6 +286,10 @@ exports.listLogs = async (pool, opts = {}) => {
   if (opts.statefulEndpointId != null) add(`l.stateful_endpoint_id = ?`, opts.statefulEndpointId);
   if (opts.statefulEndpointResponseId != null) add(`l.stateful_endpoint_response_id = ?`, opts.statefulEndpointResponseId);
 
+  // Latency range filter
+  if (opts.minLatency != null) add(`l.latency_ms >= ?`, opts.minLatency);
+  if (opts.maxLatency != null) add(`l.latency_ms <= ?`, opts.maxLatency);
+
   // 🔍 Full-text search trên các cột hiển thị:
   //    - Matched Response: id + name (stateless + stateful)
   //    - Method: request_method

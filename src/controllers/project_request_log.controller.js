@@ -62,6 +62,10 @@ exports.listLogs = async (req, res) => {
 
     const method = req.query.method ? String(req.query.method).toUpperCase() : null;
 
+    // Latency filter (ms)
+    const minLatency = toInt(req.query.min_latency);
+    const maxLatency = toInt(req.query.max_latency);
+
     // New query params
     const rawTimeRange = req.query.time_range ? String(req.query.time_range) : null;
     const rawSearch = req.query.search ? String(req.query.search) : null;
@@ -94,6 +98,8 @@ exports.listLogs = async (req, res) => {
       endpointResponseId,
       statefulEndpointId,
       statefulEndpointResponseId,
+      minLatency,
+      maxLatency,
       limit,
       offset,
       search,
