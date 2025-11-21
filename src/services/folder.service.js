@@ -14,7 +14,7 @@ function convertBaseSchemaToGetFormat(baseSchema) {
   if (!baseSchema || typeof baseSchema !== 'object' || Array.isArray(baseSchema)) {
     return { fields: [] };
   }
-  
+
   const fields = Object.keys(baseSchema).filter(key => key !== 'user_id');
   return { fields };
 }
@@ -164,7 +164,7 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
       // Cập nhật schema cho từng endpoint dựa vào method
       for (const ep of endpointsFul) {
         let schemaToSet = base_schema;
-        
+
         if (ep.method && ep.method.toUpperCase() === 'GET') {
           // GET: Convert base_schema sang format { "fields": [...] }
           schemaToSet = convertBaseSchemaToGetFormat(base_schema);
@@ -173,7 +173,7 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
           schemaToSet = base_schema;
         }
         // DELETE: Không cập nhật schema
-        
+
         if (ep.method && ep.method.toUpperCase() !== 'DELETE') {
           await dbStateful.query(
             `UPDATE endpoints_ful
@@ -186,10 +186,12 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
       }
 
       await dbStateful.query(
-        `UPDATE endpoints_ful
-       SET schema = schema,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE folder_id = $1`,
+        `UPDATE endpoints_ful ef
+   SET schema = ef.schema,
+       updated_at = CURRENT_TIMESTAMP
+   FROM endpoints e
+   WHERE ef.endpoint_id = e.id
+     AND e.folder_id = $1`,
         [id]
       );
 
