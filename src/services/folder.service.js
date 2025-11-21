@@ -79,6 +79,36 @@ async function createFolder(db, { project_id, name, description, is_public }) {
   return { success: true, data: rows[0] };
 }
 
+async function createFolder(db, { project_id, name, description, is_public }) {
+  // Validate format tên
+  const invalid = validateNameOrError(name);
+  if (invalid) return invalid;
+
+  // Kiểm tra trùng tên trong cùng project (không còn theo user)
+  const { rows: existRows } = await db.query(
+    `SELECT id 
+     FROM folders 
+     WHERE project_id = $1 AND LOWER(name) = LOWER($2)`,
+    [project_id, name]
+  );
+
+  if (existRows.length > 0) {
+    return {
+      success: false,
+      errors: [{ field: "name", message: "Folder name already exists in this project" }],
+    };
+  }
+
+  const { rows } = await db.query(
+    `INSERT INTO folders (project_id, name, description, is_public)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, project_id, name, description, is_public, created_at, updated_at`,
+    [project_id, name, description, is_public]
+  );
+
+  return { success: true, data: rows[0] };
+}
+
 async function updateFolder(dbStateless, dbStateful, id, payload) {
   const { name, description, is_public, base_schema } = payload;
 
@@ -138,19 +168,46 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
 
     // 🔄 Đồng bộ xuống endpoints_ful + refresh
     try {
-      await dbStateful.query(
-        `UPDATE endpoints_ful
-       SET schema = $1::jsonb,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE folder_id = $2`,
-        [JSON.stringify(base_schema), id]
+      // Lấy tất cả endpoint trong folder để biết method của mỗi endpoint
+      const { rows: endpointsFul } = await dbStateful.query(
+        `SELECT ef.id, ef.endpoint_id, e.method
+         FROM endpoints_ful ef
+         JOIN endpoints e ON e.id = ef.endpoint_id
+         WHERE e.folder_id = $1`,
+        [id]
       );
 
+      // Cập nhật schema cho từng endpoint dựa vào method
+      for (const ep of endpointsFul) {
+        let schemaToSet = base_schema;
+
+        if (ep.method && ep.method.toUpperCase() === 'GET') {
+          // GET: Convert base_schema sang format { "fields": [...] }
+          schemaToSet = convertBaseSchemaToGetFormat(base_schema);
+        } else if (ep.method && ['POST', 'PUT'].includes(ep.method.toUpperCase())) {
+          // POST/PUT: Giữ nguyên base_schema (đã là format { field: { type, required }, ... })
+          schemaToSet = base_schema;
+        }
+        // DELETE: Không cập nhật schema
+
+        if (ep.method && ep.method.toUpperCase() !== 'DELETE') {
+          await dbStateful.query(
+            `UPDATE endpoints_ful
+             SET schema = $1::jsonb,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2`,
+            [JSON.stringify(schemaToSet), ep.id]
+          );
+        }
+      }
+
       await dbStateful.query(
-        `UPDATE endpoints_ful
-       SET schema = schema,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE folder_id = $1`,
+        `UPDATE endpoints_ful ef
+   SET schema = ef.schema,
+       updated_at = CURRENT_TIMESTAMP
+   FROM endpoints e
+   WHERE ef.endpoint_id = e.id
+     AND e.folder_id = $1`,
         [id]
       );
 
@@ -200,7 +257,6 @@ async function updateFolder(dbStateless, dbStateful, id, payload) {
 
   return { success: true, data: rows[0] };
 }
-
 
 /**
  * Reset lại data_default và data_current trong MongoDB
