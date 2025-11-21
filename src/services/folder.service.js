@@ -1,5 +1,5 @@
 const logSvc = require("./project_request_log.service");
-const { getCollection2 } = require("../config/db");
+const { getCollection3 } = require("../config/db");
 const endpointsFulSvc = require("./endpoints_ful.service");
 
 // Cho phép: A-Z a-z 0-9, dấu gạch dưới (_), dấu gạch ngang (-) và dấu cách
@@ -298,7 +298,7 @@ async function resetMongoCollectionsByFolder(folderId, dbStateless) {
   }
 
   for (const ep of endpoints.rows) {
-    const collection = getCollection2(ep.path, ep.workspace_name, ep.project_name);
+    const collection = getCollection3(ep.path, ep.workspace_name, ep.project_name);
 
     try {
       // Parse base_schema (vẫn giữ phòng khi bạn cần logic khác sau này)
