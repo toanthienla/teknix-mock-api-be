@@ -177,13 +177,28 @@ router.use(async (req, res, next) => {
     //console.log(`[universal] lookup method=${method} normPath=${normPath} pathForLookup=${pathForLookup} candidates=${JSON.stringify(candidates)}`);
 
     // Fetch all endpoints for the method, then match in JS using path-to-regexp
-    const { rows: allRows } = await req.db.stateless.query(
-      `SELECT id, path, method, is_stateful, is_active
-         FROM endpoints
-        WHERE UPPER(method) = $1`,
-      [method]
-    );
-    //console.log(`[universal] allRows.count=${allRows.length}`);
+    // BẮT BUỘC phải có projectId, nếu không coi như project không tồn tại
+    if (!projectId) {
+      return res.status(404).json({
+        message: "Project not found for workspace/project name",
+        detail: { workspaceName, projectName },
+      });
+    }
+
+    // Chỉ lấy endpoint thuộc đúng project này
+    let allRows = [];
+    {
+      const { rows } = await req.db.stateless.query(
+        `SELECT e.id, e.path, e.method, e.is_stateful, e.is_active
+       FROM endpoints e
+       JOIN folders f ON e.folder_id = f.id
+      WHERE f.project_id = $1
+        AND UPPER(e.method) = $2`,
+        [projectId, method]
+      );
+      allRows = rows;
+    }
+    //console.log(`[universal] allRows.count=${allRows.length}, projectId=${projectId}`);
 
     // Filter rows whose stored path pattern matches the pathForLookup or baseCandidate
     const candidateRows = allRows.filter((r) => {
