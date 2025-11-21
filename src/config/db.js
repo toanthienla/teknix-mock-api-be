@@ -74,12 +74,22 @@ const getCollection = (name) => {
   return mongoDB.collection(clean);
 };
 
-// ⚙️ Hàm mới — dành cho resetMongoCollectionsByFolder và các logic nâng cao
 const getCollection2 = (path, workspaceName, projectName) => {
   if (!mongoDB) throw new Error("MongoDB chưa được kết nối. Hãy gọi connectMongo() trước.");
 
   // Chuẩn hóa tên collection (Mongo không cho phép dấu /, dấu cách, ...)
   const cleanPath = path.replace(/^\//, "").replace(/[^\w\-]/g, "_");
+  const collectionName = `${cleanPath}.${workspaceName}.${projectName}`;
+
+  return mongoDB.collection(collectionName);
+};
+
+// ⚙️ Hàm mới — dành cho resetMongoCollectionsByFolder và các logic nâng cao
+const getCollection3 = (path, workspaceName, projectName) => {
+  if (!mongoDB) throw new Error("MongoDB chưa được kết nối. Hãy gọi connectMongo() trước.");
+
+  // Giữ nguyên dấu /, chỉ replace ký tự không hợp lệ khác
+  const cleanPath = path.replace(/^\//, ""); // chỉ bỏ / đầu
   const collectionName = `${cleanPath}.${workspaceName}.${projectName}`;
 
   return mongoDB.collection(collectionName);
@@ -121,4 +131,5 @@ module.exports = {
   checkConnections,
   getCollection2,
   isMongoEnabled,
+  getCollection3,
 };
