@@ -4,6 +4,20 @@ const endpointsFulSvc = require("./endpoints_ful.service");
 
 // Cho phép: A-Z a-z 0-9, dấu gạch dưới (_), dấu gạch ngang (-) và dấu cách
 const NAME_RE = /^[A-Za-z0-9_\- ]+$/;
+
+/**
+ * Convert base_schema (POST/PUT format) sang GET format
+ * POST/PUT format: { "field": { "type": "...", "required": ... }, ... }
+ * GET format: { "fields": ["field1", "field2", ...] }
+ */
+function convertBaseSchemaToGetFormat(baseSchema) {
+  if (!baseSchema || typeof baseSchema !== 'object' || Array.isArray(baseSchema)) {
+    return { fields: [] };
+  }
+
+  const fields = Object.keys(baseSchema).filter(key => key !== 'user_id');
+  return { fields };
+}
 function validateNameOrError(name) {
   if (typeof name !== "string" || !NAME_RE.test(name)) {
     return {
@@ -47,6 +61,36 @@ async function getFolderById(db, id) {
     [id]
   );
   return { success: true, data: rows[0] || null };
+}
+
+async function createFolder(db, { project_id, name, description, is_public }) {
+  // Validate format tên
+  const invalid = validateNameOrError(name);
+  if (invalid) return invalid;
+
+  // Kiểm tra trùng tên trong cùng project (không còn theo user)
+  const { rows: existRows } = await db.query(
+    `SELECT id 
+     FROM folders 
+     WHERE project_id = $1 AND LOWER(name) = LOWER($2)`,
+    [project_id, name]
+  );
+
+  if (existRows.length > 0) {
+    return {
+      success: false,
+      errors: [{ field: "name", message: "Folder name already exists in this project" }],
+    };
+  }
+
+  const { rows } = await db.query(
+    `INSERT INTO folders (project_id, name, description, is_public)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, project_id, name, description, is_public, created_at, updated_at`,
+    [project_id, name, description, is_public]
+  );
+
+  return { success: true, data: rows[0] };
 }
 
 async function createFolder(db, { project_id, name, description, is_public }) {

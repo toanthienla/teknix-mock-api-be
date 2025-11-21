@@ -14,7 +14,7 @@ const cors = require("cors");
 const path = require("path");
 
 const auth = require("./middlewares/authMiddleware");
-const conditionalAuth = require("./middlewares/conditionalAuthMiddleware");
+const optionalAuth = require("./middlewares/optionalAuthMiddleware");
 
 // === Centrifugo routes (auth/publish/token) ===
 function pickMiddleware(mod) {
@@ -145,13 +145,13 @@ app.use("/project_request_logs", projectRequestLogRoutes);
 const adminResponseLogger = require("./middlewares/adminResponseLogger");
 app.use(
   "/:workspace/:project",
-  conditionalAuth,
-  adminResponseLogger("universal"), // phải đứng TRƯỚC universalHandler
+  optionalAuth,  // Lấy user từ token nếu có, không require auth
+  adminResponseLogger("universal"), // gắn logger
   require("./routes/universalHandler")
 );
 
-// Mount mockRoutes ở ĐÂY, SAU conditionalAuth
-app.use(mockRoutes);// ---------------------------------------------
+// Mount mockRoutes ở ĐÂY, SAU adminResponseLogger
+app.use(mockRoutes);
 // 10) Health-check
 // ---------------------------------------------
 app.get("/health", (req, res) => {

@@ -111,13 +111,33 @@ function pickResponseEntryAdv(bucket, status, { requireParamId = null, paramsIdO
   if (arr.length === 0) return undefined;
 
   let candidates = arr;
-  if (requireParamId === true) candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) >= 1);
-  else if (requireParamId === false) candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) === 0);
+  
+  // Debug log
+  console.log(`[pickResponseEntryAdv] status=${status}, total responses=${arr.length}, requireParamId=${requireParamId}, paramsIdOccurrences=${paramsIdOccurrences}`);
+  for (let i = 0; i < arr.length; i++) {
+    const occurrences = countParamsIdOccurrences(arr[i].body);
+    console.log(`  [${i}] id=${arr[i].id}, body=${JSON.stringify(arr[i].body)}, occurrences=${occurrences}`);
+  }
+  
+  if (requireParamId === true) {
+    candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) >= 1);
+    console.log(`[pickResponseEntryAdv] after filter requireParamId=true, candidates=${candidates.length}`);
+  } else if (requireParamId === false) {
+    candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) === 0);
+    console.log(`[pickResponseEntryAdv] after filter requireParamId=false, candidates=${candidates.length}`);
+  }
+  
   if (paramsIdOccurrences != null) {
     const exact = candidates.filter((e) => countParamsIdOccurrences(e.body) === paramsIdOccurrences);
-    if (exact.length) candidates = exact;
+    if (exact.length) {
+      candidates = exact;
+      console.log(`[pickResponseEntryAdv] after filter paramsIdOccurrences=${paramsIdOccurrences}, candidates=${candidates.length}`);
+    }
   }
-  return candidates[0] || arr[0];
+  
+  const picked = candidates[0] || arr[0];
+  console.log(`[pickResponseEntryAdv] picked id=${picked.id}, body=${JSON.stringify(picked.body)}`);
+  return picked;
 }
 function pickAnyResponseEntry(bucket) {
   for (const [, list] of bucket.entries()) {
@@ -152,9 +172,9 @@ function selectAndRenderResponseAdv(bucket, status, ctx, { fallback, requirePara
 /* ========== Auth/Schema ========== */
 function pickUserIdFromRequest(req) {
   // Try a few places in a robust, case-insensitive way.
-  const localsUser = req?.res?.locals?.user;
-
-  // helper to read header case-insensitively and via req.get if available
+  // Ưu tiên: req.user (từ JWT middleware) > header custom > null
+  
+  // helper to read header case-insensitively
   const getHeader = (key) => {
     if (!req) return undefined;
     if (typeof req.get === "function") {
@@ -170,7 +190,7 @@ function pickUserIdFromRequest(req) {
 
   const headerVal = getHeader("x-mock-user-id") ?? getHeader("X-Mock-User-Id");
 
-  const candidate = req?.user?.id ?? req?.user?.user_id ?? localsUser?.id ?? localsUser?.user_id ?? (headerVal != null ? headerVal : null);
+  const candidate = req?.user?.id ?? req?.user?.user_id ?? (headerVal != null ? headerVal : null);
 
   // normalize to number if possible
   if (candidate == null) return null;
@@ -181,7 +201,7 @@ function pickUserIdFromRequest(req) {
 function requireAuth(req, res) {
   const uid = pickUserIdFromRequest(req);
   if (uid == null) {
-    res.status(403).json({ error: "Unauthorized: login required." });
+    res.status(401).json({ error: "Unauthorized: login required." });
     return null;
   }
   return uid;
@@ -735,26 +755,8 @@ async function statefulHandler(req, res, next) {
 
       // ---------- PRIVATE ----------
       // For PRIVATE folders, require authentication
-      const uid = pickUserIdFromRequest(req);
-      if (uid == null) {
-        // Try to access without authentication - reject
-        const status = 401;
-        const body = { error: "Unauthorized: login required." };
-        await logWithStatefulResponse(req, {
-          projectId,
-          originId,
-          statefulId,
-          method,
-          path: rawPath,
-          status,
-          responseBody: body,
-          started,
-          payload: req.body,
-        });
-        res.status(status).json(body);
-        fireNextCallsIfAny(status, body);
-        return;
-      }
+      const uid = requireAuth(req, res);
+      if (uid == null) return;
 
       if (hasId) {
         const rec = current.find((x) => Number(x?.id) === Number(idFromUrl));
@@ -849,6 +851,7 @@ async function statefulHandler(req, res, next) {
 
     /* ===== POST ===== */
     if (method === "POST") {
+      // POST luôn yêu cầu auth bất kể folder public hay private
       const userId = requireAuth(req, res);
       if (userId == null) return;
 
@@ -1136,6 +1139,7 @@ async function statefulHandler(req, res, next) {
 
     /* ===== PUT ===== */
     if (method === "PUT") {
+      // PUT luôn yêu cầu auth bất kể folder public hay private
       const userId = requireAuth(req, res);
       if (userId == null) return;
 
@@ -1433,6 +1437,7 @@ async function statefulHandler(req, res, next) {
 
     /* ===== DELETE ===== */
     if (method === "DELETE") {
+      // DELETE luôn yêu cầu auth bất kể folder public hay private
       const userId = requireAuth(req, res);
       if (userId == null) return;
 

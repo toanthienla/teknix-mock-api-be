@@ -102,11 +102,12 @@ async function getTemplateResponse(statefulPool, epFulId, name, fallback) {
 
 async function getSafeUserId(req) {
   try {
+    // Lấy user ID từ req.user (được set bởi middleware auth)
     const raw = req.user && req.user.id != null ? req.user.id : null;
     const idNum = Number(raw);
+    // Chỉ return nếu là number hợp lệ > 0
     if (!Number.isInteger(idNum) || idNum <= 0) return null;
-    const { rows } = await req.db.stateless.query("SELECT 1 FROM users WHERE id = $1 LIMIT 1", [idNum]);
-    return rows && rows[0] ? idNum : null;
+    return idNum;
   } catch (e) {
     return null;
   }
@@ -330,9 +331,10 @@ router.use(async (req, res, next) => {
     }
 
     // 🔐 CHECK ACCESS CONTROL cho STATELESS endpoints
-    // Nếu folder là PRIVATE (is_public=false), cần đăng nhập
-    if (method === "GET" && ep.is_public === false) {
-      // Private folder - require authentication for GET
+    // Nếu folder là PRIVATE (is_public=false), cần đăng nhập với tất cả method
+    // Nếu folder là PUBLIC (is_public=true), không cần auth cho bất kỳ method nào
+    if (ep.is_public === false) {
+      // Private folder - require authentication for ALL methods
       const uid = await getSafeUserId(req);
       if (uid == null) {
         // Không có user → trả 401
@@ -499,8 +501,30 @@ router.use(async (req, res, next) => {
     );
 
     if (responses.length === 0) {
-      const status = req.method.toUpperCase() === "GET" ? 200 : 501;
-      const body = req.method.toUpperCase() === "GET" ? (hasParamsInUrl ? {} : []) : { error: { message: "No response configured" } };
+      // Default responses for different methods
+      let status, body;
+      switch (method) {
+        case "GET":
+          status = 200;
+          body = hasParamsInUrl ? {} : [];
+          break;
+        case "POST":
+          status = 201;
+          body = { message: "Created successfully", data: req.body };
+          break;
+        case "PUT":
+          status = 200;
+          body = { message: "Updated successfully", data: req.body };
+          break;
+        case "DELETE":
+          status = 200;
+          body = { message: "Deleted successfully", data: null };
+          break;
+        default:
+          status = 405;
+          body = { error: "Method Not Allowed" };
+      }
+      
       try {
         const _log = await logSvc.insertLog(req.db.stateless, {
           project_id: ep.project_id || null,
