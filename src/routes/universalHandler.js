@@ -12,7 +12,8 @@ const CACHE = new Map();
 const CACHE_TTL_MS = 30_000;
 const CACHE_MAX = 100;
 
-const cacheKeyOf = (m, p) => `${m}:${p}`;
+// cacheKey phải phân biệt workspace + project + method + path
+const cacheKeyOf = (workspace, project, m, p) => `${workspace}:${project}:${m}:${p}`;
 const cacheGet = (k) => {
   const v = CACHE.get(k);
   if (!v) return null;
@@ -129,7 +130,8 @@ router.use(async (req, res, next) => {
 
     const candidates = idCandidate !== null && baseCandidate !== pathForLookup ? [pathForLookup, baseCandidate] : [pathForLookup];
 
-    const ck = cacheKeyOf(method, normPath);
+    // cache key: workspace + project + method + path sau prefix
+    const ck = cacheKeyOf(workspaceName, projectName, method, pathForLookup);
     const cached = cacheGet(ck);
     if (cached) {
       try {
