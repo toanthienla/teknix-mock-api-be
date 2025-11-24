@@ -883,8 +883,16 @@ async function statefulHandler(req, res, next) {
 
       const payload = req.body || {};
 
-      // 🔧 Auto conversion removed - preserve original data types from client
-      // (no longer converting "123" → 123 or "true" → true)
+      // 🔧 Auto convert numeric-like strings & boolean strings before validation
+      for (const [key, val] of Object.entries(payload)) {
+        if (typeof val === "string") {
+          if (/^[0-9]+$/.test(val)) {
+            payload[key] = Number(val);
+          } else if (/^(true|false)$/i.test(val)) {
+            payload[key] = val.toLowerCase() === "true";
+          }
+        }
+      }
 
       const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
 
@@ -1262,6 +1270,47 @@ async function statefulHandler(req, res, next) {
 
       let payload = req.body || {};
       if (Object.prototype.hasOwnProperty.call(payload, "user_id")) delete payload.user_id;
+
+      // ⚠️ Kiểm tra ID conflict: nếu payload có id và khác với idFromUrl
+      if (payload.id !== undefined && Number(payload.id) !== Number(idFromUrl)) {
+        // Kiểm tra xem id mới có tồn tại trong current không
+        const newIdExists = current.some((x) => Number(x?.id) === Number(payload.id));
+        if (newIdExists) {
+          const status = 409;
+          const { rendered, responseId } = selectAndRenderResponseAdv(
+            responsesBucket,
+            status,
+            { params: { id: payload.id, id_conflict: idFromUrl } },
+            {
+              fallback: { message: "{Path} {{params.id}} conflict: {{params.id}} already exists." },
+              requireParamId: true,
+              paramsIdOccurrences: 2,
+              logicalPath,
+            }
+          );
+          const body = {
+            code: status,
+            message: rendered?.message ?? `{Path} ${payload.id} conflict: already exists.`,
+            data: null,
+            success: false,
+          };
+          await logWithStatefulResponse(req, {
+            projectId,
+            originId,
+            statefulId,
+            method,
+            path: rawPath,
+            status,
+            responseBody: body,
+            started,
+            payload,
+            statefulResponseId: responseId,
+          });
+          res.status(status).json(body);
+          fireNextCallsIfAny(status, body);
+          return;
+        }
+      }
 
       const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
 
