@@ -12,7 +12,8 @@ const CACHE = new Map();
 const CACHE_TTL_MS = 30_000;
 const CACHE_MAX = 100;
 
-const cacheKeyOf = (m, p, w, pr, epId) => `${m}:${p}:${w}:${pr}:${epId}`;
+// cacheKey phải phân biệt workspace + project + method + path
+const cacheKeyOf = (workspace, project, m, p) => `${workspace}:${project}:${m}:${p}`;
 const cacheGet = (k) => {
   const v = CACHE.get(k);
   if (!v) return null;
@@ -39,7 +40,7 @@ function normalizePath(raw) {
   let p = raw.split("?")[0];
   try {
     p = decodeURIComponent(p);
-  } catch { }
+  } catch {}
   p = p.replace(/\/{2,}/g, "/"); // nén nhiều slash
   if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
   if (!p.startsWith("/")) p = "/" + p;
@@ -129,7 +130,50 @@ router.use(async (req, res, next) => {
 
     const candidates = idCandidate !== null && baseCandidate !== pathForLookup ? [pathForLookup, baseCandidate] : [pathForLookup];
 
-    // Cache check removed - will happen AFTER matching endpoint
+    // cache key: workspace + project + method + path sau prefix
+    const ck = cacheKeyOf(workspaceName, projectName, method, pathForLookup);
+    const cached = cacheGet(ck);
+    if (cached) {
+      try {
+        console.log("[universal] cache hit", cached);
+      } catch {}
+      // 🔁 Revalidate nếu cache đang nói "stateless"
+      if (cached.mode === "stateless" && cached.meta?.statelessId) {
+        try {
+          const { rows } = await req.db.stateful.query(
+            `SELECT ef.id, ef.is_active 
+               FROM endpoints_ful ef
+              WHERE ef.endpoint_id = $1
+              LIMIT 1`,
+            [cached.meta.statelessId]
+          );
+          if (rows[0]?.id && rows[0]?.is_active === true) {
+            // nâng cấp lên stateful ngay lập tức
+            const upgraded = {
+              ...cached,
+              mode: "stateful",
+              meta: { ...cached.meta, statefulId: rows[0].id },
+            };
+            cacheSet(ck, upgraded);
+            req.universal = upgraded.meta;
+            res.setHeader("x-universal-mode", "stateful(revalidated)");
+            try {
+              console.log("[universal] cache upgraded -> stateful", upgraded);
+            } catch {}
+            return runHandler(statefulHandler, req, res, next);
+          }
+        } catch (e) {
+          console.warn("[universal] revalidate failed:", e?.message || e);
+        }
+      }
+      // giữ nguyên cache cũ nếu không “nâng cấp” được
+      req.universal = cached.meta;
+      res.setHeader("x-universal-mode", cached.mode);
+      try {
+        console.log("[universal] cache route", { mode: cached.mode });
+      } catch {}
+      return runHandler(cached.mode === "stateless" ? statelessHandler : statefulHandler, req, res, next);
+    }
 
     // 🔹 Tìm endpoint trong DB stateless
     //console.log(`[universal] lookup method=${method} normPath=${normPath} pathForLookup=${pathForLookup} candidates=${JSON.stringify(candidates)}`);
@@ -228,15 +272,6 @@ router.use(async (req, res, next) => {
     const matchedPath = normalizePath(matchedStateless.path);
     const idInUrl = matchedPath !== pathForLookup ? idCandidate : null;
 
-    // ✅ Create cache key AFTER we have endpoint ID to avoid conflicts
-    const ck = cacheKeyOf(method, normPath, workspaceName, projectName, matchedStateless.id);
-    const cached = cacheGet(ck);
-    if (cached) {
-      req.universal = cached.meta;
-      res.setHeader("x-universal-mode", cached.mode);
-      return runHandler(cached.mode === "stateless" ? statelessHandler : statefulHandler, req, res, next);
-    }
-
     // ===============================
     // 🔹 Nếu endpoint là STATEFUL
     // ===============================
@@ -296,7 +331,7 @@ router.use(async (req, res, next) => {
       res.setHeader("x-universal-mode", mode);
       try {
         // console.log("[universal] decided", { mode, meta });
-      } catch { }
+      } catch {}
 
       if (mode === "stateless") {
         return runHandler(statelessHandler, req, res, next);
@@ -334,7 +369,7 @@ router.use(async (req, res, next) => {
       res.setHeader("x-universal-mode", "stateless");
       try {
         console.log("[universal] decided", { mode: "stateless", meta });
-      } catch { }
+      } catch {}
       return runHandler(statelessHandler, req, res, next);
     }
   } catch (err) {
