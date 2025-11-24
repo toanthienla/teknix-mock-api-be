@@ -524,7 +524,7 @@ router.use(async (req, res, next) => {
           status = 405;
           body = { error: "Method Not Allowed" };
       }
-      
+
       try {
         const _log = await logSvc.insertLog(req.db.stateless, {
           project_id: ep.project_id || null,
@@ -624,7 +624,9 @@ router.use(async (req, res, next) => {
     const matchedResponses = responses.filter((r) => matchesCondition(r.condition));
     let r;
     if (matchedResponses.length > 0) {
-      r = matchedResponses[0];
+      // Sắp xếp các response theo priority (priority thấp nhất được ưu tiên)
+      matchedResponses.sort((a, b) => a.priority - b.priority); // Sắp xếp theo priority từ thấp đến cao
+      r = matchedResponses[0]; // Trả về response có priority thấp nhất
     } else {
       r = responses.find((rr) => rr.is_default);
       if (!r) {
@@ -1055,5 +1057,5 @@ router.use(async (req, res, next) => {
     return next(err);
   }
 });
-
+// Export router
 module.exports = router;

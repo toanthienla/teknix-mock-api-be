@@ -15,7 +15,7 @@ async function getByEndpointId(dbPool, endpointId) {
             priority, is_default, delay_ms, proxy_url, proxy_method, created_at, updated_at
      FROM endpoint_responses
      WHERE endpoint_id = $1
-     ORDER BY priority DESC NULLS LAST, is_default DESC, updated_at DESC, created_at DESC`,
+     ORDER BY priority ASC, is_default DESC, updated_at DESC, created_at DESC`, // Sắp xếp theo priority ASC để ưu tiên response có priority thấp
     [endpointId]
   );
   return rows;
