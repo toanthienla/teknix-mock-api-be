@@ -324,7 +324,8 @@ exports.listLogs = async (pool, opts = {}) => {
       pattern, // method (substring match)
       numPattern, // status (exact or starts with)
       numPattern, // latency (exact or starts with)
-      pattern // er.name (substring match)
+      pattern, // er.name (substring match)
+      pattern
     );
     idx += 5;
   }
