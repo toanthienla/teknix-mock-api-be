@@ -111,14 +111,14 @@ function pickResponseEntryAdv(bucket, status, { requireParamId = null, paramsIdO
   if (arr.length === 0) return undefined;
 
   let candidates = arr;
-  
+
   // Debug log
   console.log(`[pickResponseEntryAdv] status=${status}, total responses=${arr.length}, requireParamId=${requireParamId}, paramsIdOccurrences=${paramsIdOccurrences}`);
   for (let i = 0; i < arr.length; i++) {
     const occurrences = countParamsIdOccurrences(arr[i].body);
     console.log(`  [${i}] id=${arr[i].id}, body=${JSON.stringify(arr[i].body)}, occurrences=${occurrences}`);
   }
-  
+
   if (requireParamId === true) {
     candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) >= 1);
     console.log(`[pickResponseEntryAdv] after filter requireParamId=true, candidates=${candidates.length}`);
@@ -126,7 +126,7 @@ function pickResponseEntryAdv(bucket, status, { requireParamId = null, paramsIdO
     candidates = candidates.filter((e) => countParamsIdOccurrences(e.body) === 0);
     console.log(`[pickResponseEntryAdv] after filter requireParamId=false, candidates=${candidates.length}`);
   }
-  
+
   if (paramsIdOccurrences != null) {
     const exact = candidates.filter((e) => countParamsIdOccurrences(e.body) === paramsIdOccurrences);
     if (exact.length) {
@@ -134,7 +134,7 @@ function pickResponseEntryAdv(bucket, status, { requireParamId = null, paramsIdO
       console.log(`[pickResponseEntryAdv] after filter paramsIdOccurrences=${paramsIdOccurrences}, candidates=${candidates.length}`);
     }
   }
-  
+
   const picked = candidates[0] || arr[0];
   console.log(`[pickResponseEntryAdv] picked id=${picked.id}, body=${JSON.stringify(picked.body)}`);
   return picked;
@@ -173,7 +173,7 @@ function selectAndRenderResponseAdv(bucket, status, ctx, { fallback, requirePara
 function pickUserIdFromRequest(req) {
   // Try a few places in a robust, case-insensitive way.
   // Ưu tiên: req.user (từ JWT middleware) > header custom > null
-  
+
   // helper to read header case-insensitively
   const getHeader = (key) => {
     if (!req) return undefined;
@@ -181,7 +181,7 @@ function pickUserIdFromRequest(req) {
       try {
         const v = req.get(key);
         if (v != null) return v;
-      } catch {}
+      } catch { }
     }
     const h = req.headers || {};
     // try common variants
@@ -361,7 +361,7 @@ async function logWithStatefulResponse(req, { projectId, originId, statefulId, m
         req.res = req.res || {};
         req.res.locals = req.res.locals || {};
         req.res.locals.lastLogId = logId;
-      } catch {}
+      } catch { }
     }
   } catch (e) {
     console.error("[statefulHandler] log error:", e?.message || e);
@@ -883,16 +883,8 @@ async function statefulHandler(req, res, next) {
 
       const payload = req.body || {};
 
-      // 🔧 Auto convert numeric-like strings & boolean strings before validation
-      for (const [key, val] of Object.entries(payload)) {
-        if (typeof val === "string") {
-          if (/^[0-9]+$/.test(val)) {
-            payload[key] = Number(val);
-          } else if (/^(true|false)$/i.test(val)) {
-            payload[key] = val.toLowerCase() === "true";
-          }
-        }
-      }
+      // 🔧 Auto conversion removed - preserve original data types from client
+      // (no longer converting "123" → 123 or "true" → true)
 
       const endpointSchemaEffective = endpointSchemaDb && Object.keys(endpointSchemaDb).length ? endpointSchemaDb : baseSchema || {};
 
