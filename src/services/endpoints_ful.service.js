@@ -581,14 +581,14 @@ async function ResponsesForDELETE(endpointId, endpointPath) {
       name: "Delete Success",
       status_code: 200,
       response_body: {
-        message: `${R} deleted successfully.`,
+        message: `${R} {{params.id}} deleted successfully.`,
       },
     },
     {
       name: "Not Found",
       status_code: 404,
       response_body: {
-        message: `${R} to delete not found.`,
+        message: `${R} {{params.id}} to delete not found.`,
       },
     },
     {
