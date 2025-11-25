@@ -297,37 +297,86 @@ exports.listLogs = async (pool, opts = {}) => {
     params.push(...opts.latencyExact);
   }
 
-  // 🔍 Full-text search trên các cột hiển thị (KHÔNG bao gồm ID fields):
-  //    - Method: request_method (ILIKE - substring)
-  //    - Status: response_status_code (exact match hoặc bắt đầu bằng)
-  //    - Latency: latency_ms (exact match hoặc bắt đầu bằng)
-  //    - Response names (stateless + stateful) (ILIKE - substring)
-  //    ⚠️ BỎ request_path: tránh match chữ số/ký tự không liên quan trong path
-  //    ⚠️ BỎ response_body: không search trong data
+  // 🔍 Search box 3 mode:
+  //    1) search là PATH (bắt đầu bằng "/"):
+  //         - "/ws1"  → match mọi log có segment "/ws1"
+  //         - "/a1"   → match mọi log có segment "/a1"
+  //         - "/t1"   → match mọi log có segment "/t1"
+  //         - "/ws3/a1/t1" → match CHÍNH XÁC nguyên cụm path (hoặc prefix)
+  //    2) search là CHUỖI SỐ (vd "4", "200"):
+  //         → match CHÍNH XÁC response_status_code = N hoặc latency_ms = N
+  //    3) search TEXT (vd "GET", "aq"):
+  //         → search method + tên response (ILIKE)
   if (opts.search && String(opts.search).trim() !== "") {
-    const pattern = `%${String(opts.search).trim()}%`;
-    const searchNum = String(opts.search).trim();
-    // Regex: match chính xác (^8$) hoặc bắt đầu bằng (^8[0-9]+)
-    const numPattern = `^(${searchNum}|${searchNum}[0-9]+)$`;
+    const raw = String(opts.search).trim();
 
-    conds.push(
-      `(
-        l.request_method ILIKE $${idx}
-        OR CAST(l.response_status_code AS TEXT) ~ $${idx + 1}
-        OR CAST(l.latency_ms AS TEXT) ~ $${idx + 2}
-        OR er.name ILIKE $${idx + 3}
-        OR erf.name ILIKE $${idx + 4}
-      )`
-    );
+    // 1️⃣ PATH search: bắt đầu bằng "/"
+    if (raw.startsWith("/")) {
+      // Chuẩn hoá: bỏ bớt "/" dư ở cuối (trừ khi chỉ "/")
+      let path = raw;
+      if (path.length > 1) {
+        path = path.replace(/\/+$/, "");
+      }
+      const segs = path.split("/").filter(Boolean); // ["ws1"], ["ws3","a1","t1"], ...
 
-    params.push(
-      pattern, // method (substring match)
-      numPattern, // status (exact or starts with)
-      numPattern, // latency (exact or starts with)
-      pattern, // er.name (substring match)
-      pattern
-    );
-    idx += 5;
+      if (segs.length === 1) {
+        // ✔ Một segment: /ws1, /a1, /t1 → match theo segment
+        const seg = segs[0];
+        const pEq = `/${seg}`; // đúng y "/seg"
+        const pPref = `/${seg}/%`; // bắt đầu bằng "/seg/..."
+        const pEnd = `%/${seg}`; // kết thúc bằng ".../seg"
+        const pMid = `%/${seg}/%`; // nằm giữa ".../seg/..."
+
+        conds.push(
+          `(
+            l.request_path = $${idx}
+            OR l.request_path ILIKE $${idx + 1}
+            OR l.request_path ILIKE $${idx + 2}
+            OR l.request_path ILIKE $${idx + 3}
+          )`
+        );
+        params.push(pEq, pPref, pEnd, pMid);
+        idx += 4;
+      } else {
+        // ✔ Nhiều segment: /ws3/a1/t1 → match nguyên cụm path (exact hoặc prefix)
+        const full = path; // "/ws3/a1/t1"
+        const pref = `${path}/%`; // "/ws3/a1/t1/%"
+        conds.push(
+          `(
+            l.request_path = $${idx}
+            OR l.request_path ILIKE $${idx + 1}
+          )`
+        );
+        params.push(full, pref);
+        idx += 2;
+      }
+    } else {
+      const isNumeric = /^[0-9]+$/.test(raw);
+
+      if (isNumeric) {
+        // 2️⃣ Numeric search: status code OR latency_ms exact
+        const numVal = Number(raw);
+        conds.push(`(l.response_status_code = $${idx} OR l.latency_ms = $${idx + 1})`);
+        params.push(numVal, numVal);
+        idx += 2;
+      } else {
+        // 3️⃣ Text search: method + tên response
+        const pattern = `%${raw}%`;
+        conds.push(
+          `(
+            l.request_method ILIKE $${idx}
+            OR er.name ILIKE $${idx + 1}
+            OR erf.name ILIKE $${idx + 2}
+          )`
+        );
+        params.push(
+          pattern, // method (substring match)
+          pattern, // stateless response name
+          pattern // stateful response name
+        );
+        idx += 3;
+      }
+    }
   }
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
