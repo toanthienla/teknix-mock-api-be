@@ -1433,7 +1433,8 @@ async function statefulHandler(req, res, next) {
 
       for (const k of updateOrder) {
         if (k === "id") {
-          updatedItem.id = idFromUrl;
+          // ✅ If payload has id and passed conflict check, use it. Otherwise keep URL id
+          updatedItem.id = Object.prototype.hasOwnProperty.call(payload, "id") ? Number(payload.id) : idFromUrl;
         } else if (Object.prototype.hasOwnProperty.call(payload, k)) {
           updatedItem[k] = payload[k];
         } else {
