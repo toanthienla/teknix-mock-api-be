@@ -313,6 +313,7 @@ router.use(async (req, res, next) => {
       // ✅ Tạo meta (dùng đúng params + subPath đã chuẩn hoá)
       const subPath = pathForLookup;
       const meta = {
+        mode: "stateful", // ✅ endpoint is_stateful = true, so mode must be stateful
         method,
         basePath: matchedPath,
         rawPath: normPath,
@@ -325,17 +326,13 @@ router.use(async (req, res, next) => {
         idInUrl, // ✅ thêm dòng này
       };
 
-      const mode = matchedStateless.is_stateful ? "stateful" : "stateless";
-      cacheSet(ck, { mode, meta }); // ✅ cache đúng theo mode thực tế
+      cacheSet(ck, { mode: "stateful", meta }); // ✅ cache với mode stateful
       req.universal = meta;
-      res.setHeader("x-universal-mode", mode);
+      res.setHeader("x-universal-mode", "stateful");
       try {
-        // console.log("[universal] decided", { mode, meta });
+        console.log("[universal] decided", { mode: "stateful", meta });
       } catch {}
 
-      if (mode === "stateless") {
-        return runHandler(statelessHandler, req, res, next);
-      }
       return runHandler(statefulHandler, req, res, next);
     }
 
@@ -377,5 +374,10 @@ router.use(async (req, res, next) => {
     res.status(500).json({ error: "Internal Server Error", message: err.message });
   }
 });
+
+// ✅ Export clearCache for testing purposes
+router.clearCache = () => {
+  CACHE.clear();
+};
 
 module.exports = router;
