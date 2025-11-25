@@ -53,7 +53,10 @@ function validateOneAgainstBaseSchema(baseSchema, obj, { rejectUnknown = true } 
 //  - Dạng tách:  ?workspace=WP_3&project=pj_3&path=/cat
 //  - Dạng gộp:   ?path=WP_3/pj_3/cat
 function parseWPPath(req) {
-  const ensureLeadingSlash = (p) => (p && p.startsWith("/") ? p : "/" + (p || ""));
+  const ensureLeadingSlash = (p) => {
+    if (!p || String(p).trim() === "") return null;
+    return p.startsWith("/") ? p : "/" + p;
+  };
   const splitWP = (raw) => {
     if (!raw) return null;
     const clean = String(raw).replace(/^\/+/, "");
@@ -101,7 +104,7 @@ exports.getDataByPath = async (req, res) => {
   } catch (err) {
     console.error("Error in getDataByPath:", err.message);
     const status = /không tìm thấy/i.test(err.message) ? 404 : 500;
-    res.status(status).json({ error: err.message || "Lỗi máy chủ nội bộ." });
+    return res.status(status).json({ error: err.message || "Lỗi máy chủ nội bộ." });
   }
 };
 

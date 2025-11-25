@@ -132,11 +132,16 @@ function pickResponseEntryAdv(bucket, status, { requireParamId = null, paramsIdO
     if (exact.length) {
       candidates = exact;
       console.log(`[pickResponseEntryAdv] after filter paramsIdOccurrences=${paramsIdOccurrences}, candidates=${candidates.length}`);
+    } else {
+      console.log(`[pickResponseEntryAdv] no exact match for paramsIdOccurrences=${paramsIdOccurrences}, keeping ${candidates.length} candidates`);
     }
   }
 
-  const picked = candidates[0] || arr[0];
-  console.log(`[pickResponseEntryAdv] picked id=${picked.id}, body=${JSON.stringify(picked.body)}`);
+  // ✅ Pick the LAST matching candidate (usually the one with higher ID, created later)
+  // This helps when there are multiple responses for the same status (e.g., DELETE with/without ID)
+  // If no candidates match filters, fallback to last response in original array
+  const picked = candidates.length > 0 ? candidates[candidates.length - 1] : arr[arr.length - 1];
+  console.log(`[pickResponseEntryAdv] picked id=${picked?.id}, body=${JSON.stringify(picked?.body)}`);
   return picked;
 }
 function pickAnyResponseEntry(bucket) {
@@ -1575,17 +1580,26 @@ async function statefulHandler(req, res, next) {
         await col.updateOne({ _id: docId }, { $set: { data_current: updated } }, { upsert: false });
 
         const status = 200;
-        const { rendered, responseId } = selectAndRenderResponseAdv(
-          responsesBucket,
-          status,
-          { params: { id: idFromUrl } },
-          {
-            fallback: { message: "{Path} with id {{params.id}} deleted successfully." },
-            requireParamId: true,
-            paramsIdOccurrences: 1,
-            logicalPath,
+        // ✅ DELETE by ID: pick response with HIGHEST ID (usually "Delete Success")
+        const responses200 = responsesBucket.get(status) || [];
+        const pickedResponse = responses200.length > 0 ? responses200[responses200.length - 1] : null;
+        
+        let rendered = pickedResponse?.body ?? { message: "{Path} with id {{params.id}} deleted successfully." };
+        const responseId = pickedResponse?.id ?? null;
+        
+        // Render template with id
+        if (typeof rendered === "string") {
+          rendered = renderTemplateWithOrderedParamsId(rendered, { params: { id: idFromUrl } });
+          rendered = expandStaticPlaceholders(rendered, logicalPath);
+        } else {
+          const tmp = renderTemplateDeepOrdered(normalizeJsonb(rendered), { params: { id: idFromUrl } });
+          try {
+            rendered = JSON.parse(expandStaticPlaceholders(JSON.stringify(tmp), logicalPath));
+          } catch {
+            rendered = tmp;
           }
-        );
+        }
+        
         const body = {
           code: status,
           message: rendered?.message ?? "Deleted successfully.",
@@ -1615,17 +1629,25 @@ async function statefulHandler(req, res, next) {
       await col.updateOne({ _id: docId }, { $set: { data_current: keep } }, { upsert: false });
 
       const status = 200;
-      const { rendered, responseId } = selectAndRenderResponseAdv(
-        responsesBucket,
-        status,
-        {},
-        {
-          fallback: { message: "Delete all data with {Path} successfully." },
-          requireParamId: false,
-          paramsIdOccurrences: 0,
-          logicalPath,
+      // ✅ DELETE all: pick response with LOWEST ID (usually "Delete All Success")
+      const responses200All = responsesBucket.get(status) || [];
+      const pickedResponseAll = responses200All.length > 0 ? responses200All[0] : null;
+      
+      let renderedAll = pickedResponseAll?.body ?? { message: "Delete all data with {Path} successfully." };
+      const responseIdAll = pickedResponseAll?.id ?? null;
+      
+      // Render template (no id needed)
+      if (typeof renderedAll === "string") {
+        renderedAll = expandStaticPlaceholders(renderedAll, logicalPath);
+      } else {
+        try {
+          renderedAll = JSON.parse(expandStaticPlaceholders(JSON.stringify(normalizeJsonb(renderedAll)), logicalPath));
+        } catch {
+          renderedAll = normalizeJsonb(renderedAll);
         }
-      );
+      }
+      
+      const { rendered, responseId } = { rendered: renderedAll, responseId: responseIdAll };
       const body = {
         code: status,
         message: rendered?.message ?? "Delete all data successfully.",
