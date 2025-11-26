@@ -4,7 +4,10 @@ const axios = require('axios');
 
 // Setup env vars TRƯỚC khi require service vì service đọc env ngay khi load
 process.env.CENTRIFUGO_HTTP = 'http://localhost:8000';
+CENTRIFUGO_HTTP = process.env.CENTRIFUGO_HTTP;
+
 process.env.CENTRIFUGO_API_KEY = 'mock-api-key';
+CENTRIFUGO_API_KEY = process.env.CENTRIFUGO_API_KEY;
 
 const centrifugoSvc = require('../../src/centrifugo/centrifugo.service');
 
@@ -30,7 +33,7 @@ describe('Centrifugo Service', () => {
             await centrifugoSvc.publish(channel, data);
 
             expect(axios.post).toHaveBeenCalledWith(
-                'http://localhost:8000/api',
+                CENTRIFUGO_HTTP + '/api',
                 {
                     method: 'publish',
                     params: { channel, data }
