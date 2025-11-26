@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest",
     "worker:ws": "node src/centrifugo/centrifuge-worker.js"
   },
   "keywords": [],
@@ -32,6 +32,7 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "jest": "^30.2.0",
     "nodemon": "^3.1.10"
   }
 }
