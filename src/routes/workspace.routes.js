@@ -14,7 +14,7 @@ router.get("/:id", asyncHandler(ctrl.getWorkspace));
 
 // Get all endpoints of a workspace
 // GET /workspaces/:workspace_id/all-endpoints
-router.get("/:workspace_id/all-endpoints", asyncHandler(ctrl.listWorkspaceEndpoints));
+router.get("/:id/all-endpoints", asyncHandler(ctrl.listWorkspaceEndpoints));
 
 // Create workspace (validate name)
 // POST /workspaces
