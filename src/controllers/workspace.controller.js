@@ -34,13 +34,13 @@ async function getWorkspace(req, res) {
 // GET /workspaces/:workspace_id/all-endpoints
 async function listWorkspaceEndpoints(req, res) {
   try {
-    const { workspace_id } = req.params;
-    const id = parseInt(workspace_id, 10);
-    if (Number.isNaN(id)) {
+    const { id } = req.params; // 👈 đổi ở đây
+    const workspaceId = parseInt(id, 10);
+    if (Number.isNaN(workspaceId)) {
       return error(res, 400, "Invalid workspace_id");
     }
 
-    const result = await svc.getWorkspaceEndpoints(req.db.stateless, id);
+    const result = await svc.getWorkspaceEndpoints(req.db.stateless, workspaceId);
 
     if (result.notFound) {
       return error(res, 404, "Workspace not found");
