@@ -47,6 +47,33 @@ async function getWorkspaceById(db, id) {
   return { success: true, data: workspace };
 }
 
+// Lấy tất cả endpoints trong một workspace
+async function getWorkspaceEndpoints(db, workspaceId) {
+  // Check workspace tồn tại
+  const { rows: workspaceRows } = await db.query("SELECT id FROM workspaces WHERE id = $1", [workspaceId]);
+  if (workspaceRows.length === 0) {
+    return { success: false, notFound: true };
+  }
+
+  const { rows } = await db.query(
+    `SELECT 
+        e.*,
+        f.id AS folder_id,
+        f.name AS folder_name,
+        f.project_id,
+        p.name AS project_name,
+        p.workspace_id
+     FROM endpoints e
+     JOIN folders f ON f.id = e.folder_id
+     JOIN projects p ON p.id = f.project_id
+    WHERE p.workspace_id = $1
+    ORDER BY p.id, f.id, e.id`,
+    [workspaceId]
+  );
+
+  return { success: true, data: rows };
+}
+
 // Create workspace (check duplicate name)
 async function createWorkspace(db, { name }) {
   const invalid = validateNameOrError(name);
@@ -164,4 +191,5 @@ module.exports = {
   updateWorkspace,
   deleteWorkspace,
   deleteWorkspaceAndHandleLogs,
+  getWorkspaceEndpoints,
 };
