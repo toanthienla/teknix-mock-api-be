@@ -203,10 +203,27 @@ function pickUserIdFromRequest(req) {
   return Number.isFinite(n) ? n : null;
 }
 
-function requireAuth(req, res) {
+async function requireAuth(req, res, { projectId, originId, statefulId, method, path, started, payload }) {
   const uid = pickUserIdFromRequest(req);
   if (uid == null) {
-    res.status(401).json({ error: "Unauthorized: login required." });
+    const status = 401;
+    const body = { error: "Unauthorized: login required." };
+    
+    // 🆕 Ghi log cho lỗi 401
+    await logWithStatefulResponse(req, {
+      projectId,
+      originId,
+      statefulId,
+      method,
+      path,
+      status,
+      responseBody: body,
+      started,
+      payload,
+      statefulResponseId: null,
+    });
+    
+    res.status(status).json(body);
     return null;
   }
   return uid;
@@ -760,7 +777,15 @@ async function statefulHandler(req, res, next) {
 
       // ---------- PRIVATE ----------
       // For PRIVATE folders, require authentication
-      const uid = requireAuth(req, res);
+      const uid = await requireAuth(req, res, {
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        started,
+        payload: req.body,
+      });
       if (uid == null) return;
 
       if (hasId) {
@@ -857,7 +882,15 @@ async function statefulHandler(req, res, next) {
     /* ===== POST ===== */
     if (method === "POST") {
       // POST luôn yêu cầu auth bất kể folder public hay private
-      const userId = requireAuth(req, res);
+      const userId = await requireAuth(req, res, {
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        started,
+        payload: req.body,
+      });
       if (userId == null) return;
 
       const mongoDb = col.s.db;
@@ -1145,7 +1178,15 @@ async function statefulHandler(req, res, next) {
     /* ===== PUT ===== */
     if (method === "PUT") {
       // PUT luôn yêu cầu auth bất kể folder public hay private
-      const userId = requireAuth(req, res);
+      const userId = await requireAuth(req, res, {
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        started,
+        payload: req.body,
+      });
       if (userId == null) return;
 
       const mongoDb = col.s.db;
@@ -1485,7 +1526,15 @@ async function statefulHandler(req, res, next) {
     /* ===== DELETE ===== */
     if (method === "DELETE") {
       // DELETE luôn yêu cầu auth bất kể folder public hay private
-      const userId = requireAuth(req, res);
+      const userId = await requireAuth(req, res, {
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path: rawPath,
+        started,
+        payload: req.body,
+      });
       if (userId == null) return;
 
       const mongoDb = col.s.db;
