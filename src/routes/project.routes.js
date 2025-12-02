@@ -12,6 +12,10 @@ router.get("/", asyncHandler(ctrl.listProjects));
 // GET /projects/:id
 router.get("/:id", asyncHandler(ctrl.getProjectById));
 
+// Get all endpoints of a project by id
+// GET /projects/:id/project-endpoints
+router.get("/:id/project-endpoints", asyncHandler(ctrl.listProjectEndpoints));
+
 // Create project (body chứa workspace_id + name, validate trước)
 // POST /projects
 router.post("/", validateProject, asyncHandler(ctrl.createProject));

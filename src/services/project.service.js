@@ -60,6 +60,30 @@ async function getProjectById(db, projectId) {
   return { success: true, data: rows[0] || null };
 }
 
+// Lấy tất cả endpoints của một project
+async function getProjectEndpoints(db, projectId) {
+  // 1️⃣ Check project có tồn tại không
+  const { rows: projectRows } = await db.query("SELECT id FROM projects WHERE id = $1", [projectId]);
+  if (projectRows.length === 0) {
+    return { success: false, notFound: true };
+  }
+
+  // 2️⃣ Lấy danh sách endpoints thuộc project đó
+  const { rows } = await db.query(
+    `SELECT 
+        e.*,
+        f.name AS folder_name,
+        f.project_id
+     FROM endpoints e
+     JOIN folders f ON f.id = e.folder_id
+    WHERE f.project_id = $1
+    ORDER BY e.id`,
+    [projectId]
+  );
+
+  return { success: true, data: rows };
+}
+
 // 🟢 Create new project
 async function createProject(db, { workspace_id, name, description }) {
   const invalid = validateNameOrError(name);
@@ -199,4 +223,5 @@ module.exports = {
   updateProject,
   deleteProjectAndHandleLogs,
   updateProjectWebsocketEnabled,
+  getProjectEndpoints,
 };

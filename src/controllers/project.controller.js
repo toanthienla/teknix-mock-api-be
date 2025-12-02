@@ -24,6 +24,28 @@ async function getProjectById(req, res) {
   }
 }
 
+// Lấy tất cả endpoints trong 1 project
+async function listProjectEndpoints(req, res) {
+  try {
+    const { id } = req.params;
+    const projectId = parseInt(id, 10);
+
+    if (Number.isNaN(projectId)) {
+      return error(res, 400, "Invalid project id");
+    }
+
+    const result = await svc.getProjectEndpoints(req.db.stateless, projectId);
+
+    if (result.notFound) {
+      return error(res, 404, "Project not found");
+    }
+
+    return success(res, result.data);
+  } catch (err) {
+    return error(res, 500, err.message);
+  }
+}
+
 // Create project
 async function createProject(req, res) {
   try {
@@ -101,4 +123,5 @@ module.exports = {
   createProject,
   updateProject,
   deleteProject,
+  listProjectEndpoints,
 };
