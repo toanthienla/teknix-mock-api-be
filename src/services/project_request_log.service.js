@@ -230,7 +230,7 @@ exports.insertLog = async (pool, log) => {
     log.endpoint_response_id ?? null,
     log.stateful_endpoint_id ?? null,
     log.stateful_endpoint_response_id ?? null,
-    log.user_id ?? null,
+    log.user_id ?? null, // user_id đã được validate ở requireAuth
     log.request_method ?? null,
     requestPath ?? null,
     safeStringify(log.request_headers),
