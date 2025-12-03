@@ -202,6 +202,22 @@ exports.insertLog = async (pool, log) => {
     return null;
   }
 
+  // ✅ Validate user_id: nếu có user_id, check tồn tại trong DB
+  // Nếu không tồn tại → ghi log với user_id = null
+  let validUserId = log.user_id ?? null;
+  if (validUserId != null) {
+    try {
+      const userCheck = await pool.query("SELECT id FROM users WHERE id = $1 LIMIT 1", [validUserId]);
+      if (userCheck.rows.length === 0) {
+        console.log(`[logs] user_id ${validUserId} not found in users table, setting to null`);
+        validUserId = null;
+      }
+    } catch (e) {
+      console.error("[logs] error checking user_id:", e?.message || e);
+      validUserId = null;
+    }
+  }
+
   // Chuẩn hoá request_path về dạng /workspaceName/projectName/path
   const requestPath = await buildFullRequestPath(pool, log);
 
@@ -230,7 +246,7 @@ exports.insertLog = async (pool, log) => {
     log.endpoint_response_id ?? null,
     log.stateful_endpoint_id ?? null,
     log.stateful_endpoint_response_id ?? null,
-    log.user_id ?? null, // user_id đã được validate ở requireAuth
+    validUserId, // ✅ Dùng validUserId đã được validate
     log.request_method ?? null,
     requestPath ?? null,
     safeStringify(log.request_headers),

@@ -247,7 +247,6 @@ async function requireAuth(req, res, { projectId, originId, statefulId, method, 
         started,
         payload,
         statefulResponseId: null,
-        forceUserId: null, // Force user_id = null trong log
       });
       
       res.status(status).json(body);
@@ -269,7 +268,6 @@ async function requireAuth(req, res, { projectId, originId, statefulId, method, 
       started,
       payload,
       statefulResponseId: null,
-      forceUserId: null,
     });
     
     res.status(status).json(body);
@@ -393,13 +391,12 @@ async function resolveStatefulResponseId(statefulDb, statefulId, providedId, sta
 }
 
 /* ========== Logging (ghi vào DB stateless) ========== */
-async function logWithStatefulResponse(req, { projectId, originId, statefulId, method, path, status, responseBody, started, payload, statefulResponseId = null, forceUserId = undefined }) {
+async function logWithStatefulResponse(req, { projectId, originId, statefulId, method, path, status, responseBody, started, payload, statefulResponseId = null }) {
   try {
     // ⛔ Tránh ghi log trùng cho nextCall nội bộ (log của nextCall sẽ do nextcallRouter tự persist)
     if (req?.flags?.isNextCall) return;
     // 🆕 gắn user vào log nếu có (lấy từ auth hoặc header mockhub-user-id)
-    // ✅ Nếu forceUserId được truyền (null khi user không tồn tại), dùng giá trị đó
-    const userIdForLog = forceUserId !== undefined ? forceUserId : pickUserIdFromRequest(req);
+    const userIdForLog = pickUserIdFromRequest(req);
     const finalResponseId = await resolveStatefulResponseId(req.db.stateful, statefulId, statefulResponseId, status, responseBody);
     const _log = await logSvc.insertLog(req.db.stateless, {
       project_id: projectId ?? null,

@@ -129,6 +129,23 @@ async function getSafeUserId(req) {
     return null;
   }
 }
+
+// ✅ Helper: Validate user_id và trả về null nếu không tồn tại trong DB
+async function validateUserIdForLog(req, userId) {
+  if (userId == null) return null;
+  
+  try {
+    const userCheck = await req.db.stateless.query("SELECT id FROM users WHERE id = $1 LIMIT 1", [userId]);
+    if (userCheck.rows.length === 0) {
+      console.log(`[mock.routes] user_id ${userId} not found in DB, logging with null`);
+      return null;
+    }
+    return userId;
+  } catch (e) {
+    console.error("[mock.routes] error validating user_id:", e?.message || e);
+    return null;
+  }
+}
 // --- Match helpers: hỗ trợ match “sâu” cho pattern không có param/wildcard
 const matcherCache = new Map();
 function getMatcher(pattern, end = true) {
@@ -374,7 +391,7 @@ router.use(async (req, res, next) => {
         return res.status(status).json(body);
       }
       
-      // ✅ Kiểm tra user_id có tồn tại trong DB không
+      // ✅ Private: Kiểm tra user_id có tồn tại trong DB không
       try {
         const userCheck = await req.db.stateless.query("SELECT id FROM users WHERE id = $1 LIMIT 1", [uid]);
         if (userCheck.rows.length === 0) {
@@ -393,7 +410,7 @@ router.use(async (req, res, next) => {
             ip_address: getClientIp(req),
             latency_ms: Date.now() - started,
           });
-          console.log("[stateless] user does not exist, logged with user_id=null. _log =", _log);
+          console.log("[stateless] private: user does not exist, logged with user_id=null. _log =", _log);
           return res.status(status).json(body);
         }
       } catch (e) {
@@ -416,6 +433,7 @@ router.use(async (req, res, next) => {
         return res.status(status).json(body);
       }
     }
+    // ✅ Public folder: không check auth, validation user_id sẽ được xử lý ở insertLog
 
     // Helper function để validate dữ liệu dựa trên schema
     const validateSchema = (schema, data) => {
@@ -584,12 +602,15 @@ router.use(async (req, res, next) => {
           body = { error: "Method Not Allowed" };
       }
 
+      // ✅ Validate user_id trước khi ghi log
+      const validUserId = await validateUserIdForLog(req, safeUserId);
+
       try {
         const _log = await logSvc.insertLog(req.db.stateless, {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           endpoint_response_id: null,
-          user_id: safeUserId,
+          user_id: validUserId,
           request_method: method,
           request_path: req.path,
           request_headers: req.headers || {},
@@ -996,7 +1017,7 @@ router.use(async (req, res, next) => {
             project_id: ep.project_id || null,
             endpoint_id: ep.id,
             endpoint_response_id: r.id || null,
-            user_id: safeUserId,
+            user_id: await validateUserIdForLog(req, safeUserId),
             request_method: method,
             request_path: req.path,
             request_headers: req.headers || {},
@@ -1053,7 +1074,7 @@ router.use(async (req, res, next) => {
           project_id: ep.project_id || null,
           endpoint_id: ep.id,
           endpoint_response_id: r.id || null,
-          user_id: safeUserId,
+          user_id: await validateUserIdForLog(req, safeUserId),
           request_method: method,
           request_path: req.path,
           request_headers: req.headers || {},
