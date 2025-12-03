@@ -228,6 +228,52 @@ async function requireAuth(req, res, { projectId, originId, statefulId, method, 
     return null;
   }
   
+  // ✅ Kiểm tra user_id có tồn tại trong DB không
+  try {
+    const userCheck = await req.db.stateless.query("SELECT id FROM users WHERE id = $1 LIMIT 1", [uid]);
+    if (userCheck.rows.length === 0) {
+      const status = 401;
+      const body = { error: "Account does not exist." };
+      
+      // 🆕 Ghi log với user_id = null vì user không tồn tại
+      await logWithStatefulResponse(req, {
+        projectId,
+        originId,
+        statefulId,
+        method,
+        path,
+        status,
+        responseBody: body,
+        started,
+        payload,
+        statefulResponseId: null,
+      });
+      
+      res.status(status).json(body);
+      return null;
+    }
+  } catch (e) {
+    console.error("[requireAuth] error checking user existence:", e?.message || e);
+    const status = 500;
+    const body = { error: "Internal server error." };
+    
+    await logWithStatefulResponse(req, {
+      projectId,
+      originId,
+      statefulId,
+      method,
+      path,
+      status,
+      responseBody: body,
+      started,
+      payload,
+      statefulResponseId: null,
+    });
+    
+    res.status(status).json(body);
+    return null;
+  }
+  
   return uid;
 }
 
