@@ -102,9 +102,26 @@ async function getTemplateResponse(statefulPool, epFulId, name, fallback) {
 
 async function getSafeUserId(req) {
   try {
-    // Lấy user ID từ req.user (được set bởi middleware auth)
+    // 🔄 ƯU TIÊN: Header mockhub-user-id > JWT token
+    // Thay đổi: Lấy trực tiếp từ header thay vì JWT token
+    
+    // 1. Thử lấy từ header trước (case-insensitive)
+    const headerUserId = 
+      req.headers?.["mockhub-user-id"] ?? 
+      req.headers?.["Mockhub-User-Id"] ??
+      req.headers?.["MOCKHUB-USER-ID"];
+    
+    if (headerUserId != null) {
+      const idNum = Number(headerUserId);
+      if (Number.isInteger(idNum) && idNum > 0) {
+        return idNum;
+      }
+    }
+    
+    // 2. Fallback: Lấy từ JWT token (req.user)
     const raw = req.user && req.user.id != null ? req.user.id : null;
     const idNum = Number(raw);
+    
     // Chỉ return nếu là number hợp lệ > 0
     if (!Number.isInteger(idNum) || idNum <= 0) return null;
     return idNum;

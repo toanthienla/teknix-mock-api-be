@@ -492,7 +492,7 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
 
         const currentUser = options.user || rootCtx.user || null;
         if (!mergedHeaders["content-type"]) mergedHeaders["content-type"] = "application/json";
-        if (currentUser?.id) mergedHeaders["x-mock-user-id"] = currentUser.id;
+        if (currentUser?.id) mergedHeaders["mockhub-user-id"] = currentUser.id;
 
         console.log(`[nextCalls] proxy → ${method} ${url} body=${JSON.stringify(payload)}`);
         try {
@@ -590,10 +590,10 @@ async function runNextCalls(plan, rootCtx = {}, options = {}) {
       if (!headersWithUser["content-type"]) headersWithUser["content-type"] = "application/json";
 
       const currentUser = options.user || rootCtx.user || null;
-      if (currentUser?.id) headersWithUser["x-mock-user-id"] = currentUser.id;
+      if (currentUser?.id) headersWithUser["mockhub-user-id"] = currentUser.id;
 
       if (!headersWithUser["content-type"]) headersWithUser["content-type"] = "application/json";
-      if (currentUser?.id) headersWithUser["x-mock-user-id"] = currentUser.id;
+      if (currentUser?.id) headersWithUser["mockhub-user-id"] = currentUser.id;
 
       const reqLike = {
         method,

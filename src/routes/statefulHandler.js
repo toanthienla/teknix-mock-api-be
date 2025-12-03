@@ -176,8 +176,8 @@ function selectAndRenderResponseAdv(bucket, status, ctx, { fallback, requirePara
 
 /* ========== Auth/Schema ========== */
 function pickUserIdFromRequest(req) {
-  // Try a few places in a robust, case-insensitive way.
-  // Ưu tiên: req.user (từ JWT middleware) > header custom > null
+  // Ưu tiên: Header x-mock-user-id > JWT token > null
+  // Thay đổi: Lấy trực tiếp từ header thay vì JWT token
 
   // helper to read header case-insensitively
   const getHeader = (key) => {
@@ -193,9 +193,10 @@ function pickUserIdFromRequest(req) {
     return h[key] ?? h[key.toLowerCase()] ?? h[key.toUpperCase()] ?? undefined;
   };
 
-  const headerVal = getHeader("x-mock-user-id") ?? getHeader("X-Mock-User-Id");
+  // 🔄 ƯU TIÊN HEADER TRƯỚC
+  const headerVal = getHeader("mockhub-user-id") ?? getHeader("Mockhub-User-Id");
 
-  const candidate = req?.user?.id ?? req?.user?.user_id ?? (headerVal != null ? headerVal : null);
+  const candidate = (headerVal != null ? headerVal : null) ?? req?.user?.id ?? req?.user?.user_id;
 
   // normalize to number if possible
   if (candidate == null) return null;
@@ -416,9 +417,10 @@ async function statefulHandler(req, res, next) {
     console.log("[statefulHandler:debug] method=", req.method, "originalUrl=", req.originalUrl || req.url);
     console.log("[statefulHandler:debug] universal=", JSON.stringify(req.universal || {}));
     console.log("[statefulHandler:debug] flags=", JSON.stringify(req.flags || {}));
-    // Avoid huge logs: print concise headers (x-mock-user-id, content-type) and user
+    // 🔍 DEBUG: Print ALL headers to see what's available
     const hdr = req.headers || {};
-    console.log("[statefulHandler:debug] headers.x-mock-user-id=", hdr["x-mock-user-id"] ?? hdr["X-Mock-User-Id"] ?? null, "content-type=", hdr["content-type"] ?? hdr["Content-Type"] ?? null);
+    console.log("[statefulHandler:debug] ALL HEADERS=", JSON.stringify(hdr, null, 2));
+    console.log("[statefulHandler:debug] headers.mockhub-user-id=", hdr["mockhub-user-id"] ?? hdr["Mockhub-User-Id"] ?? null, "content-type=", hdr["content-type"] ?? hdr["Content-Type"] ?? null);
     console.log("[statefulHandler:debug] req.user=", JSON.stringify(req.user || null));
     // print body (safe stringify)
     try {
