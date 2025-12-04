@@ -390,48 +390,7 @@ router.use(async (req, res, next) => {
         console.log("[stateless] private folder, no auth, logged. _log =", _log);
         return res.status(status).json(body);
       }
-      
-      // ✅ Private: Kiểm tra user_id có tồn tại trong DB không
-      try {
-        const userCheck = await req.db.stateless.query("SELECT id FROM users WHERE id = $1 LIMIT 1", [uid]);
-        if (userCheck.rows.length === 0) {
-          const status = 401;
-          const body = { error: "Account does not exist." };
-          const _log = await logSvc.insertLog(req.db.stateless, {
-            project_id: ep.project_id || null,
-            endpoint_id: ep.id,
-            user_id: null, // User không tồn tại → log với null
-            request_method: method,
-            request_path: req.path,
-            request_headers: req.headers || {},
-            request_body: req.body || {},
-            response_status_code: status,
-            response_body: body,
-            ip_address: getClientIp(req),
-            latency_ms: Date.now() - started,
-          });
-          console.log("[stateless] private: user does not exist, logged with user_id=null. _log =", _log);
-          return res.status(status).json(body);
-        }
-      } catch (e) {
-        console.error("[stateless] error checking user existence:", e?.message || e);
-        const status = 500;
-        const body = { error: "Internal server error." };
-        const _log = await logSvc.insertLog(req.db.stateless, {
-          project_id: ep.project_id || null,
-          endpoint_id: ep.id,
-          user_id: null,
-          request_method: method,
-          request_path: req.path,
-          request_headers: req.headers || {},
-          request_body: req.body || {},
-          response_status_code: status,
-          response_body: body,
-          ip_address: getClientIp(req),
-          latency_ms: Date.now() - started,
-        });
-        return res.status(status).json(body);
-      }
+      // ✅ Chấp nhận mọi user_id, insertLog() sẽ tự động ghi null nếu user không tồn tại
     }
     // ✅ Public folder: không check auth, validation user_id sẽ được xử lý ở insertLog
 
